@@ -8,6 +8,31 @@ Simple external ESP for Counter-Strike 2. After years of development the codebas
 
 [![cs2esp](.github/showcase.png)](https://youtu.be/3WHHLUyHyzA)
 
+## ✨ Added Features
+
+> This fork builds on top of the original project. Everything below is new.
+
+**Read only (ESP & overlays)**
+* **Grenade ESP**: smoke & molotov areas that follow the map collision (blocked by walls, doors & props), trails, timers, landing spots & a prediction for the grenade in hand.
+* **Item ESP**: dropped weapons & other items in the world.
+* **Visibility check**: players behind walls or inside smokes are drawn differently.
+* **Game crosshair**: the crosshair overlay now follows your own CS2 crosshair settings (style, color, size, dot).
+* **Configs tab**: export / import configs & skin loadouts as separate files in `export/`, rename, delete & set one as **Default** (loaded on start).
+* **Performance**: frame time breakdown in the watermark, lighter ESP & cache for low-end PCs.
+
+**Memory writing (only with `-insecure`, see the warning below)**
+* **Skin changer**: weapon skins, knives, gloves, agents & music kits (round music & MVP anthem), with player model previews.
+* **View**: custom FOV, viewmodel override (FOV 40 – 120, offsets ±20) & third person.
+* **Game radar**: enemies shown on the radar of the game.
+* **Movement**: bunny hop, quick stop, null binds & slide walk.
+
+> [!WARNING]
+> **The features under "Memory writing" are dangerous.** They write into the memory of the game (and patch some of its code), which is far easier for an anti-cheat to notice than only reading it.
+>
+> * They are **only enabled when CS2 is launched with `-insecure`**, which disables VAC so you cannot join secured servers. Never try to use them in matchmaking or on VAC / third party anti-cheat servers, **you will get banned**.
+> * Use them **offline** (practice / bots) only. You are the only one responsible for what happens to your account.
+> * Changes are put back when the feature is turned off or the program is closed. Close the program **before** the game, so CS2 does not save the overridden values (e.g. `viewmodel_*`) into its config.
+
 ## 🌳 Simple Use
 
 - You can download it from [**Releases**](https://github.com/IMXNOOBX/cs2-external-esp/releases) tab or **build it yourself** by following [developers instructions](#-developer-instructions).
