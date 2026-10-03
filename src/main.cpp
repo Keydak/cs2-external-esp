@@ -23,6 +23,9 @@
 #include "updater/Updater.hpp"
 #include "core/engine/Engine.hpp"
 #include "gui/renderer/Renderer.hpp"
+#include "core/features/View.hpp"
+#include "core/features/Skins.hpp"
+#include "core/engine/GameThread.hpp"
 
 #include <external/exception.hpp>
 
@@ -58,6 +61,10 @@ int main()
 
     // Locking
     Renderer::Thread();
+
+    View::Shutdown();
+    Skins::Shutdown();
+    GameThread::Shutdown();
 
 exit:
     LOGF(INFO, "Thats it, im done, hope you had a great time!");

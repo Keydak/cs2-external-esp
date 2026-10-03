@@ -1,3 +1,5 @@
+#pragma once
+
 enum bone_index : DWORD {
     origin = 0,
     pelvis = 1,
@@ -54,6 +56,14 @@ struct bone_data {
     Vec3_t pos;
     uint8_t pad[0x14];
 };
+
+// One bone of the skeleton as the game keeps it, in world space
+struct bone_transform {
+    Vec3_t pos;
+    float scale;
+    float rot[4]; // Quaternion, x y z w
+};
+static_assert(sizeof(bone_transform) == 32);
 
 struct bone_pos {
     Vec3_t pos;

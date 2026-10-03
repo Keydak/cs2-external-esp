@@ -10,6 +10,10 @@ public:
 		: item_index(-1), name("Invalid"), icon("?"), slot_index(0), entity_list(0) { }
 
 	bool Update();
+
+	// Silhouette glyph of the weapon font, "?" when there is none
+	static const char* IconFor(int item_index);
+	static const char* NameFor(int item_index);
 public:
 	short item_index;
 	std::string name;

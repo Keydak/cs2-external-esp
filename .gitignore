@@ -7,6 +7,7 @@
 typos
 .vscode
 config.json
+maps/
 crashlog.txt
 
 # Ignore all the offsets.json files but the one in the folder offsets for the auto updater
@@ -413,3 +414,8 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+#claude
+CLAUDE.md
+
+skins_cache.json

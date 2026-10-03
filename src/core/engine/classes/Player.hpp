@@ -11,11 +11,13 @@ public:
 
     bool Update();
     bool GetBounds(view_matrix_t matrix, Vec2_t size, std::pair<Vec2_t, Vec2_t>& bounds);
+    uintptr_t GetPawnAddress() const { return pawn; }
 public:
     int8_t index = -1; // To use as invalid/un-initialize check
 
     Vec3_t pos;
     Vec3_t vel;
+    Vec3_t eye; // Camera position, the origin plus the view offset
 
     int ping = 0;
     int team = 0;
@@ -31,6 +33,9 @@ public:
     bool defusing = false;
     bool localplayer = false;
     bool has_c4 = false;
+    bool visible = true;            // Seen from our eyes, through neither the map nor a smoke. Set by the cache
+    bool has_defuser = false;
+    float simulation_time = 0.f;    // Game time the pawn was last updated at
 
     char name[32];
     //std::string name;
@@ -51,7 +56,6 @@ private:
     uintptr_t pawn;
     uintptr_t controller;
     
-    bone_data bones[30]{};
 private:
     bool GetPawn();
     bool GetController();

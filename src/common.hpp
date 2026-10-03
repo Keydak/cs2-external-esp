@@ -15,6 +15,7 @@
 #include <array>
 #include <memory>
 #include <stack>
+#include <mutex>
 #include <thread>
 #include <vector>
 #include <atomic>

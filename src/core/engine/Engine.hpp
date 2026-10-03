@@ -14,6 +14,14 @@ public:
    static ProcessModule GetClient();
    static ProcessModule GetEngine();
    static std::shared_ptr<pProcess> GetProcess(); // Refactor this so its easier to access
+
+   // True when the game was launched with -insecure (VAC disabled), required for features that write memory
+   static bool IsInsecure();
+   static uintptr_t GetLocalPawn();
+   static uintptr_t GetEntityFromHandle(uint32_t handle);
+
+   // Asks the server to resend every entity, which also resets values we wrote that the game keeps predicting
+   static bool ForceFullUpdate();
 private:
     Engine() {};
 
@@ -34,4 +42,5 @@ private:
     std::shared_ptr<pProcess> process;
     ProcessModule client;
     ProcessModule engine;
+    bool insecure = false;
 };

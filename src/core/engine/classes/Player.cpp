@@ -107,11 +107,16 @@ bool Player::UpdatePawn() {
 		return false;
 
 	this->vel = p->read<Vec3_t>(pawn + offsets::pawn::m_vecAbsVelocity);
+	this->eye = this->pos + p->read<Vec3_t>(pawn + offsets::pawn::m_vecViewOffset);
 
 	this->team = p->read<uint8_t>(pawn + offsets::pawn::m_iTeamNum);
 
 	this->armor = p->read<int>(pawn + offsets::pawn::m_ArmorValue);
 	this->defusing = p->read<bool>(pawn + offsets::pawn::m_bIsDefusing);
+	this->simulation_time = p->read<float>(pawn + offsets::pawn::m_flSimulationTime);
+
+	auto item_services = p->read<uintptr_t>(pawn + offsets::pawn::m_pItemServices);
+	this->has_defuser = item_services && p->read<bool>(item_services + offsets::pawn::m_bHasDefuser);
 	this->spotted = p->read<bool>(pawn + offsets::pawn::m_entitySpottedState + offsets::pawn::m_bSpottedByMask);
 	this->flashed = p->read<float>(pawn + offsets::pawn::m_flFlashOverlayAlpha) > 0;
 	this->scoped = p->read<bool>(pawn + offsets::pawn::m_bIsScoped);
@@ -144,11 +149,12 @@ bool Player::UpdateSkeleton() {
 	if (!bone_array)
 		return false;
 
+	bone_transform bones[30];
 	if (!p->read_raw(bone_array, bones, sizeof(bones)))
 		return false;
 
-	for (int i = 0; i < 30; i++)
-		this->bone_list.push_back({ bones[i].pos });
+	for (const auto& bone : bones)
+		this->bone_list.push_back({ bone.pos });
 
 	return true;
 }

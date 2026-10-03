@@ -6,6 +6,7 @@ IDXGISwapChain* Window::swap_chain = nullptr;
 ID3D11RenderTargetView* Window::render_targetview = nullptr;
 
 bool Window::vsync = false;
+float Window::present_ms = 0.f;
 HWND Window::hwnd = nullptr;
 HWND Window::viewport = nullptr;
 WNDCLASSEX Window::wc = { };
@@ -226,6 +227,10 @@ void Window::StartRender()
 			shouldRun = false;
 	}
 
+	// Typing in a text field needs the keyboard focus, being in front is not enough
+	if (ImGui::GetIO().WantTextInput && GetForegroundWindow() == hwnd && GetFocus() != hwnd)
+		SetFocus(hwnd);
+
 	// begin a new frame
 	ImGui_ImplDX11_NewFrame();
 	ImGui_ImplWin32_NewFrame();
@@ -255,10 +260,14 @@ void Window::EndRender()
 		ImGui::RenderPlatformWindowsDefault();
 	}
 	
+	auto present_start = std::chrono::steady_clock::now();
+
 	if (vsync) // Present rendered frame with V-Sync
 		swap_chain->Present(1U, 0U);
 	else // Present rendered frame without V-Sync
 		swap_chain->Present(0U, 0U);
+
+	present_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - present_start).count();
 }
 
 void Window::SetTopMost(HWND window, bool up_down) {
@@ -351,6 +360,13 @@ LRESULT CALLBACK window_procedure(HWND window, UINT msg, WPARAM wParam, LPARAM l
 	// switch that disables alt application and checks for if the user tries to close the window.
 	switch (msg)
 	{
+	// Active without keyboard focus, keys come as system keys: no text for ImGui & a warning sound
+	case WM_ACTIVATE:
+		if (LOWORD(wParam) != WA_INACTIVE)
+			SetFocus(window);
+		break;
+	case WM_SYSCHAR:
+		return 0; // No warning sound
 	case WM_SYSCOMMAND:
 		if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu (imgui uses it in their example :shrug:)
 			return 0;

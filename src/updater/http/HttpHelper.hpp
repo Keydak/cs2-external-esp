@@ -21,6 +21,7 @@ public:
     HttpHelper& operator=(HttpHelper&&) = delete;
 
     static int Get(std::string url, json& response);
+    static int GetRaw(std::string url, std::string& response); // Body as is, for files
     static int Post(std::string url, json body, json& response);
 private:
     HttpHelper() {};
@@ -32,6 +33,7 @@ private:
     }
 
     int GetImpl(std::string url, json& response);
+    int GetRawImpl(std::string url, std::string& response);
     int PostImpl(std::string url, json body, json& response);
 
     static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp);

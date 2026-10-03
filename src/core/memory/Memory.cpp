@@ -67,8 +67,8 @@ HWND pProcess::GetWindowHandleFromProcessId(DWORD ProcessId) {
 		MODULEINFO module_info;
 		DWORD _;
 
-		handle_ = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION |
-                                PROCESS_VM_READ, FALSE, pid_);
+		handle_ = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_CREATE_THREAD |
+                                PROCESS_VM_READ | PROCESS_VM_WRITE, FALSE, pid_);
 
 		if (!handle_)
 			return false;
@@ -137,12 +137,74 @@ ProcessModule pProcess::GetModule(const char* lModule)
 		if (!wcscmp(module_entry_.szModule, wideModule.c_str()))
 		{
 			CloseHandle(handle_module);
-			return { (DWORD_PTR)module_entry_.modBaseAddr, module_entry_.dwSize };
+			return { (DWORD_PTR)module_entry_.modBaseAddr, module_entry_.modBaseSize }; // dwSize is the size of the entry
 		}
 	} while (Module32NextW(handle_module, &module_entry_));
 
 	CloseHandle(handle_module);
 	return { 0, 0 };
+}
+
+uintptr_t pProcess::FindInterface(const char* module_name, const char* interface_name)
+{
+	auto module = GetModule(module_name);
+	if (!module.base)
+		return 0;
+
+	// CreateInterface from the exports
+	auto pe = read<uint32_t>(module.base + 0x3C);
+	auto exports = read<uint32_t>(module.base + pe + 0x88);
+	if (!pe || !exports)
+		return 0;
+
+	auto name_count = read<uint32_t>(module.base + exports + 0x18);
+	auto functions = read<uint32_t>(module.base + exports + 0x1C);
+	auto names = read<uint32_t>(module.base + exports + 0x20);
+	auto ordinals = read<uint32_t>(module.base + exports + 0x24);
+
+	uintptr_t create_interface = 0;
+	for (uint32_t i = 0; i < name_count && !create_interface; i++) {
+		char name[32]{};
+		read_raw(module.base + read<uint32_t>(module.base + names + 4 * i), name, sizeof(name) - 1);
+
+		if (std::string_view(name) == "CreateInterface") {
+			auto ordinal = read<uint16_t>(module.base + ordinals + 2 * i);
+			create_interface = module.base + read<uint32_t>(module.base + functions + 4 * ordinal);
+		}
+	}
+	if (!create_interface)
+		return 0;
+
+	// It walks the registered interfaces: "mov r9/rax, [rip + list]" near the start
+	uint8_t code[64]{};
+	read_raw(create_interface, code, sizeof(code));
+
+	uintptr_t registration = 0;
+	for (size_t i = 0; i + 7 <= sizeof(code); i++) {
+		if ((code[i] == 0x48 || code[i] == 0x4C) && code[i + 1] == 0x8B && (code[i + 2] & 0xC7) == 0x05) {
+			registration = read<uintptr_t>(create_interface + i + 7 + *reinterpret_cast<int32_t*>(&code[i + 3]));
+			break;
+		}
+	}
+
+	// { create function, name, next }
+	for (int guard = 0; registration && guard < 256; guard++) {
+		auto create = read<uintptr_t>(registration);
+		char name[64]{};
+		read_raw(read<uintptr_t>(registration + 8), name, sizeof(name) - 1);
+
+		if (std::string_view(name) == interface_name) {
+			uint8_t lea[8]{};
+			read_raw(create, lea, sizeof(lea));
+			if (lea[0] == 0x48 && lea[1] == 0x8D && lea[2] == 0x05 && lea[7] == 0xC3)
+				return create + 7 + *reinterpret_cast<int32_t*>(&lea[3]);
+			return 0;
+		}
+
+		registration = read<uintptr_t>(registration + 16);
+	}
+
+	return 0;
 }
 
 LPVOID pProcess::Allocate(size_t size_in_bytes)
@@ -215,6 +277,35 @@ uintptr_t pProcess::FindCodeCave(uint32_t length_in_bytes)
 	}
 
 	return FindSignature(cave_pattern);
+}
+
+std::wstring pProcess::ReadCommandLine()
+{
+	using pNtQueryInformationProcess = NTSTATUS(WINAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+	constexpr ULONG ProcessCommandLineInformation = 60;
+
+	struct UnicodeString {
+		USHORT Length;
+		USHORT MaximumLength;
+		PWSTR  Buffer;
+	};
+
+	auto query = (pNtQueryInformationProcess)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess");
+	if (!query)
+		return {};
+
+	ULONG length = 0;
+	query(handle_, ProcessCommandLineInformation, nullptr, 0, &length);
+	if (length < sizeof(UnicodeString))
+		return {};
+
+	std::vector<uint8_t> buffer(length);
+	if (query(handle_, ProcessCommandLineInformation, buffer.data(), length, &length) != 0)
+		return {};
+
+	// Buffer points inside our own buffer, right after the header
+	auto str = reinterpret_cast<UnicodeString*>(buffer.data());
+	return std::wstring(str->Buffer, str->Length / sizeof(wchar_t));
 }
 
 void pProcess::Close()

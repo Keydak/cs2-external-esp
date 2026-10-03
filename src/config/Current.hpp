@@ -4,68 +4,161 @@ namespace cfg {
 	inline bool enabled = true;
 
 	namespace esp {
-		inline bool team = true;
-
-		inline bool box = true;
-		inline bool armor = true;
-		inline bool health = true;
-		inline bool skeleton = true;
-		inline bool head_tracker = true;
-		inline bool health_number = false;
-
-		inline bool spotted = false;
-
-		inline bool tracers = false;
-		
 		inline bool bomb = true;
 
-		namespace flags {
-			inline bool name = true;
-			inline bool ping = true;
-			inline bool weapon = false;
-			inline bool ammo = false;
-			inline bool reloading = false;
-			inline bool defusing = false;
-			inline bool money = false;
-			inline bool flashed = false;
-			inline bool scoped = false;
-			inline bool has_c4 = false;
+		// Traces from your eyes to the player against the map collision, for the visible & invisible colors
+
+		// Things drawn around the box of a player, placed by dragging them in the menu
+		enum flag_t {
+			FLAG_NAME,
+			FLAG_HEALTH_BAR,
+			FLAG_HEALTH,		// Not used anymore, the number is part of the health bar. Kept so saved layouts keep their numbers
+			FLAG_ARMOR_BAR,
+			FLAG_MONEY,
+			FLAG_PING,
+			FLAG_WEAPON,
+			FLAG_WEAPON_NAME,
+			FLAG_AMMO,
+			FLAG_DISTANCE,
+			FLAG_FLASHED,
+			FLAG_RELOADING,
+			FLAG_DEFUSING,
+			FLAG_SCOPED,
+			FLAG_C4,
+			FLAG_FLASHED_TEXT,		// Text versions of the icons, each in its own color
+			FLAG_RELOADING_TEXT,
+			FLAG_SCOPED_TEXT,
+			FLAG_KIT,				// Has a defuse kit
+			FLAG_COUNT
+		};
+
+		enum side_t { SIDE_TOP, SIDE_BOTTOM, SIDE_LEFT, SIDE_RIGHT, SIDE_COUNT };
+
+		// Settings of team mates or enemies
+		struct group_t {
+			bool enabled = true;
+
+			bool box = true;
+			bool skeleton = true;
+			bool head_tracker = true;
+			bool tracers = false;
+			bool visible_only = false;	// Hidden while behind a wall
+
+			// Visible / behind a wall
+			color_t box_visible{ 1.f, 1.f, 1.f, 0.8f };
+			color_t box_invisible{ 1.f, 1.f, 1.f, 0.4f };
+			color_t skeleton_visible{ 1.f, 1.f, 1.f, 0.8f };
+			color_t skeleton_invisible{ 1.f, 1.f, 1.f, 0.4f };
+			color_t tracker_visible{ 1.f, 1.f, 1.f, 0.5f };
+			color_t tracker_invisible{ 1.f, 1.f, 1.f, 0.3f };
+			color_t tracer_visible{ 1.f, 1.f, 1.f, 0.6f };
+			color_t tracer_invisible{ 1.f, 1.f, 1.f, 0.3f };
+
+			color_t text{ 1.f, 1.f, 1.f, 1.f };	// Text flags
+			color_t icon{ 1.f, 1.f, 1.f, 0.9f };	// Icon flags, flashed, reloading...
+
+			color_t flashed{ 1.f, 0.95f, 0.45f, 1.f };	// Text flags of the states
+			color_t reloading{ 1.f, 0.6f, 0.2f, 1.f };
+			color_t scoped{ 0.4f, 0.8f, 1.f, 1.f };
+			color_t defusing{ 1.f, 0.3f, 0.3f, 1.f };
+
+			float text_size = 12.f;		// Name, weapon, ping...
+			float state_size = 10.f;	// FLASHED, RELOADING, SCOPED & DEFUSING
+			float icon_size = 15.f;
+
+			bool health_number = false;	// The value on the health bar
+			bool armor_number = false;	// The value on the armor bar
+
+			std::vector<int> layout[SIDE_COUNT];	// flag_t of each side, in drawing order. Flags in no side are not drawn
+		};
+
+		inline group_t MakeEnemy() {
+			group_t g;
+			g.box_visible = { 1.f, 0.24f, 0.24f, 0.9f };
+			g.box_invisible = { 1.f, 0.62f, 0.2f, 0.6f };
+			g.skeleton_visible = { 1.f, 0.24f, 0.24f, 0.8f };
+			g.skeleton_invisible = { 1.f, 0.62f, 0.2f, 0.5f };
+			g.tracker_visible = { 1.f, 1.f, 1.f, 0.5f };
+			g.tracker_invisible = { 1.f, 1.f, 1.f, 0.25f };
+			g.tracer_visible = { 1.f, 0.24f, 0.24f, 0.6f };
+			g.tracer_invisible = { 1.f, 0.62f, 0.2f, 0.4f };
+			g.layout[SIDE_TOP] = { FLAG_NAME };
+			g.layout[SIDE_LEFT] = { FLAG_HEALTH_BAR };
+			g.layout[SIDE_BOTTOM] = { FLAG_WEAPON };
+			g.layout[SIDE_RIGHT] = { FLAG_PING, FLAG_FLASHED, FLAG_RELOADING, FLAG_DEFUSING, FLAG_SCOPED, FLAG_C4 };
+			return g;
+		}
+
+		inline group_t MakeTeam() {
+			group_t g;
+			g.skeleton = false;
+			g.head_tracker = false;
+			g.box_visible = { 0.f, 1.f, 0.4f, 0.7f };
+			g.box_invisible = { 0.f, 0.6f, 0.3f, 0.4f };
+			g.skeleton_visible = { 0.f, 1.f, 0.4f, 0.7f };
+			g.skeleton_invisible = { 0.f, 0.6f, 0.3f, 0.4f };
+			g.tracker_visible = { 1.f, 1.f, 1.f, 0.3f };
+			g.tracker_invisible = { 1.f, 1.f, 1.f, 0.2f };
+			g.tracer_visible = { 0.f, 1.f, 0.4f, 0.5f };
+			g.tracer_invisible = { 0.f, 0.6f, 0.3f, 0.3f };
+			g.layout[SIDE_TOP] = { FLAG_NAME };
+			g.layout[SIDE_LEFT] = { FLAG_HEALTH_BAR };
+			return g;
+		}
+
+		inline group_t enemy = MakeEnemy();
+		inline group_t team = MakeTeam();
+
+		// Items lying on the ground
+		namespace items {
+			struct category_t {
+				bool enabled = true;
+				bool icon = true;
+				bool name = false;
+				bool ammo = false;		// Weapons only
+				bool distance = true;
+				color_t color;
+			};
+
+			inline bool enabled = false;
+			inline float max_distance = 40.f;	// Meters
+			inline float text_size = 11.f;
+			inline float icon_size = 14.f;
+
+			inline category_t weapons{ true, true, true, true, true, { 0.85f, 0.85f, 0.9f, 1.f } };
+			inline category_t utility{ true, true, false, false, true, { 0.45f, 0.85f, 1.f, 1.f } };
+			inline category_t bomb{ true, true, true, false, true, { 1.f, 0.84f, 0.f, 1.f } };
+			inline category_t kits{ true, true, false, false, true, { 0.4f, 0.8f, 1.f, 1.f } };
+		}
+
+		namespace grenades {
+			inline bool enabled = true;
+			inline bool trails = true;
+			inline bool trail_type_color = true; // Use each grenade's own color instead of the trail color
+			inline bool timers = true;
+			inline bool prediction = true; // Grenade in hand
+			inline bool landing = true; // Grenades in the air, thrown by anyone
+
+			inline bool glow = true;		// Popped smokes & fires glow on the ground
+			inline bool icons = true;		// Label of each grenade
+			inline bool names = false;
+			inline bool timer_bars = true;
+			inline float text_size = 13.f;	// Names & timers
 		}
 
 		namespace colors {
-			inline color_t box_team{ 0.f, 1.f, 0.29f, 0.5f };
-			inline color_t box_enemy{ 1.f, 0.f, 0.f, 0.5f };
-
-			inline color_t skeleton_team{ 0.f, 1.f, 0.f, 0.5f };
-			inline color_t skeleton_enemy{ 1.f, 0.f, 0.f, 0.5f };
-
-			inline color_t tracker_team{ 1.f, 1.f, 1.f, 0.3f };
-			inline color_t tracker_enemy{ 1.f, 1.f, 1.f, 0.3f };
-
-			inline color_t tracer_team{ 0.f, 1.f, 0.f, 0.5f };
-			inline color_t tracer_enemy{ 1.f, 0.f, 0.f, 0.5f };
-
 			inline color_t bomb{ 1.f, 0.84f, 0.f, 1.f };
-			
-			namespace flags {
-				inline color_t flashed_team{ 1.f, 1.f, 1.f, 0.5f };
-				inline color_t flashed_enemy{ 1.f, 1.f, 1.f, 0.8f };
 
-				inline color_t reloading_team{ 1.f, 1.f, 1.f, 0.5f };
-				inline color_t reloading_enemy{ 1.f, 1.f, 1.f, 0.8f };
-
-				inline color_t defusing_team{ 1.f, 1.f, 1.f, 0.5f };
-				inline color_t defusing_enemy{ 1.f, 1.f, 1.f, 0.8f };
-
-				inline color_t scoped_team{ 1.f, 1.f, 1.f, 0.5f };
-				inline color_t scoped_enemy{ 1.f, 1.f, 1.f, 0.8f };
-
-				inline color_t c4_team{ 1.f, 0.84f, 0.f, 1.f };
-				inline color_t c4_enemy{ 1.f, 0.84f, 0.f, 1.f };
+			// Trail, icon & area of each grenade type
+			namespace grenades {
+				inline color_t smoke{ 0.78f, 0.80f, 0.84f, 1.f };
+				inline color_t molotov{ 1.f, 0.55f, 0.16f, 1.f }; // Also used for the fire
+				inline color_t flash{ 1.f, 0.94f, 0.59f, 1.f };
+				inline color_t he{ 1.f, 0.31f, 0.31f, 1.f };
+				inline color_t decoy{ 0.67f, 0.67f, 0.67f, 1.f };
+				inline color_t trail{ 0.14f, 0.56f, 1.f, 1.f };
 			}
-			
 		}
-
 	}
 
 	namespace world {
@@ -85,11 +178,17 @@ namespace cfg {
 		}
 
 		namespace crosshair {
+			enum style_t { STYLE_CLASSIC, STYLE_GAME };
+
 			inline bool enabled = false;
+			inline int style = STYLE_CLASSIC;	// Small white cross, or the crosshair set in the game
 		}
 
 		namespace radar {
+			enum mode_t { MODE_OVERLAY, MODE_GAME };
+
 			inline bool enabled = true;
+			inline int mode = MODE_OVERLAY;	// Our own window, or enemies shown on the radar of the game (-insecure)
 			inline bool no_rotate = false;
 			inline float range = 2000.f;
 			inline Vec2_t pos{ 10.f, 10.f };
@@ -106,11 +205,72 @@ namespace cfg {
 		}
 	}
 
+	namespace view {
+		inline bool fov_enabled = false;
+		inline int fov = 90;
+
+		// Weapon in our hands, the viewmodel_* console variables of the game
+		inline bool viewmodel_enabled = false;
+		inline float viewmodel_fov = 68.f;
+		inline float viewmodel_x = 2.5f;
+		inline float viewmodel_y = 0.f;
+		inline float viewmodel_z = -1.5f;
+
+		inline bool third_person = false;
+		inline int third_person_mode = 0;               // Toggle, hold, always
+		inline int third_person_key = VK_XBUTTON2;
+		inline bool third_person_scoped_off = true;     // Back to first person while scoped
+	}
+
+	namespace skins {
+		struct item_t {
+			int paint_kit = 0;
+			float wear = 0.0001f;
+			int seed = 0;
+		};
+
+		struct loadout_t {
+			int agent = 0;                   // Definition index, 0 keeps the model the game gives
+			int glove = 0;                   // Definition index, 0 keeps the default gloves
+			int knife = 0;                   // Definition index, 0 keeps the default knife
+			std::map<int, item_t> items;     // By definition index, also holds the glove & knife paint kits
+		};
+
+		enum team_t { TERRORIST, COUNTER_TERRORIST, TEAM_COUNT };
+
+		inline bool enabled = false;
+		inline bool glove_hide_third_person = true; // For player models with gloves built in, they would show both
+		inline loadout_t loadouts[TEAM_COUNT];      // Like the game, each team has its own
+		inline int music_kit = 0;                    // Definition index, 0 keeps the one the game gives. Both teams
+
+		inline std::mutex mutex;             // Menu & skin thread
+	}
+
+	namespace misc {
+		inline bool bhop = false;
+		inline bool quick_stop = false;
+		inline bool null_binds = false;
+
+		// Experimental: flips between a held direction and its opposite, the legs stop following the movement
+		inline bool slide_walk = false;
+		inline int slide_walk_key = VK_XBUTTON1;  // Held to slide
+		inline float slide_walk_rate = 8.f;       // Flips per second
+		inline float slide_walk_ratio = 0.35f;    // Part of each flip spent on the opposite direction
+		inline int slide_walk_mode = 0;           // Hold, toggle, always
+		inline int slide_walk_pattern = 0;        // Timer, speed
+		inline float slide_walk_speed = 130.f;    // Speed pattern target
+		inline bool slide_walk_auto = false;      // Slide forward with no direction held
+		inline bool slide_walk_indicator = true;
+	}
+
 	namespace settings {
 		inline bool watermark = true;
 		inline bool streamproof = false;
 		inline bool vsync = false;
 		inline bool free_cpu = true;
+		inline bool frame_times = false; // Not stored, where the time of a frame goes in the watermark
+		inline color_t accent = { 1.f, 0.44f, 0.26f, 1.f }; // Menu
+		inline float ui_scale = 1.15f; // Menu size
 	}
 
 	// Not stored, just for testing

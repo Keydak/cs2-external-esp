@@ -1,9 +1,11 @@
 #include "Overlays.hpp"
+#include "core/engine/world/MapCollision.hpp"
 
 #include "updater/Updater.hpp"
 #include "gui/renderer/Renderer.hpp" // Circular dependency
 #include "gui/frontend/menu/Menu.hpp" // Circular dependency
 #include "assets/fonts/WeaponIcons.h"
+#include "core/features/Movement.hpp"
 
 bool Overlays::Init() {
     return GetInstance().InitImpl();
@@ -43,6 +45,7 @@ void Overlays::RenderImpl() {
 
         RenderNotice();
         RenderEspStatus();
+        RenderSlideIndicator();
 
     #ifdef _DEBUG
         RenderDebugWindow();
@@ -57,6 +60,7 @@ void Overlays::RenderImpl() {
         RenderSpeedChart();
         RenderRadar();
         RenderBomb();
+        RenderMapProgress();
     }
     ImGui::PopFont();
 }
@@ -73,12 +77,18 @@ void Overlays::RenderWatermark() {
 
     static int margin = 10;
     static int padding = 10;
-    std::string watermark_string = "cs2-external-esp";
+    std::string watermark_string = "Cs2 External";
 
     watermark_string += std::format(" | {}fps", (int)io.Framerate);
 
     if (globals.in_match)
         watermark_string += std::format(" | {}", globals.map_name);
+
+    if (cfg::settings::frame_times) {
+        auto& t = Renderer::GetFrameTimes();
+        watermark_string += std::format("\nesp {:.2f} | overlays {:.2f} | menu {:.2f} | draw {:.2f} | present {:.2f} | window {:.2f} ms",
+            t.esp, t.overlays, t.menu, t.draw, t.present, t.window);
+    }
 
     auto size = ImGui::CalcTextSize(watermark_string.data());
 
@@ -163,6 +173,44 @@ void Overlays::RenderNotice() {
     );
 }
 
+namespace {
+    ImU32 Accent(float alpha = 1.f) {
+        auto accent = cfg::settings::accent;
+        return ImGui::GetColorU32(ImVec4(accent.r, accent.g, accent.b, alpha));
+    }
+
+    constexpr float CARD_ROUNDING = 6.f;
+    constexpr float CARD_STRIP = 2.f;   // Accent line on top
+
+    // Dark card with the accent on top, its border lights up while it is dragged around
+    void DrawCard(ImDrawList* d, ImVec2 min, ImVec2 max, bool hovered = false) {
+        d->AddRectFilled(min, max, IM_COL32(13, 13, 15, 235), CARD_ROUNDING);
+        d->AddRectFilled(min, ImVec2(max.x, min.y + CARD_STRIP), Accent(), CARD_ROUNDING, ImDrawFlags_RoundCornersTop);
+        d->AddRect(min, max, hovered ? Accent(0.6f) : IM_COL32(255, 255, 255, 22), CARD_ROUNDING);
+    }
+
+    // Invisible window over a card while the menu is open, so it can be dragged. True while hovered
+    bool CardHandle(const char* id, Vec2_t& pos, ImVec2 size) {
+        ImGui::SetNextWindowPos(pos, ImGuiCond_Once);
+        ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1.f, 1.f));
+
+        bool hovered = false;
+        constexpr auto flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoResize
+            | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse;
+
+        if (ImGui::Begin(id, nullptr, flags)) {
+            pos = ImGui::GetWindowPos();
+            hovered = ImGui::IsWindowHovered();
+        }
+        ImGui::End();
+
+        ImGui::PopStyleVar(2);
+        return hovered;
+    }
+}
+
 inline Player* FindPlayerByPawnIndex(std::vector<Player>& players, int index) {
     Player* found = nullptr;
 
@@ -186,90 +234,101 @@ void Overlays::RenderSpectatorList() {
     const bool detailed = cfg::world::spectators::detailed;
     const bool self_only = cfg::world::spectators::self_only;
 
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize;
-    ImGuiTableFlags flags_table = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersOuterH | ImGuiTableFlags_BordersV;
+    struct Row {
+        std::string name;
+        const char* mode;
+        std::string target;
+    };
 
-    bool should_render = false;
-    for (Player& p : players) {
-        if (auto i = p.observer_services.target) {
-            Player* target = FindPlayerByPawnIndex(players, i);
+    std::vector<Row> rows;
+    for (auto& player : players) {
+        if (player.alive || !player.observer_services.target)
+            continue;
 
-            if (self_only && (!target || !target->localplayer))
-                continue;
+        auto target = FindPlayerByPawnIndex(players, player.observer_services.target);
+        if (self_only && (!target || !target->localplayer))
+            continue;
 
-            should_render = true;
-            break;
-        }
+        std::string watching = player.observer_services.mode == ObserverMode::Free ? "No one"
+            : !target ? "Bomb"
+            : target->localplayer ? "You"
+            : std::string(target->name, strnlen(target->name, sizeof(target->name)));
+
+        rows.push_back({ std::string(player.name, strnlen(player.name, sizeof(player.name))), player.observer_services.ToString(), watching });
     }
 
-    if (!should_render && !is_menu_open)
+    if (rows.empty() && !is_menu_open)
         return;
 
-    // Window
-    ImGui::SetNextWindowPos(cfg::world::spectators::pos, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(150.f, 50.f), ImVec2(FLT_MAX, FLT_MAX));
+    // Measure
+    const float padding = 9.f;
+    const float column_gap = 14.f;
+    const float row_gap = 4.f;
+    const float line = ImGui::GetTextLineHeight();
 
-    if (!ImGui::Begin("Spectator list", nullptr, flags)) {
-        ImGui::End();
-        return;
+    constexpr auto title = "Spectators";
+    constexpr auto empty = "No spectators";
+    auto count = std::to_string(rows.size());
+
+    float name_width = 0.f, mode_width = 0.f, target_width = 0.f;
+    for (const auto& row : rows) {
+        name_width = std::max(name_width, ImGui::CalcTextSize(row.name.c_str()).x);
+        mode_width = std::max(mode_width, ImGui::CalcTextSize(row.mode).x);
+        target_width = std::max(target_width, ImGui::CalcTextSize(row.target.c_str()).x);
     }
 
-    if (is_menu_open)
-        cfg::world::spectators::pos = ImGui::GetWindowPos();
+    float content = rows.empty() ? ImGui::CalcTextSize(empty).x
+        : detailed ? name_width + column_gap + mode_width + column_gap + target_width : name_width;
+    float header = ImGui::CalcTextSize(title).x + column_gap + ImGui::CalcTextSize(count.c_str()).x + 12.f;
 
-    if (!should_render && is_menu_open) {
-        ImGui::TextDisabled("No spectators");
-        return ImGui::End();
-    }
+    int lines = std::max<int>(1, static_cast<int>(rows.size()));
+    ImVec2 size(
+        std::max(160.f, padding * 2.f + std::max(content, header)),
+        CARD_STRIP + padding + line + 8.f + lines * (line + row_gap) - row_gap + padding
+    );
 
-    if (detailed) {
-        if (ImGui::BeginTable("##detailed", 3, flags_table)) {
-            ImGui::TableSetupColumn("Name");
-            ImGui::TableSetupColumn("Mode");
-            ImGui::TableSetupColumn("Target");
-            ImGui::TableHeadersRow();
+    auto& pos = cfg::world::spectators::pos;
+    bool hovered = is_menu_open && CardHandle("##spectators", pos, size);
 
-            for (Player& player : players) {
-                if (player.alive) continue;
+    // Draw
+    auto d = ImGui::GetBackgroundDrawList();
+    ImVec2 min(floorf(pos.x), floorf(pos.y));
+    ImVec2 max = min + size;
 
-                int targetIndex = player.observer_services.target;
-                if (targetIndex == 0) continue;
+    DrawCard(d, min, max, hovered);
 
-                Player* target = FindPlayerByPawnIndex(players, targetIndex);
+    float y = min.y + CARD_STRIP + padding;
+    d->AddCircleFilled(ImVec2(min.x + padding + 3.f, y + line * 0.5f), 3.f, Accent(), 12);
+    d->AddText(ImVec2(min.x + padding + 12.f, y), IM_COL32(240, 240, 240, 255), title);
 
-                if (self_only && (!target || !target->localplayer))
-                    continue;
+    // Count in an accent pill on the right
+    auto count_size = ImGui::CalcTextSize(count.c_str());
+    ImVec2 pill_max(max.x - padding, y + line);
+    ImVec2 pill_min(pill_max.x - count_size.x - 10.f, y);
+    d->AddRectFilled(pill_min, pill_max, Accent(0.18f), line * 0.5f);
+    d->AddText(ImVec2(pill_min.x + 5.f, y), Accent(), count.c_str());
 
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::Text("%s", player.name);
+    y += line + 4.f;
+    d->AddLine(ImVec2(min.x + padding, y), ImVec2(max.x - padding, y), IM_COL32(255, 255, 255, 18));
+    y += 4.f;
 
-                ImGui::TableSetColumnIndex(1);
-                ImGui::Text("%s", player.observer_services.ToString());
+    if (rows.empty())
+        d->AddText(ImVec2(min.x + padding, y), IM_COL32(120, 120, 128, 255), empty);
 
-                ImGui::TableSetColumnIndex(2);
-                if (self_only) ImGui::Text("You");
-                else if (player.observer_services.mode == ObserverMode::Free) ImGui::Text("No One");
-                else ImGui::Text("%s", target ? target->name : "Invalid/bomb");
-            }
+    for (const auto& row : rows) {
+        float x = min.x + padding;
+        d->AddText(ImVec2(x, y), IM_COL32(230, 230, 235, 255), row.name.c_str());
 
-            ImGui::EndTable();
+        if (detailed) {
+            x += name_width + column_gap;
+            d->AddText(ImVec2(x, y), IM_COL32(130, 130, 140, 255), row.mode);
+
+            x += mode_width + column_gap;
+            d->AddText(ImVec2(x, y), row.target == "You" ? Accent() : IM_COL32(190, 190, 198, 255), row.target.c_str());
         }
+
+        y += line + row_gap;
     }
-    else {
-        for (Player& player : players) {
-            if (player.alive) continue;
-            int targetIndex = player.observer_services.target;
-            if (targetIndex == 0) continue;
-            Player* target = FindPlayerByPawnIndex(players, targetIndex);
-
-            if (self_only && (!target || !target->localplayer)) continue;
-
-            ImGui::Text("%s", player.name);
-        }
-    }
-
-    ImGui::End();
 }
 
 void Overlays::RenderSpeedChart() {
@@ -442,7 +501,7 @@ void Overlays::RenderDebugWindow() {
 #endif
 
 void Overlays::RenderRadar() {
-    if (!cfg::world::radar::enabled)
+    if (!cfg::world::radar::enabled || cfg::world::radar::mode != cfg::world::radar::MODE_OVERLAY)
         return;
 
     auto snapshot = Cache::CopySnapshot();
@@ -530,7 +589,7 @@ void Overlays::RenderRadar() {
             sy = cy - ny * (size.y * 0.5f - 6.f);
         }
 
-        bool mate = player.team == local.team;
+        bool mate = !snapshot.game.IsEnemy(local.team, player.team);
         ImU32 col = mate
             ? IM_COL32(0, 220, 80, 255)
             : IM_COL32(220, 50, 50, 255);
@@ -545,6 +604,143 @@ void Overlays::RenderRadar() {
     d->AddText(ImVec2(pos.x + 6.f, pos.y + 4.f), IM_COL32(180, 180, 180, 200), "Radar");
 }
 
+ImVec2 Overlays::DrawBombCard(ImDrawList* d, ImVec2 pos, const Bomb& bomb) {
+    return GetInstance().DrawBombCardImpl(d, pos, bomb);
+}
+
+ImVec2 Overlays::DrawBombCardImpl(ImDrawList* d, ImVec2 pos, const Bomb& bomb) {
+    const float padding = 8.f;
+    const float gap = 8.f;
+    const float bar_height = 3.f;
+    const float section_gap = 7.f;
+
+    const ImU32 green = IM_COL32(80, 210, 120, 255);
+    const ImU32 red = IM_COL32(235, 70, 70, 255);
+
+    ImGui::PushFont(this->font_alt);
+
+    const bool planted = bomb.is_planted;
+    const bool show_site = cfg::world::bomb::location;
+    const bool show_timer = cfg::world::bomb::timer;
+    const bool show_defuse = planted && bomb.defusing;
+
+    float length = planted ? bomb.timer_length : 40.f;
+    float left = planted ? bomb.time_left : length;
+    bool urgent = planted && left <= 10.f; // No time left to defuse without a kit
+
+    auto site_str = std::format("SITE {}", !planted || bomb.site == BombSite::A ? "A" : "B");
+    auto time_str = std::format("{:.0f}s", ceilf(std::max(left, 0.f)));
+
+    auto site_size = show_site ? ImGui::CalcTextSize(site_str.c_str()) : ImVec2();
+    auto time_size = show_timer ? ImGui::CalcTextSize(time_str.c_str()) : ImVec2();
+    float divider = show_site && show_timer ? 13.f : 0.f;
+
+    ImGui::PushFont(this->font_icons);
+    auto icon_size = ImGui::CalcTextSize(WeaponIcons::C4);
+    ImGui::PopFont();
+
+    // Defuse row: DEFUSING, kit or not & the time it still takes
+    constexpr auto defuse_label = "DEFUSING";
+    const char* kit_label = bomb.defuse_kit ? "KIT" : "NO KIT";
+    auto defuse_str = std::format("{:.1f}s", std::max(bomb.defuse_left, 0.f));
+
+    auto defuse_size = ImGui::CalcTextSize(defuse_label);
+    auto kit_size = ImGui::CalcTextSize(kit_label);
+    auto defuse_time_size = ImGui::CalcTextSize(defuse_str.c_str());
+    const float pill_padding = 5.f;
+
+    float content_height = std::max({ icon_size.y, site_size.y, time_size.y });
+    float line = ImGui::GetTextLineHeight();
+
+    float width = padding * 2.f + icon_size.x + gap + site_size.x + divider + time_size.x;
+    float height = CARD_STRIP + padding * 2.f + content_height + (show_timer ? bar_height + 6.f : 0.f);
+
+    if (show_defuse) {
+        float row = defuse_size.x + gap + kit_size.x + pill_padding * 2.f + gap * 2.f + defuse_time_size.x;
+        width = std::max(width, padding * 2.f + row);
+        height += section_gap + line + 5.f + bar_height;
+    }
+
+    if (!d) {
+        ImGui::PopFont();
+        return ImVec2(width, height);
+    }
+
+    ImVec2 min(floorf(pos.x), floorf(pos.y));
+    ImVec2 max(min.x + width, min.y + height);
+    ImU32 highlight = urgent ? red : Accent();
+
+    DrawCard(d, min, max);
+
+    float top = min.y + CARD_STRIP + padding;
+    float x = min.x + padding;
+
+    d->AddText(this->font_icons, 16.f, ImVec2(x, top + (content_height - icon_size.y) * 0.5f), highlight, WeaponIcons::C4);
+    x += icon_size.x + gap;
+
+    if (show_site) {
+        d->AddText(ImVec2(x, top + (content_height - site_size.y) * 0.5f), IM_COL32(240, 240, 240, 255), site_str.c_str());
+        x += site_size.x;
+    }
+
+    if (divider > 0.f) {
+        float middle = x + divider * 0.5f;
+        d->AddLine(ImVec2(middle, top + 3.f), ImVec2(middle, top + content_height - 3.f), IM_COL32(255, 255, 255, 40));
+        x += divider;
+    }
+
+    float y = top + content_height;
+
+    if (show_timer) {
+        d->AddText(ImVec2(x, top + (content_height - time_size.y) * 0.5f), highlight, time_str.c_str());
+
+        float progress = std::clamp(left / length, 0.f, 1.f);
+        ImVec2 bar_min(min.x + padding, y + 6.f);
+        ImVec2 bar_max(max.x - padding, bar_min.y + bar_height);
+
+        d->AddRectFilled(bar_min, bar_max, IM_COL32(255, 255, 255, 20), bar_height * 0.5f);
+        if (progress > 0.f)
+            d->AddRectFilled(bar_min, ImVec2(bar_min.x + (bar_max.x - bar_min.x) * progress, bar_max.y), highlight, bar_height * 0.5f);
+
+        y = bar_max.y;
+    }
+
+    if (show_defuse) {
+        // Green while the defuse ends in time, red once it cannot anymore
+        ImU32 state = bomb.CanDefuse() ? green : red;
+
+        y += section_gap;
+        d->AddLine(ImVec2(min.x + padding, y - section_gap * 0.5f), ImVec2(max.x - padding, y - section_gap * 0.5f), IM_COL32(255, 255, 255, 14));
+
+        x = min.x + padding;
+        d->AddText(ImVec2(x, y), state, defuse_label);
+        x += defuse_size.x + gap;
+
+        // Kit pill, filled when there is one
+        ImVec2 pill_min(x, y);
+        ImVec2 pill_max(x + kit_size.x + pill_padding * 2.f, y + line);
+        if (bomb.defuse_kit)
+            d->AddRectFilled(pill_min, pill_max, Accent(0.2f), line * 0.5f);
+        else
+            d->AddRect(pill_min, pill_max, IM_COL32(255, 255, 255, 40), line * 0.5f);
+        d->AddText(ImVec2(x + pill_padding, y), bomb.defuse_kit ? Accent() : IM_COL32(150, 150, 158, 255), kit_label);
+
+        d->AddText(ImVec2(max.x - padding - defuse_time_size.x, y), state, defuse_str.c_str());
+
+        // Defuse progress, filling up towards done
+        float progress = 1.f - std::clamp(bomb.defuse_left / bomb.defuse_length, 0.f, 1.f);
+        ImVec2 bar_min(min.x + padding, y + line + 5.f);
+        ImVec2 bar_max(max.x - padding, bar_min.y + bar_height);
+
+        d->AddRectFilled(bar_min, bar_max, IM_COL32(255, 255, 255, 20), bar_height * 0.5f);
+        if (progress > 0.f)
+            d->AddRectFilled(bar_min, ImVec2(bar_min.x + (bar_max.x - bar_min.x) * progress, bar_max.y), state, bar_height * 0.5f);
+    }
+
+    ImGui::PopFont();
+    return ImVec2(width, height);
+}
+
 void Overlays::RenderBomb() {
     if (!cfg::world::bomb::location && !cfg::world::bomb::timer)
         return;
@@ -556,61 +752,16 @@ void Overlays::RenderBomb() {
     auto& local = snapshot.local;
     auto& matrix = snapshot.game.view_matrix;
 
+    // Counted down to this frame, not to the last cache refresh
+    bomb.Tick();
+
     const bool is_menu_open = Renderer::IsOpen();
 
-    float width = 20.f;
-    float height = 20.f;
-    float rounding = 4.f;
-
     static int margin = 4;
-    static int padding = 6;
-    float bar_height = 3.f;
-    float element_gap = 6.f;
 
-    auto duration_str = std::format("{}s", bomb.is_planted ? bomb.time_left : 40.0f);
-    auto bombsite_str = std::string(!bomb.is_planted || bomb.site == BombSite::A ? "A" : "B");
+    auto size = DrawBombCardImpl(nullptr, ImVec2(), bomb);
 
-    std::string bomb_string = "";
-
-    if (cfg::world::bomb::location)
-        bomb_string += "SITE " + bombsite_str;
-
-    if (cfg::world::bomb::timer)
-    {
-        if (cfg::world::bomb::location)
-            bomb_string += " | ";
-
-        bomb_string += duration_str;
-    }
-
-    auto text_size = ImGui::CalcTextSize(bomb_string.data());
-
-    ImGui::PushFont(this->font_icons);
-    auto icon_size = ImGui::CalcTextSize(WeaponIcons::C4);
-    ImGui::PopFont();
-
-    float content_width = icon_size.x + element_gap + text_size.x;
-    float content_height = std::max(icon_size.y, text_size.y);
-
-    width = content_width + (padding * 2);
-    height = content_height + (padding * 2) + (cfg::world::bomb::timer ? bar_height + 2.f : 0.f);
-
-    if (is_menu_open) {
-        ImGui::SetNextWindowBgAlpha(0.0f);
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-
-        float title_bar_height = ImGui::GetFrameHeight();
-        ImGui::SetNextWindowPos(cfg::world::bomb::pos, ImGuiCond_Once);
-        ImGui::SetNextWindowSize(ImVec2(width, height + title_bar_height), ImGuiCond_Always);
-
-        if (ImGui::Begin("Bomb Window", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoResize)) {
-            cfg::world::bomb::pos = ImGui::GetWindowPos();
-            ImGui::End();
-        }
-
-        ImGui::PopStyleVar();
-    }
+    bool hovered = is_menu_open && CardHandle("##bomb", cfg::world::bomb::pos, size);
 
     if (!bomb.is_planted && !is_menu_open)
         return;
@@ -629,71 +780,82 @@ void Overlays::RenderBomb() {
     if (is_menu_open) on_top = false;
     if (dist > 1500.f) on_top = false;
 
-    float render_x = 0.f;
-    float render_y = 0.f;
+    ImVec2 render(cfg::world::bomb::pos.x, cfg::world::bomb::pos.y);
 
     // If we use bomb esp the overlay will be sticky
-    if (on_top && bomb.is_planted && !cfg::esp::bomb) {
-        render_x = screen_pos.x - (width * 0.5f);
-        render_y = screen_pos.y + margin;
-    }
-    else {
-        float title_bar_height = ImGui::GetFrameHeight();
-        render_x = cfg::world::bomb::pos.x;
-        render_y = cfg::world::bomb::pos.y + title_bar_height;
-    }
+    if (on_top && bomb.is_planted && !cfg::esp::bomb)
+        render = ImVec2(screen_pos.x - (size.x * 0.5f), screen_pos.y + margin);
 
     auto d = ImGui::GetBackgroundDrawList();
+    DrawBombCardImpl(d, render, bomb);
 
-    d->AddRectFilled(
-        ImVec2(render_x, render_y),
-        ImVec2(render_x + width, render_y + height),
-        IM_COL32(15, 15, 15, 220),
-        rounding
-    );
+    if (hovered)
+        d->AddRect(render, render + size, Accent(0.6f), CARD_ROUNDING);
+}
 
-    d->AddRect(
-        ImVec2(render_x, render_y),
-        ImVec2(render_x + width, render_y + height),
-        IM_COL32(45, 45, 45, 255),
-        rounding
-    );
+// Loading bar while a map is built from the game files, gone once it is done
+void Overlays::RenderMapProgress() {
+    auto progress = MapCollision::GetProgress();
+    if (progress.map.empty())
+        return;
 
-    d->AddText(
-        this->font_icons,
-        16.0f,
-        ImVec2(render_x + padding, render_y + padding + (content_height - icon_size.y) * 0.5f),
-        IM_COL32(255, 60, 60, 255),
-        WeaponIcons::C4
-    );
+    constexpr float HOLD = 1.2f;    // Seconds it stays full before fading out
+    constexpr float FADE = 0.4f;
 
-    d->AddText(
-        ImVec2(render_x + padding + icon_size.x + element_gap, render_y + padding + (content_height - text_size.y) * 0.5f),
-        IM_COL32(240, 240, 240, 255),
-        bomb_string.data()
-    );
+    float alpha = 1.f;
+    if (!progress.active) {
+        float since = std::chrono::duration<float>(std::chrono::steady_clock::now() - progress.finished).count();
+        float hold = progress.failed ? 3.f : HOLD;
 
-    if (cfg::world::bomb::timer)
-    {
-        float time_left = bomb.is_planted ? bomb.time_left : 40.f;
-        float progress = std::clamp(time_left / 40.f, 0.f, 1.f);
+        if (since > hold + FADE)
+            return;
 
-        ImU32 bar_color = progress > 0.5f
-            ? IM_COL32((int)((1.f - progress) * 2.f * 255), 220, 50, 255)
-            : IM_COL32(220, (int)(progress * 2.f * 220), 50, 255);
-
-        ImVec2 bar_start(render_x + rounding, render_y + height - bar_height - 4.f);
-        ImVec2 bar_end(render_x + width - rounding, render_y + height - bar_height - 4.f);
-        float max_bar_width = bar_end.x - bar_start.x;
-
-        d->AddLine(bar_start, bar_end, IM_COL32(40, 40, 40, 255), bar_height);
-
-        if (progress > 0.f)
-        {
-            ImVec2 bar_filled_end(bar_start.x + (max_bar_width * progress), bar_end.y);
-            d->AddLine(bar_start, bar_filled_end, bar_color, bar_height);
-        }
+        alpha = std::clamp(1.f - (since - hold) / FADE, 0.f, 1.f);
     }
+
+    // Eased towards the real value, the steps are far apart
+    static float shown = 0.f;
+    static std::string shown_map;
+    if (shown_map != progress.map) {
+        shown_map = progress.map;
+        shown = 0.f;
+    }
+    shown += (progress.value - shown) * std::min(1.f, ImGui::GetIO().DeltaTime * 10.f);
+
+    auto title = progress.failed
+        ? std::format("Could not build the collision of {}", progress.map)
+        : progress.active
+            ? std::format("Building the collision of {}", progress.map)
+            : std::format("Collision of {} is ready", progress.map);
+    auto percent = std::format("{:.0f}%", shown * 100.f);
+
+    auto& io = ImGui::GetIO();
+    auto d = ImGui::GetForegroundDrawList();
+
+    auto title_size = ImGui::CalcTextSize(title.c_str());
+    auto percent_size = ImGui::CalcTextSize(percent.c_str());
+
+    const float padding = 10.f, bar_height = 4.f;
+    float width = std::max(260.f, title_size.x + percent_size.x + padding * 3.f);
+    float height = padding * 2.f + title_size.y + 8.f + bar_height;
+
+    ImVec2 min(floorf((io.DisplaySize.x - width) * 0.5f), 40.f);
+    ImVec2 max(min.x + width, min.y + height);
+
+    auto a = [&](int value) { return static_cast<int>(value * alpha); };
+
+    d->AddRectFilled(min, max, IM_COL32(15, 15, 15, a(225)), 6.f);
+    d->AddRect(min, max, IM_COL32(45, 45, 45, a(255)), 6.f);
+
+    d->AddText(ImVec2(min.x + padding, min.y + padding), IM_COL32(240, 240, 240, a(255)), title.c_str());
+    d->AddText(ImVec2(max.x - padding - percent_size.x, min.y + padding), IM_COL32(160, 160, 160, a(255)), percent.c_str());
+
+    ImVec2 bar_min(min.x + padding, max.y - padding - bar_height);
+    ImVec2 bar_max(max.x - padding, bar_min.y + bar_height);
+    ImU32 fill = progress.failed ? IM_COL32(220, 60, 60, a(255)) : IM_COL32(80, 170, 255, a(255));
+
+    d->AddRectFilled(bar_min, bar_max, IM_COL32(40, 40, 40, a(255)), 2.f);
+    d->AddRectFilled(bar_min, ImVec2(bar_min.x + (bar_max.x - bar_min.x) * std::clamp(shown, 0.f, 1.f), bar_max.y), fill, 2.f);
 }
 
 void Overlays::RenderEspStatus() {
@@ -718,4 +880,28 @@ void Overlays::RenderEspStatus() {
     d->AddRect(rect_start, rect_end, IM_COL32(100, 100, 100, 200), 10.f);
     //d->AddText(pos - ImVec2(0, padding + padding * 0.5f), IM_COL32(255, 200, 0, 255), "ESP disabled");
     d->AddText(this->font, this->font->LegacySize, pos, IM_COL32(255, 255, 255, 255), message, nullptr, max_width);
+}
+
+void Overlays::RenderSlideIndicator() {
+    // Fades with the slide walk state, under the crosshair
+    static float alpha = 0.f;
+
+    bool show = cfg::misc::slide_walk && cfg::misc::slide_walk_indicator && Movement::IsSliding();
+    alpha = std::clamp(alpha + ImGui::GetIO().DeltaTime * (show ? 8.f : -8.f), 0.f, 1.f);
+
+    if (alpha <= 0.f)
+        return;
+
+    auto d = ImGui::GetBackgroundDrawList();
+    auto center = ImGui::GetIO().DisplaySize * 0.5f;
+
+    constexpr auto label = "SLIDE";
+    auto text_size = ImGui::CalcTextSize(label);
+    auto size = ImVec2(text_size.x + 16.f, text_size.y + 6.f);
+    auto min = ImVec2(center.x - size.x * 0.5f, center.y + 36.f + (1.f - alpha) * 6.f);
+
+    auto accent = cfg::settings::accent;
+    d->AddRectFilled(min, min + size, ImGui::GetColorU32(IM_COL32(13, 13, 15, 255), 0.85f * alpha), 4.f);
+    d->AddRectFilled(min, ImVec2(min.x + 2.f, min.y + size.y), ImGui::GetColorU32(ImVec4(accent.r, accent.g, accent.b, alpha)), 1.f);
+    d->AddText(min + ImVec2(9.f, 3.f), ImGui::GetColorU32(ImVec4(accent.r, accent.g, accent.b, alpha)), label);
 }

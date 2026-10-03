@@ -2,6 +2,8 @@
 
 #include "core/engine/cache/Cache.hpp"
 
+#include <imgui_internal.h>
+
 class Esp {
 public:
     ~Esp() = default;
@@ -12,6 +14,28 @@ public:
 
     static bool Init();
     static void Render();
+
+    // Where a flag was drawn, for the menu preview to drag it
+    struct FlagArea {
+        int flag;
+        int side;
+        int index;      // In the layout of the side
+        ImRect rect;
+    };
+
+    // Drawn exactly like on players, the menu preview uses these too
+    static void DrawBox(ImDrawList* d, Vec2_t min, Vec2_t max, const color_t& color);
+    static void DrawTracker(ImDrawList* d, Vec2_t head, float box_width, const color_t& color);
+    // Head, chest or pelvis can be seen from our eyes, through neither the map nor a smoke
+
+    // Bomb & grenades seen through a made up camera, for the menu previews. Nothing is drawn for null ones
+    static void RenderPreview(ImDrawList* d, const view_matrix_t& matrix, const Bomb* bomb,
+        const std::vector<Grenade>& grenades, const GrenadePath* path,
+        const std::vector<Item>* items = nullptr, Vec3_t viewer = {});
+
+    // force: every flag, even the ones the player does not have right now
+    static void DrawFlags(ImDrawList* d, const Player& local, const Player& player, Vec2_t min, Vec2_t max,
+        const cfg::esp::group_t& group, bool force = false, std::vector<FlagArea>* areas = nullptr);
 
 private:
     ImGuiIO io;
@@ -33,13 +57,21 @@ private:
     bool InitImpl();
     void RenderImpl();
 
-    void RenderPlayer(Player player, bool mate = false);
-    void RenderPlayerBones(Player player, bool mate = false);
-    void RenderPlayerBars(Player player, std::pair<Vec2_t, Vec2_t> bounds);
-    void RenderPlayerFalgs(Player player, std::pair<Vec2_t, Vec2_t> bounds, bool mate = false);
-    void RenderPlayerTracker(Player player, std::pair<Vec2_t, Vec2_t> bounds, bool mate = false);
-    void RenderPlayerTracers(Player source, Player player, bool mate = false);
+
+    void RenderPlayer(const Player& local, const Player& player, const cfg::esp::group_t& group, bool visible);
+    void RenderPlayerBones(const Player& player, const color_t& color);
+    void DrawFlagsImpl(ImDrawList* d, const Player& local, const Player& player, Vec2_t min, Vec2_t max,
+        const cfg::esp::group_t& group, bool force, std::vector<FlagArea>* areas);
+    void RenderPlayerTracker(const Player& player, std::pair<Vec2_t, Vec2_t> bounds, const color_t& color);
+    void RenderPlayerTracers(const Player& source, const Player& player, const cfg::esp::group_t& group, bool visible);
     
     void RenderBombBox(Bomb bomb);
+    void RenderItems(const std::vector<Item>& items, const Vec3_t& viewer);
+    void RenderGrenades(const std::vector<Grenade>& grenades);
+    void RenderGrenadePrediction(const GrenadePath& path);
+    void RenderGrenadeLanding(const Grenade& grenade, ImU32 color);
+    void RenderPathEnd(const GrenadePath& path, ImU32 color, const char* icon, float time);
+    void RenderGroundCircle(const Vec3_t& center, float radius, ImU32 color, int segments, bool filled, bool glow = false);
+    void RenderArea(const AreaShape& area, ImU32 color, bool glow = false);
 	void RenderCrosshair(Player local);
 };

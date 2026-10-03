@@ -45,9 +45,21 @@ set SRCS=scripts\msvc\compatibility.cpp ^
          src/core/engine/Engine.cpp ^
          src/core/engine/classes/Game.cpp ^
          src/core/engine/classes/Globals.cpp ^
+         src/core/engine/classes/Grenades.cpp ^
+         src/core/engine/classes/Items.cpp ^
+         src/core/engine/classes/GrenadePrediction.cpp ^
+         src/core/engine/world/MapCollision.cpp ^
+         src/core/engine/world/MapExport.cpp ^
+         src/core/engine/world/GrenadeArea.cpp ^
          src/core/engine/classes/Player.cpp ^
          src/core/engine/classes/Weapon.cpp ^
          src/core/engine/classes/ObserverServices.cpp ^
+         src/core/features/Movement.cpp ^
+         src/core/features/View.cpp ^
+         src/core/features/GameRadar.cpp ^
+         src/core/engine/GameThread.cpp ^
+         src/core/features/Skins.cpp ^
+         src/gui/frontend/images/ImageCache.cpp ^
          src/core/logger/LogHelper.cpp ^
          src/core/memory/Memory.cpp ^
          src/core/offsets/Dumper.cpp ^
@@ -64,7 +76,11 @@ set SRCS=scripts\msvc\compatibility.cpp ^
          src/external/imgui/imgui_tables.cpp ^
          src/external/imgui/imgui_widgets.cpp ^
          src/external/timer/timer.cpp ^
+         src/assets/images/Logo.cpp ^
+         src/assets/models/PlayerModels.cpp ^
+         src/assets/models/PlayerPreviews.cpp ^
          src/gui/frontend/esp/Esp.cpp ^
+         src/gui/frontend/esp/GameCrosshair.cpp ^
          src/gui/frontend/menu/Menu.cpp ^
          src/gui/frontend/overlays/Overlays.cpp ^
          src/gui/renderer/Renderer.cpp ^
@@ -75,8 +91,11 @@ set SRCS=scripts\msvc\compatibility.cpp ^
 
 mkdir "%OUTDIR%" 2>nul
 
+echo compiling zstd
+zig cc -target %TARGET% -O3 -c src/external/zstd/zstddeclib.c -o %OUTDIR%\zstddeclib.o
+
 echo compiling project
-%CC% -target %TARGET% -std=c++20 -O3 -Wno-date-time -fno-autolink -include src/common.hpp %DEFINES% %INCLUDES% %SRCS% -o %OUT% %LIBS% -Lsrc/external/lib
+%CC% -target %TARGET% -std=c++20 -O3 -Wno-date-time -fno-autolink -include src/common.hpp %DEFINES% %INCLUDES% %SRCS% %OUTDIR%\zstddeclib.o -o %OUT% %LIBS% -Lsrc/external/lib
 
 if %ERRORLEVEL% EQU 0 (
     echo build successful: %OUT%

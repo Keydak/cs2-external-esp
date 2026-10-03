@@ -29,6 +29,7 @@ public:
 	static void EndRender();
 
 	static bool vsync;
+	static float present_ms; // How long the last Present() took
 	static HWND hwnd;
 	static HWND viewport;
 	static WNDCLASSEX wc;

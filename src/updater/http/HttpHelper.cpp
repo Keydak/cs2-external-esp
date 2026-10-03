@@ -4,6 +4,10 @@ int HttpHelper::Get(std::string url, json& response) {
 	return GetInstance().GetImpl(url, response);
 }
 
+int HttpHelper::GetRaw(std::string url, std::string& response) {
+	return GetInstance().GetRawImpl(url, response);
+}
+
 int HttpHelper::Post(std::string url, json body, json& response) {
 	return GetInstance().PostImpl(url, body, response);
 }
@@ -18,6 +22,7 @@ int HttpHelper::GetImpl(std::string url, json& response) {
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_string);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, ""); // Accept every supported compression (gzip, deflate), json shrinks ~8x
 
     CURLcode res = curl_easy_perform(curl);
 
@@ -37,6 +42,31 @@ int HttpHelper::GetImpl(std::string url, json& response) {
     catch (...) {
         return -2; // parse error
     }
+
+    return static_cast<int>(http_code);
+}
+
+int HttpHelper::GetRawImpl(std::string url, std::string& response) {
+    CURL* curl = curl_easy_init();
+    if (!curl) return -1;
+
+    response.clear();
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
+
+    CURLcode res = curl_easy_perform(curl);
+
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK)
+        return -1;
 
     return static_cast<int>(http_code);
 }

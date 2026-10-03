@@ -13,6 +13,9 @@ public:
     static bool Init();
     static void Render();
 
+    // Site & time left of the bomb, measured only when d is null. Also drawn by the menu preview
+    static ImVec2 DrawBombCard(ImDrawList* d, ImVec2 pos, const Bomb& bomb);
+
 private:
     ImFont* font;
     ImFont* font_alt;
@@ -34,9 +37,12 @@ private:
     void RenderImpl();
 
     void RenderBomb();
+    void RenderMapProgress();
+    ImVec2 DrawBombCardImpl(ImDrawList* d, ImVec2 pos, const Bomb& bomb);
     void RenderRadar();
     void RenderNotice();
     void RenderEspStatus();
+    void RenderSlideIndicator();
     void RenderWatermark();
     void RenderSpeedChart();
     void RenderDebugWindow();

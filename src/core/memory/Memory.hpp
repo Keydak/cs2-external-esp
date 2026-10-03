@@ -45,6 +45,10 @@ public:
 
 public:
 	ProcessModule GetModule(const char* module_name);
+	std::wstring  ReadCommandLine();
+
+	// Instance of an interface the module registered, one whose create function is "lea rax, [rip + instance]; ret"
+	uintptr_t     FindInterface(const char* module_name, const char* interface_name);
 	LPVOID		  Allocate(size_t size_in_bytes);
 	uintptr_t	  FindCodeCave(uint32_t length_in_bytes);
 	uintptr_t     FindSignature(std::vector<uint8_t> signature);
@@ -86,6 +90,47 @@ public:
 
 		cMemory.pfnNtReadVirtualMemory(handle_, (void*)address, &buffer, sizeof(T), 0);
 		return buffer;
+	}
+
+	// Writes over code, its pages are read only so the protection is lifted for the write
+	bool patch_code(uintptr_t address, const void* bytes, size_t size)
+	{
+		DWORD protection = 0;
+		if (!VirtualProtectEx(handle_, reinterpret_cast<void*>(address), size, PAGE_EXECUTE_READWRITE, &protection))
+			return false;
+
+		SIZE_T written = 0;
+		bool success = WriteProcessMemory(handle_, reinterpret_cast<void*>(address), bytes, size, &written) && written == size;
+
+		VirtualProtectEx(handle_, reinterpret_cast<void*>(address), size, protection, &protection);
+		FlushInstructionCache(handle_, reinterpret_cast<void*>(address), size);
+
+		return success;
+	}
+
+	// Memory inside the game, released with free_remote()
+	uintptr_t allocate_remote(size_t size, DWORD protection = PAGE_READWRITE)
+	{
+		return reinterpret_cast<uintptr_t>(VirtualAllocEx(handle_, nullptr, size, MEM_COMMIT | MEM_RESERVE, protection));
+	}
+
+	void free_remote(uintptr_t address)
+	{
+		if (address)
+			VirtualFreeEx(handle_, reinterpret_cast<void*>(address), 0, MEM_RELEASE);
+	}
+
+	// Runs a game function taking up to one argument on a new thread of the game and waits for it
+	bool call_remote(uintptr_t function, uintptr_t argument = 0, DWORD timeout_ms = 2000)
+	{
+		HANDLE thread = CreateRemoteThread(handle_, nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(function), reinterpret_cast<void*>(argument), 0, nullptr);
+		if (!thread)
+			return false;
+
+		bool finished = WaitForSingleObject(thread, timeout_ms) == WAIT_OBJECT_0;
+		CloseHandle(thread);
+
+		return finished;
 	}
 
 	void write_bytes(uintptr_t addr, std::vector<uint8_t> patch)

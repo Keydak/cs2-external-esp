@@ -13,6 +13,10 @@ public:
     Dumper& operator=(Dumper&&)      = delete;
 
    static bool Init();
+   static bool FetchRemote();
+
+   // Offsets in server.dll, which is there once a map was loaded. True when known
+   static bool ResolveServer();
 private:
     Dumper() {};
 
@@ -23,9 +27,12 @@ private:
     }
 
     bool InitImpl();
+    bool FetchRemoteImpl();
 private:
     std::vector<WORD> StrSigToArray(const std::string& sig);
     DWORD64 Scan(const std::string sig, ProcessModule module);
+    bool ResolveThirdPerson(ProcessModule client);
+    bool ResolveSkins(ProcessModule client);
     void GetNextArray(std::vector<short>& next, const std::vector<WORD>& signature);
     std::vector<DWORD64> ScanMemory(const std::string& sig, DWORD64 start, DWORD64 end, int number = 1);
     void ScanBlock(byte* buffer, const std::vector<short>& next, const std::vector<WORD>& signature, DWORD64 start, DWORD size, std::vector<DWORD64>& result);

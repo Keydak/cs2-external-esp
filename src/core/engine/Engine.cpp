@@ -2,6 +2,14 @@
 
 #include "core/offsets/Dumper.hpp"
 #include "core/engine/cache/Cache.hpp"
+#include "core/features/Movement.hpp"
+#include "core/features/View.hpp"
+#include "core/features/Skins.hpp"
+#include "core/features/GameRadar.hpp"
+#include "core/engine/GameThread.hpp"
+
+#include <algorithm>
+#include <cwctype>
 
 bool Engine::Init() {
     return GetInstance().InitImpl();
@@ -19,6 +27,61 @@ std::shared_ptr<pProcess> Engine::GetProcess() {
     return GetInstance().process;
 }
 
+bool Engine::IsInsecure() {
+    return GetInstance().insecure;
+}
+
+uintptr_t Engine::GetLocalPawn() {
+    auto p = GetProcess();
+    auto client = GetClient();
+
+    if (!p)
+        return 0;
+
+    auto controller = p->read<uintptr_t>(client.base + offsets::localPlayerController);
+    if (!controller)
+        return 0;
+
+    return GetEntityFromHandle(p->read<uint32_t>(controller + offsets::controller::m_hPawn));
+}
+
+uintptr_t Engine::GetEntityFromHandle(uint32_t handle) {
+    auto p = GetProcess();
+    auto client = GetClient();
+
+    if (!p || !handle || handle == 0xFFFFFFFF)
+        return 0;
+
+    // Similar to Player::GetPawn()
+    auto entity_list = p->read<uintptr_t>(client.base + offsets::entityList);
+    if (!entity_list)
+        return 0;
+
+    auto list_entry = p->read<uintptr_t>(entity_list + 0x10 + 0x8 * ((handle & 0x7FFF) >> 9));
+    if (!list_entry)
+        return 0;
+
+    return p->read<uintptr_t>(list_entry + 0x70 * (handle & 0x1FF));
+}
+
+bool Engine::ForceFullUpdate() {
+    auto p = GetProcess();
+    auto engine = GetEngine();
+
+    if (!p)
+        return false;
+
+    auto network_client = p->read<uintptr_t>(engine.base + offsets::network::dwNetworkGameClient);
+    if (!network_client) {
+        LOGF(WARNING, "Could not find the network client to request a full update");
+        return false;
+    }
+
+    p->write<int>(network_client + offsets::network::deltaTick, -1);
+    LOGF(VERBOSE, "Requested a full update");
+    return true;
+}
+
 bool Engine::InitImpl() {
     process = std::make_shared<pProcess>();
 
@@ -32,6 +95,18 @@ bool Engine::InitImpl() {
         return false;
     }
 
+    auto command_line = process->ReadCommandLine();
+    std::transform(command_line.begin(), command_line.end(), command_line.begin(), std::towlower);
+    this->insecure = command_line.find(L"-insecure") != std::wstring::npos;
+
+    if (this->insecure)
+        LOGF(INFO, "Game launched with -insecure, memory writing features are available");
+    else
+        LOGF(WARNING, "Game was not launched with -insecure, memory writing features are disabled");
+
+    if (!Dumper::FetchRemote())
+        LOGF(WARNING, "Could not fetch latest offsets, using built-in offsets (they might be outdated)");
+
     if (!Dumper::Init()) {
         LOGF(FATAL, "Failed to dump game offsets");
         return false;
@@ -40,12 +115,21 @@ bool Engine::InitImpl() {
     if (!Config::Read())
         LOGF(WARNING, "Failed to parse config, using default values");
 
+    // The configs marked as default in the menu, over the last settings
+    Config::LoadDefaultPresets();
+
 #ifdef _DEBUG
     if (!cfg::dev::console)
         LogHelper::Free();
 #endif
 
     std::thread(&Engine::Thread, this).detach();
+
+    Movement::Init();
+    View::Init();
+    GameThread::Init();
+    Skins::Init();
+    GameRadar::Init();
 
     LOGF(INFO, "Successfully initialized engine...");
     return true;

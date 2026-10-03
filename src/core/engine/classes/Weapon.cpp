@@ -37,7 +37,12 @@ bool Weapon::Update() {
 
 const char* Weapon::ToIcon() const
 {
-    switch (this->item_index)
+    return IconFor(this->item_index);
+}
+
+const char* Weapon::IconFor(int item_index)
+{
+    switch (item_index)
     {
     case weapon_ssg08:               return WeaponIcons::SSG08;
     case weapon_xm1014:              return WeaponIcons::XM1014;
@@ -127,7 +132,12 @@ const char* Weapon::ToIcon() const
 
 const char* Weapon::ToString() const
 {
-    switch (this->item_index)
+    return NameFor(this->item_index);
+}
+
+const char* Weapon::NameFor(int item_index)
+{
+    switch (item_index)
     {
     case weapon_deagle: return "Deagle";
     case weapon_elite: return "Dual Berettas";

@@ -2,6 +2,16 @@
 
 class Renderer {
 public:
+    // Where the time of a frame goes, milliseconds averaged over a few frames
+    struct FrameTimes {
+        float esp = 0.f;
+        float overlays = 0.f;
+        float menu = 0.f;
+        float draw = 0.f;       // Handing the frame to the GPU
+        float present = 0.f;    // Waiting for the GPU or V-Sync
+        float window = 0.f;     // Keeping the overlay on the game
+    };
+
     ~Renderer() = default;
     Renderer(const Renderer&) = delete;
     Renderer(Renderer&&) = delete;
@@ -14,6 +24,7 @@ public:
 
     static bool IsOpen();
     static bool IsFocused();
+    static const FrameTimes& GetFrameTimes();
 private:
     Renderer() {};
 
@@ -35,4 +46,5 @@ private:
     bool isOpen = false;
 
     bool isFocused = false;
+    FrameTimes times;
 };

@@ -26,6 +26,24 @@ bool Renderer::IsFocused() {
     return GetInstance().isFocused;
 }
 
+const Renderer::FrameTimes& Renderer::GetFrameTimes() {
+    return GetInstance().times;
+}
+
+namespace {
+    // Milliseconds since the last call, averaged into the value
+    struct Stopwatch {
+        std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+
+        void Lap(float& average, float minus = 0.f) {
+            auto now = std::chrono::steady_clock::now();
+            float ms = std::chrono::duration<float, std::milli>(now - last).count() - minus;
+            average += (std::max(0.f, ms) - average) * 0.05f;
+            last = now;
+        }
+    };
+}
+
 bool Renderer::InitImpl() {
     if (!Window::SpawnWindow()) {
         LOGF(FATAL, "Failed to create window");
@@ -72,12 +90,15 @@ void Renderer::ThreadImpl() {
     while (isRunning) {
         Render();
 
-        // If the game is not focused dont do states, 
+        Stopwatch watch;
+
+        // If the game is not focused dont do states,
         // or will start focusing game & overlay
         if (this->isFocused && HandleState())
             continue; // It will cause flickering if we handle window order after window closes
 
         HandleWindowOrder();
+        watch.Lap(times.window);
     }
 
     // Once exited, destroy everything
@@ -89,13 +110,21 @@ void Renderer::ThreadImpl() {
 void Renderer::Render() {
     Window::StartRender();
 
+    Stopwatch watch;
     Esp::Render();
+    watch.Lap(times.esp);
+
     Overlays::Render();
+    watch.Lap(times.overlays);
 
     Menu::RenderStartupHelp();
-    if (isOpen) Menu::Render();
+    Menu::Render(); // Keeps rendering while it fades out
+    watch.Lap(times.menu);
 
+    // Present is inside EndRender, counted apart from the rest of it
     Window::EndRender();
+    watch.Lap(times.draw, Window::present_ms);
+    times.present += (Window::present_ms - times.present) * 0.05f;
 }
 
 bool Renderer::HandleState() {

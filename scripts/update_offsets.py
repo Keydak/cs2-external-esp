@@ -18,6 +18,7 @@ FIELD_MAP = {
     ("controller", "m_iAccount"): "CCSPlayerController_InGameMoneyServices",
     ("pawn", "m_vOldOrigin"): "C_BasePlayerPawn",
     ("pawn", "m_iHealth"): "C_BaseEntity",
+    ("pawn", "m_fFlags"): "C_BaseEntity",
     ("pawn", "m_iTeamNum"): "C_BaseEntity",
     ("pawn", "m_bIsScoped"): "C_CSPlayerPawn",
     ("pawn", "m_ArmorValue"): "C_CSPlayerPawn",
@@ -45,6 +46,24 @@ FIELD_MAP = {
     ("bomb", "m_bC4Activated"): "C_PlantedC4",
     ("bomb", "m_nBombSite"): "C_PlantedC4",
     ("bomb", "m_vecAbsOrigin"): "CGameSceneNode",
+    ("view", "m_pCameraServices"): "C_BasePlayerPawn",
+    ("view", "m_iFOV"): "CCSPlayerBase_CameraServices",
+    ("view", "m_iFOVStart"): "CCSPlayerBase_CameraServices",
+    ("grenade", "m_designerName"): "CEntityIdentity",
+    ("grenade", "m_bDidSmokeEffect"): "C_SmokeGrenadeProjectile",
+    ("grenade", "m_vSmokeDetonationPos"): "C_SmokeGrenadeProjectile",
+    ("grenade", "m_firePositions"): "C_Inferno",
+    ("grenade", "m_bFireIsBurning"): "C_Inferno",
+    ("grenade", "m_fireCount"): "C_Inferno",
+    ("grenade", "m_nFireLifetime"): "C_Inferno",
+    ("grenade", "m_maxFireHalfWidth"): "C_Inferno",
+    ("grenade", "m_bExplodeEffectBegan"): "C_BaseCSGrenadeProjectile",
+    ("grenade", "m_nExplodeEffectTickBegin"): "C_BaseCSGrenadeProjectile",
+    ("grenade", "m_bPinPulled"): "C_BaseCSGrenade",
+    ("grenade", "m_flThrowStrength"): "C_BaseCSGrenade",
+    ("grenade", "m_angEyeAngles"): "C_CSPlayerPawn",
+    ("grenade", "m_vInitialPosition"): "C_BaseCSGrenadeProjectile",
+    ("grenade", "m_vInitialVelocity"): "C_BaseCSGrenadeProjectile",
     ("bone", "m_modelState"): "CSkeletonInstance",
     ("observerServices", "m_iObserverMode"): "CPlayer_ObserverServices",
     ("observerServices", "m_hObserverTarget"): "CPlayer_ObserverServices",
@@ -79,7 +98,7 @@ def update_offsets_file(classes, build_number):
 
     namespace_stack = []
     line_pattern = re.compile(
-        r'^(\s*constexpr\s+std::ptrdiff_t\s+)(\w+)(\s*=\s*)0x([0-9A-Fa-f]+)(\s*;.*)$'
+        r'^(\s*(?:constexpr|inline)\s+std::ptrdiff_t\s+)(\w+)(\s*=\s*)0x([0-9A-Fa-f]+)(\s*;.*)$'
     )
     namespace_open_pattern = re.compile(r'^\s*namespace\s+(\w+)\s*\{')
     build_pattern = re.compile(
