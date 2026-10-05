@@ -40,7 +40,6 @@ int main()
     c_exception_handler::setup();
 
     LogHelper::Init();
-    LogHelper::Banner();
 
     LOGF(INFO, "Compiled {}, welcome to CS2-EXTERNAL!", __TIMESTAMP__);
 
@@ -68,6 +67,13 @@ int main()
 
     // Locking
     Renderer::Thread();
+
+    // The game is gone, nothing in it to put back: straight out. Our threads still run, ExitProcess stops them
+    // before anything they use is torn down
+    if (Renderer::IsGameClosed()) {
+        LogHelper::Destroy();
+        ExitProcess(0);
+    }
 
     Freecam::Shutdown();
     View::Shutdown();

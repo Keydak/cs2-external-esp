@@ -163,27 +163,34 @@ bool Engine::AwaitProcess() {
     if (!process || process->handle_) // Process not initialized, or already attached
         return false;
 
-    do {
+    constexpr int WAIT_SECONDS = 50;
+    LogHelper::Status("Checking whether CS2 is open...");
+
+    for (int waited = 0; ; waited++) {
         if (process->AttachProcess("cs2.exe"))
             break;
 
         if (process->pid_ && !process->handle_) {
+            LogHelper::Status("");
             LOGF(FATAL, "Insufficient permissions to open a handle to the process. Try running as Administrator.");
             return false;
         }
 
-        static int attempts = 0;
+        // Not opened in time: nothing to do, closes by itself
+        if (waited >= WAIT_SECONDS) {
+            LogHelper::Status(std::format("CS2 was not opened within {} seconds, closing...", WAIT_SECONDS));
+            std::this_thread::sleep_for(3s);
+            LogHelper::Destroy();
+            ExitProcess(0);
+        }
 
-        if (!attempts)
-            LOGF(INFO, "Waiting 50s for the game to open...");
+        LogHelper::Status(std::format("CS2 is not open yet, waiting for it... {}s", WAIT_SECONDS - waited));
+        std::this_thread::sleep_for(1s);
+    }
 
-        if (attempts > 10)
-            return false;
-        attempts++;
-
-        std::this_thread::sleep_for(5s);
-    } while (true);
-
+    // Found: the console starts over with the name & the credits
+    LogHelper::Clear();
+    LogHelper::Banner();
     return true;
 }
 

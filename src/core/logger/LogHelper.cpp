@@ -59,7 +59,8 @@ bool LogHelper::InitImpl() {
 
     Logger::AddSink([this](LogMessagePtr msg) {
 #ifndef _DEBUG
-        if (msg->Level() == eLogLevel::VERBOSE)
+        // Release: the console is the banner & the credits, only errors that stop something are added
+        if (msg->Level() != eLogLevel::FATAL)
             return;
 #endif
         if (auto setting = GetSetting(msg); setting && !*setting)
@@ -72,6 +73,20 @@ bool LogHelper::InitImpl() {
     });
 
     return true;
+}
+
+void LogHelper::Status(const std::string& text)
+{
+    auto& out = GetInstance().m_ConsoleOut;
+    out << "\r\x1b[2K" << text;
+    out.flush();
+}
+
+void LogHelper::Clear()
+{
+    auto& out = GetInstance().m_ConsoleOut;
+    out << "\x1b[2J\x1b[3J\x1b[H";
+    out.flush();
 }
 
 void LogHelper::Banner()

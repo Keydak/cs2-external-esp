@@ -24,6 +24,8 @@ public:
 
     static bool IsOpen();
     static bool IsFocused();
+    // The game was closed, the render thread ended for that
+    static bool IsGameClosed();
     static const FrameTimes& GetFrameTimes();
 private:
     Renderer() {};
@@ -46,5 +48,6 @@ private:
     bool isOpen = false;
 
     bool isFocused = false;
+    bool gameClosed = false;
     FrameTimes times;
 };

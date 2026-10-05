@@ -26,6 +26,10 @@ bool Renderer::IsFocused() {
     return GetInstance().isFocused;
 }
 
+bool Renderer::IsGameClosed() {
+    return GetInstance().gameClosed;
+}
+
 const Renderer::FrameTimes& Renderer::GetFrameTimes() {
     return GetInstance().times;
 }
@@ -87,7 +91,21 @@ void Renderer::DestroyImpl() {
 }
 
 void Renderer::ThreadImpl() {
+    auto next_check = std::chrono::steady_clock::now();
+
     while (isRunning) {
+        // Closing the game closes us too, a few times a second is enough
+        if (auto now = std::chrono::steady_clock::now(); now >= next_check) {
+            next_check = now + std::chrono::milliseconds(500);
+
+            DWORD code = 0;
+            auto p = Engine::GetProcess();
+            if (p && p->handle_ && GetExitCodeProcess(p->handle_, &code) && code != STILL_ACTIVE) {
+                this->gameClosed = true;
+                break;
+            }
+        }
+
         Render();
 
         Stopwatch watch;
@@ -170,9 +188,13 @@ bool Renderer::HandleWindowOrder() {
     if (!p || (!p->hwnd_ && !p->UpdateHWND()))
         return false;
 
-    // Check if game window is still valid, if not, most likely game closed
-    if (!IsWindow(p->hwnd_))
+    // Check if game window is still valid, if not, most likely game closed. The window goes away a few seconds
+    // before the process ends, closing us the same way as an ended process
+    if (!IsWindow(p->hwnd_)) {
+        this->gameClosed = true;
         this->isRunning = false;
+        return false;
+    }
 
     static bool overlay_visible = true;
     auto foreground = GetForegroundWindow();

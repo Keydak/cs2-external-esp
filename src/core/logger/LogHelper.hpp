@@ -36,6 +36,10 @@ public:
 
     // The name in big letters & the credits, once at the start
     static void Banner();
+
+    // One line of state, written over the last one (waiting for the game), & the whole console wiped
+    static void Status(const std::string& text);
+    static void Clear();
 private:
     LogHelper(){};
 
