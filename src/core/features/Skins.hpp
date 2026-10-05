@@ -36,6 +36,7 @@ struct AgentInfo {
 struct MusicKitInfo {
     int definition_index = 0;
     std::string name;       // e.g. "Daniel Sadowski, Crimson Assault"
+    std::string code_name;  // e.g. "valve_cs2_01", its sound events are named after it
     std::string image;
     uint32_t rarity_color = 0;
 };
@@ -99,8 +100,9 @@ private:
 
     void Apply();
     void ApplyGloves(uintptr_t pawn, uint32_t account_id, int glove, const std::map<int, cfg::skins::item_t>& items);
+    void TrackSpawn(uintptr_t pawn, bool alive);
     void ApplyAgent(uintptr_t pawn, int agent);
-    bool ApplyKnife(uintptr_t pawn, uintptr_t weapon, uintptr_t item, int& index, int knife);
+    bool ApplyKnife(uintptr_t pawn, uintptr_t weapon, uintptr_t item, int& index, int knife, bool& model_changed);
     uintptr_t GetHudModel(uintptr_t pawn, uintptr_t weapon);
     bool SetModel(uintptr_t entity, const std::string& model);
     void LoadAgents();
@@ -161,7 +163,15 @@ private:
     void ApplyMusicTarget(MusicTarget& target, uintptr_t address, bool wide, int music_kit);
     uintptr_t GetServerController(uintptr_t controller);
 
+    void ApplyMenuMusic(int music_kit);
+
     MusicTarget music_targets[3];
+
+    // Kit names for the music of the main menu, two so a new kit is a new pointer & the game restarts the music.
+    // Never freed, the game keeps the pointer of the one playing
+    uintptr_t menu_music_names = 0;
+    int menu_music_slot = 0;
+    std::string menu_music_written;
     uintptr_t music_controller = 0;
     uintptr_t server_entities = 0;  // Entity system of server.dll
     std::chrono::steady_clock::time_point server_next_search{};
@@ -171,6 +181,10 @@ private:
     std::string model_applied;  // Name the game reports after our change
     int agent_applied = 0;
     std::chrono::steady_clock::time_point agent_next_try{};
+    uintptr_t agent_pawn = 0;   // The pawn & when it spawned: the model only changes right after
+    bool agent_alive = false;
+    bool agent_waiting = false; // Logged once that a change waits for the next spawn
+    std::chrono::steady_clock::time_point agent_spawned{};
 
     // Knife
     struct Knife {
@@ -178,8 +192,12 @@ private:
         int applied_index = 0;
         int fixes = 0;          // Model fixes of the first person model in a row
         std::chrono::steady_clock::time_point next_try{};
+        std::chrono::steady_clock::time_point rebuild_at{}; // The skin again once the new model is there, 0 for none
     };
     std::map<uintptr_t, Knife> knives; // By weapon entity
+    std::map<uintptr_t, std::chrono::steady_clock::time_point> knife_seen; // When each knife was first seen
+    std::chrono::steady_clock::time_point skins_started{}; // First pass with a living pawn, knives then might be mid life
+    bool knife_waiting = false;     // Logged once that a change waits for the next spawn
 
     struct MaskFix {
         std::chrono::steady_clock::time_point last{};

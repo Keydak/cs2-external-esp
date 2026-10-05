@@ -42,9 +42,9 @@ private:
     void RenderRadar();
     void RenderNotice();
     void RenderEspStatus();
-    void RenderSlideIndicator();
     void RenderWatermark();
     void RenderSpeedChart();
     void RenderDebugWindow();
     void RenderSpectatorList();
+    void RenderKeybinds();
 };

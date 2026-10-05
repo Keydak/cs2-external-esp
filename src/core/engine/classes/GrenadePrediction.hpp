@@ -9,8 +9,4 @@ public:
 
     // Flight of a grenade from its spawn position & velocity, ticks count from the throw
     static bool Simulate(GrenadeType type, Vec3_t position, Vec3_t velocity, GrenadePath& path);
-
-    // TEMP: last simulated throw, compared with real throws for calibration
-    static inline Vec3_t last_start{};
-    static inline Vec3_t last_velocity{};
 };

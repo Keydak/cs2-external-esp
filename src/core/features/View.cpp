@@ -3,6 +3,8 @@
 #include "core/engine/Engine.hpp"
 #include "core/offsets/Dumper.hpp"
 #include "core/features/Movement.hpp"
+#include "core/features/Visuals.hpp"
+#include "core/features/Freecam.hpp"
 
 #include <bit>
 
@@ -45,7 +47,6 @@ namespace {
     constexpr size_t CVAR_MAX_ENTRIES = 0x4000;
 
     // ConVarData: name first, then the float value & its limits
-    constexpr size_t CONVAR_VALUE = 0x58;
     constexpr size_t CONVAR_MIN = 0x60;
     constexpr size_t CONVAR_MAX = 0x68;
 
@@ -90,8 +91,8 @@ void View::UpdateFov(uintptr_t pawn) {
         this->fov_applied = false;
     }
 
-    // Scoped weapons zoom through the same fov, leave it to the game
-    if (p->read<bool>(pawn + offsets::pawn::m_bIsScoped))
+    // Scoped weapons zoom through the same fov, leave it to the game. Also while we hide the scope
+    if (Visuals::IsZoomed(pawn))
         return;
 
     auto camera = p->read<uintptr_t>(pawn + offsets::view::m_pCameraServices);
@@ -121,6 +122,10 @@ void View::UpdateFov(uintptr_t pawn) {
         p->write<uint32_t>(camera + offsets::view::m_iFOV, DEFAULT_FOV);
 }
 
+bool View::IsThirdPersonOn() {
+    return GetInstance().third_person_applied;
+}
+
 void View::UpdateThirdPerson(uintptr_t pawn) {
     auto p = Engine::GetProcess();
     if (!p || !offsets::input::dwCSGOInput)
@@ -131,8 +136,7 @@ void View::UpdateThirdPerson(uintptr_t pawn) {
         return;
 
     // Key, only while playing
-    bool focused = Movement::IsPlaying();
-    bool key_down = focused && (GetAsyncKeyState(cfg::view::third_person_key) & 0x8000);
+    bool key_down = Movement::IsKeyUsable(cfg::view::third_person_key) && (GetAsyncKeyState(cfg::view::third_person_key) & 0x8000);
 
     if (key_down && !this->third_person_key_was_down)
         this->third_person_toggled = !this->third_person_toggled;
@@ -147,8 +151,12 @@ void View::UpdateThirdPerson(uintptr_t pawn) {
 
     wanted = wanted && cfg::view::third_person && pawn;
 
-    if (wanted && cfg::view::third_person_scoped_off && p->read<bool>(pawn + offsets::pawn::m_bIsScoped))
+    if (wanted && cfg::view::third_person_scoped_off && Visuals::IsZoomed(pawn))
         wanted = false;
+
+    // The camera away from us shows our player, without the weapon in our hands
+    if (pawn && Freecam::GetMode() != Freecam::Mode::Off)
+        wanted = true;
 
     if (!wanted) {
         // Back to first person, like the "firstperson" command does
@@ -219,6 +227,31 @@ uintptr_t View::FindConVarList(uintptr_t& count) {
 
     count = std::min<uintptr_t>(p->read<uint16_t>(cvar + CVAR_COUNT), CVAR_MAX_ENTRIES);
     return p->read<uintptr_t>(cvar + CVAR_LIST);
+}
+
+uintptr_t View::FindConVar(std::string_view name) {
+    auto p = Engine::GetProcess();
+
+    uintptr_t count = 0;
+    auto list = GetInstance().FindConVarList(count);
+    if (!p || !list || !count || name.size() >= 64)
+        return 0;
+
+    std::vector<uint8_t> entries(count * CVAR_ENTRY_SIZE);
+    if (!p->read_raw(list, entries.data(), entries.size()))
+        return 0;
+
+    for (uintptr_t i = 0; i < count; i++) {
+        auto data = *reinterpret_cast<uintptr_t*>(&entries[i * CVAR_ENTRY_SIZE]);
+        if (!data)
+            continue;
+
+        char buffer[64]{};
+        p->read_raw(p->read<uintptr_t>(data), buffer, name.size() + 1);
+        if (std::string_view(buffer) == name)
+            return data;
+    }
+    return 0;
 }
 
 bool View::FindViewmodelVars() {

@@ -5,6 +5,10 @@
 #include "assets/fonts/Icons.h"
 
 #include "GameCrosshair.hpp"
+#include "core/features/Freecam.hpp"
+#include "core/features/Visuals.hpp"
+#include "core/engine/Engine.hpp"
+#include "core/offsets/Offsets.hpp"
 
 #include <numbers>
 #include <unordered_map>
@@ -50,7 +54,8 @@ void Esp::RenderImpl() {
 	if (!cfg::enabled)
 		return;
 
-	auto snapshot = Cache::CopySnapshot();
+	auto current = Cache::Current();
+	const auto& snapshot = *current;
 	auto& game = snapshot.game;
 	auto& bomb = snapshot.bomb;
 	auto& local = snapshot.local;
@@ -62,7 +67,11 @@ void Esp::RenderImpl() {
 	this->io = ImGui::GetIO();
 	this->d = ImGui::GetBackgroundDrawList();
 
+	// The camera of right now, read as we draw: the one of the cache stands still while it reads all the players
+	// (several ms, more on a slow PC) & may be copied half written, the boxes shook behind the mouse
 	this->matrix = game.view_matrix;
+	if (auto p = Engine::GetProcess())
+		this->matrix = p->read<view_matrix_t>(Engine::GetClient().base + offsets::viewMatrix);
 
 	struct Drawn {
 		const Player* player;
@@ -94,6 +103,10 @@ void Esp::RenderImpl() {
 		)
 			continue;
 
+		// The same through their eyes with the free cam
+		if (Freecam::IsFirstPerson() && Freecam::GetTarget() == player.GetPawnAddress())
+			continue;
+
 		bool visible = player.visible;
 		if (group.visible_only && !visible)
 			continue;
@@ -110,12 +123,18 @@ void Esp::RenderImpl() {
 		RenderPlayer(local, *entry.player, *entry.group, entry.visible);
 	}
 
-	RenderCrosshair(local);
+	// The crosshair is where our player aims, not where the camera looks
+	if (Freecam::GetMode() == Freecam::Mode::Off)
+		RenderCrosshair(local);
 	RenderItems(snapshot.items, local.pos);
 	RenderBombBox(bomb);
 	RenderGrenades(snapshot.grenades);
 	RenderGrenadePrediction(snapshot.grenade_path);
 	ImGui::PopFont();
+}
+
+ImFont* Esp::GetIconFont() {
+	return GetInstance().font_merged_icons;
 }
 
 void Esp::RenderPreview(ImDrawList* d, const view_matrix_t& matrix, const Bomb* bomb,
@@ -156,7 +175,7 @@ void Esp::RenderPlayer(const Player& local, const Player& player, const cfg::esp
 	// Needed for flags & item sizing, so even if the box is not enabled
 	// Should be calculated
 	std::pair<Vec2_t, Vec2_t> bounds;
-	if (!const_cast<Player&>(player).GetBounds(matrix, io.DisplaySize, bounds))
+	if (!player.GetBounds(matrix, io.DisplaySize, bounds))
 		return;
 
 	// Causes hp bars across the screen when they respawn
@@ -167,7 +186,7 @@ void Esp::RenderPlayer(const Player& local, const Player& player, const cfg::esp
 		DrawBox(d, bounds.first, bounds.second, visible ? group.box_visible : group.box_invisible);
 
 	if (group.skeleton)
-		RenderPlayerBones(player, visible ? group.skeleton_visible : group.skeleton_invisible);
+		RenderPlayerBones(player, visible, group.skeleton_visible, group.skeleton_invisible);
 
 	if (group.head_tracker)
 		RenderPlayerTracker(player, bounds, visible ? group.tracker_visible : group.tracker_invisible);
@@ -190,7 +209,9 @@ void Esp::DrawFlags(ImDrawList* d, const Player& local, const Player& player, Ve
 	GetInstance().DrawFlagsImpl(d, local, player, min, max, group, force, areas);
 }
 
-void Esp::RenderPlayerBones(const Player& player, const color_t& color) {
+void Esp::RenderPlayerBones(const Player& player, bool visible, const color_t& visible_color, const color_t& invisible_color) {
+	// Each bone in its own color, seen or not: a line between a seen & a hidden one changes color halfway
+	auto seen = [&](int bone) { return visible && (player.visible_bones & 1u << bone) != 0; };
 	auto bone_count = player.bone_list.size();
 	for (const auto& bone : connections) {
 		int first = bone[0], second = bone[1];
@@ -209,12 +230,18 @@ void Esp::RenderPlayerBones(const Player& player, const color_t& color) {
 		if (!matrix.wts(bone2.pos, io.DisplaySize, scb2))
 			continue;
 
-		d->AddLine(
-			scb1,
-			scb2,
-			ImColor(color),
-			1.5f
-		);
+		bool seen1 = seen(first), seen2 = seen(second);
+		ImU32 color1 = ImColor(seen1 ? visible_color : invisible_color);
+		ImU32 color2 = ImColor(seen2 ? visible_color : invisible_color);
+
+		if (seen1 == seen2) {
+			d->AddLine(scb1, scb2, color1, 1.5f);
+			continue;
+		}
+
+		auto middle = Vec2_t((scb1.x + scb2.x) * 0.5f, (scb1.y + scb2.y) * 0.5f);
+		d->AddLine(scb1, middle, color1, 1.5f);
+		d->AddLine(middle, scb2, color2, 1.5f);
 	}
 }
 
@@ -781,10 +808,6 @@ namespace {
 	}
 
 	constexpr float SMOKE_RADIUS = 144.f;
-
-	int64_t CellKey(int x, int y) {
-		return (static_cast<int64_t>(x) << 32) | static_cast<uint32_t>(y);
-	}
 }
 
 void Esp::RenderGroundCircle(const Vec3_t& center, float radius, ImU32 color, int segments, bool filled, bool glow) {
@@ -843,44 +866,60 @@ void Esp::RenderArea(const AreaShape& area, ImU32 color, bool glow) {
 	if (!area.Valid())
 		return;
 
-	std::unordered_map<int64_t, const AreaShape::Cell*> lookup;
-	lookup.reserve(area.cells.size());
-
 	int min_x = INT_MAX, min_y = INT_MAX, max_x = INT_MIN, max_y = INT_MIN;
 
 	for (const auto& cell : area.cells) {
-		lookup[CellKey(cell.x, cell.y)] = &cell;
 		min_x = std::min(min_x, cell.x);
 		min_y = std::min(min_y, cell.y);
 		max_x = std::max(max_x, cell.x);
 		max_y = std::max(max_y, cell.y);
 	}
 
-	auto find = [&](int x, int y) -> const AreaShape::Cell* {
-		auto it = lookup.find(CellKey(x, y));
-		return it != lookup.end() ? it->second : nullptr;
-	};
+	// The cells in a grid with a free row & column around, found by place instead of hashed. Kept between
+	// calls, so drawing allocates nothing
+	size_t width = static_cast<size_t>(max_x - min_x) + 3, height = static_cast<size_t>(max_y - min_y) + 3;
+	if (width * height > (1u << 20))
+		return;
+
+	static std::vector<const AreaShape::Cell*> grid;
+	static std::vector<uint8_t> projected;	// 0 not yet, 1 on screen, 2 behind
+	static std::vector<Vec2_t> centers;
+	grid.assign(width * height, nullptr);
+	projected.assign(width * height, 0);
+	centers.resize(width * height);
+
+	auto index = [&](int x, int y) { return static_cast<size_t>(y - min_y + 1) * width + static_cast<size_t>(x - min_x + 1); };
+	for (const auto& cell : area.cells)
+		grid[index(cell.x, cell.y)] = &cell;
 
 	struct Vertex {
 		float x, y;     // World
 		float floor;
 		bool boundary;  // On the edge of the area
+		size_t cell;    // Of a cell center, projected once for the squares sharing it
 	};
 
-	struct Edge {
-		Vertex from, to;
-	};
+	constexpr size_t NO_CELL = SIZE_MAX;
 
-	auto project = [&](const Vertex& vertex, float z, Vec2_t& out) {
-		return matrix.wts(Vec3_t(vertex.x, vertex.y, z), io.DisplaySize, out, false);
+	auto project = [&](const Vertex& vertex, Vec2_t& out) {
+		if (vertex.cell == NO_CELL)
+			return matrix.wts(Vec3_t(vertex.x, vertex.y, vertex.floor), io.DisplaySize, out, false);
+
+		auto& state = projected[vertex.cell];
+		if (!state)
+			state = matrix.wts(Vec3_t(vertex.x, vertex.y, vertex.floor), io.DisplaySize, centers[vertex.cell], false) ? 1 : 2;
+		out = centers[vertex.cell];
+		return state == 1;
 	};
 
 	auto fill = WithAlpha(color, glow ? 0.17f : 0.12f);
 	auto outline = WithAlpha(color, glow ? 0.95f : 0.8f);
 
-	std::vector<Vertex> polygon;
-	std::vector<ImVec2> screen;
-	std::vector<Edge> edges;
+	static std::vector<Vertex> polygon;
+	static std::vector<ImVec2> screen;
+	static std::vector<uint8_t> on_screen;
+	static std::vector<std::pair<Vec2_t, Vec2_t>> lines;
+	lines.clear();
 
 	// Neighbouring squares share edges, anti aliasing would show the seams
 	auto flags = d->Flags;
@@ -896,7 +935,7 @@ void Esp::RenderArea(const AreaShape& area, ImU32 color, bool glow) {
 			bool any = false;
 
 			for (int i = 0; i < 4; i++) {
-				corners[i] = find(x + corner_x[i], y + corner_y[i]);
+				corners[i] = grid[index(x + corner_x[i], y + corner_y[i])];
 				any |= corners[i] != nullptr;
 			}
 
@@ -914,34 +953,35 @@ void Esp::RenderArea(const AreaShape& area, ImU32 color, bool glow) {
 				float corner_wy = area.origin_y + (y + corner_y[i]) * area.cell_size;
 
 				if (corner)
-					polygon.push_back({ corner_wx, corner_wy, corner->floor, false });
+					polygon.push_back({ corner_wx, corner_wy, corner->floor, false, index(x + corner_x[i], y + corner_y[i]) });
 
 				if ((corner != nullptr) != (next != nullptr)) {
 					const auto* inside = corner ? corner : next;
 					float next_wx = area.origin_x + (x + corner_x[(i + 1) % 4]) * area.cell_size;
 					float next_wy = area.origin_y + (y + corner_y[(i + 1) % 4]) * area.cell_size;
 
-					polygon.push_back({ (corner_wx + next_wx) * 0.5f, (corner_wy + next_wy) * 0.5f, inside->floor, true });
+					polygon.push_back({ (corner_wx + next_wx) * 0.5f, (corner_wy + next_wy) * 0.5f, inside->floor, true, NO_CELL });
 				}
 			}
 
-			screen.clear();
-			for (const auto& vertex : polygon) {
+			screen.resize(polygon.size());
+			on_screen.resize(polygon.size());
+			bool all = true;
+			for (size_t i = 0; i < polygon.size(); i++) {
 				Vec2_t point;
-				if (!project(vertex, vertex.floor, point))
-					break;
-				screen.push_back(point);
+				on_screen[i] = project(polygon[i], point);
+				screen[i] = point;
+				all &= on_screen[i] != 0;
 			}
 
-			if (screen.size() == polygon.size() && screen.size() >= 3)
+			if (all && screen.size() >= 3)
 				d->AddConvexPolyFilled(screen.data(), static_cast<int>(screen.size()), fill);
 
+			// The outline: from one edge middle to the next, already projected
 			for (size_t i = 0; i < polygon.size(); i++) {
-				const auto& from = polygon[i];
-				const auto& to = polygon[(i + 1) % polygon.size()];
-
-				if (from.boundary && to.boundary)
-					edges.push_back({ from, to });
+				size_t next = (i + 1) % polygon.size();
+				if (polygon[i].boundary && polygon[next].boundary && on_screen[i] && on_screen[next])
+					lines.emplace_back(Vec2_t(screen[i].x, screen[i].y), Vec2_t(screen[next].x, screen[next].y));
 			}
 		}
 	}
@@ -949,16 +989,6 @@ void Esp::RenderArea(const AreaShape& area, ImU32 color, bool glow) {
 	d->Flags = flags;
 
 	// Outline on the ground, with a halo around it when glowing
-	std::vector<std::pair<Vec2_t, Vec2_t>> lines;
-	lines.reserve(edges.size());
-
-	for (const auto& edge : edges) {
-		Vec2_t from, to;
-
-		if (project(edge.from, edge.from.floor, from) && project(edge.to, edge.to.floor, to))
-			lines.emplace_back(from, to);
-	}
-
 	if (glow) {
 		for (const auto& [from, to] : lines)
 			d->AddLine(from, to, WithAlpha(color, 0.07f), 10.f);
@@ -997,12 +1027,13 @@ void Esp::RenderGrenades(const std::vector<Grenade>& grenades) {
 		if (cfg::esp::grenades::landing && grenade.landing.valid)
 			RenderGrenadeLanding(grenade, style.color);
 
-		// Area of effect, glowing once it popped
+		// Area of effect, glowing once it popped. Smokes & fires each have their own switch
 		bool glow = cfg::esp::grenades::glow && grenade.detonated;
+		bool area = ShowsArea(grenade.type);
 
-		if (grenade.area.Valid())
+		if (area && grenade.area.Valid())
 			RenderArea(grenade.area, style.color, glow);
-		else if (grenade.type == GrenadeType::Smoke && grenade.detonated)
+		else if (area && grenade.type == GrenadeType::Smoke && grenade.detonated)
 			RenderGroundCircle(grenade.pos, SMOKE_RADIUS, style.color, 40, true, glow);
 
 		// Label: icon, then the name & time left under it
@@ -1074,10 +1105,21 @@ void Esp::RenderGrenadePrediction(const GrenadePath& path) {
 	RenderPathEnd(path, style.color, style.icon, path.time);
 }
 
+bool Esp::ShowsArea(GrenadeType type) {
+	switch (type) {
+	case GrenadeType::Smoke:	return cfg::esp::grenades::smoke_area;
+	case GrenadeType::Fire:
+	case GrenadeType::Molotov:	return cfg::esp::grenades::fire_area;
+	default:					return true;
+	}
+}
+
 void Esp::RenderPathEnd(const GrenadePath& path, ImU32 color, const char* icon, float time) {
-	// Where it ends, with the area for smokes & fires
-	if (path.area.Valid())
-		RenderArea(path.area, color);
+	// Where it ends, with the area for smokes & fires: their switch off, before landing too
+	if (path.area.Valid()) {
+		if (ShowsArea(path.type))
+			RenderArea(path.area, color);
+	}
 	else if (path.on_ground)
 		RenderGroundCircle(path.end, 16.f, color, 16, true);
 

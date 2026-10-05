@@ -5,7 +5,12 @@
 #include "gui/renderer/Renderer.hpp" // Circular dependency
 #include "gui/frontend/menu/Menu.hpp" // Circular dependency
 #include "assets/fonts/WeaponIcons.h"
-#include "core/features/Movement.hpp"
+#include "gui/frontend/images/Avatars.hpp"
+#include "core/features/View.hpp"
+#include "core/features/Freecam.hpp"
+
+#include <algorithm>
+#include <unordered_map>
 
 bool Overlays::Init() {
     return GetInstance().InitImpl();
@@ -43,9 +48,10 @@ void Overlays::RenderImpl() {
     {
         RenderWatermark();
 
-        RenderNotice();
-        RenderEspStatus();
-        RenderSlideIndicator();
+        if (cfg::settings::notifications) {
+            RenderNotice();
+            RenderEspStatus();
+        }
 
     #ifdef _DEBUG
         RenderDebugWindow();
@@ -57,10 +63,13 @@ void Overlays::RenderImpl() {
     ImGui::PushFont(this->font_alt);
     {
         RenderSpectatorList();
+        RenderKeybinds();
         RenderSpeedChart();
         RenderRadar();
         RenderBomb();
-        RenderMapProgress();
+
+        if (cfg::settings::notifications)
+            RenderMapProgress();
     }
     ImGui::PopFont();
 }
@@ -72,7 +81,8 @@ void Overlays::RenderWatermark() {
     auto& io = ImGui::GetIO();
     auto d = ImGui::GetBackgroundDrawList();
 
-    auto snapshot = Cache::CopySnapshot();
+    auto current = Cache::Current();
+    const auto& snapshot = *current;
     auto& globals = snapshot.globals;
 
     static int margin = 10;
@@ -84,11 +94,14 @@ void Overlays::RenderWatermark() {
     if (globals.in_match)
         watermark_string += std::format(" | {}", globals.map_name);
 
+    // Where the time of a frame goes, only for development
+#ifdef _DEBUG
     if (cfg::settings::frame_times) {
         auto& t = Renderer::GetFrameTimes();
         watermark_string += std::format("\nesp {:.2f} | overlays {:.2f} | menu {:.2f} | draw {:.2f} | present {:.2f} | window {:.2f} ms",
             t.esp, t.overlays, t.menu, t.draw, t.present, t.window);
     }
+#endif
 
     auto size = ImGui::CalcTextSize(watermark_string.data());
 
@@ -189,6 +202,29 @@ namespace {
         d->AddRect(min, max, hovered ? Accent(0.6f) : IM_COL32(255, 255, 255, 22), CARD_ROUNDING);
     }
 
+    // Fading cards in & out: how fast, eased out, & the alpha of what was drawn since start multiplied
+    constexpr float FADE_SPEED = 8.f;
+
+    float EaseOut(float t) {
+        return 1.f - (1.f - t) * (1.f - t);
+    }
+
+    void FadeSince(ImDrawList* d, int start, float alpha) {
+        for (int i = start; i < d->VtxBuffer.Size; i++) {
+            auto& color = d->VtxBuffer[i].col;
+            auto a = static_cast<ImU32>(((color & IM_COL32_A_MASK) >> IM_COL32_A_SHIFT) * alpha);
+            color = (color & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT);
+        }
+    }
+
+    // Each row by its name fading in on its own, the ones gone dropped
+    void StepRows(std::unordered_map<std::string, float>& alphas, const std::vector<std::string>& names, float step) {
+        for (auto it = alphas.begin(); it != alphas.end();)
+            it = std::find(names.begin(), names.end(), it->first) != names.end() ? std::next(it) : alphas.erase(it);
+        for (const auto& name : names)
+            alphas[name] = std::min(alphas[name] + step, 1.f);
+    }
+
     // Invisible window over a card while the menu is open, so it can be dragged. True while hovered
     bool CardHandle(const char* id, Vec2_t& pos, ImVec2 size) {
         ImGui::SetNextWindowPos(pos, ImGuiCond_Once);
@@ -211,8 +247,8 @@ namespace {
     }
 }
 
-inline Player* FindPlayerByPawnIndex(std::vector<Player>& players, int index) {
-    Player* found = nullptr;
+inline const Player* FindPlayerByPawnIndex(const std::vector<Player>& players, int index) {
+    const Player* found = nullptr;
 
     for (auto& p : players) {
         if (p.pawn_controller_addr == index) {
@@ -227,7 +263,8 @@ void Overlays::RenderSpectatorList() {
     if (!cfg::world::spectators::enabled)
         return;
 
-    auto snapshot = Cache::CopySnapshot();
+    auto current = Cache::Current();
+    const auto& snapshot = *current;
     auto& players = snapshot.players;
 
     const bool is_menu_open = Renderer::IsOpen();
@@ -236,8 +273,10 @@ void Overlays::RenderSpectatorList() {
 
     struct Row {
         std::string name;
+        uint64_t steam_id;
         const char* mode;
         std::string target;
+        bool watching_us;
     };
 
     std::vector<Row> rows;
@@ -254,81 +293,314 @@ void Overlays::RenderSpectatorList() {
             : target->localplayer ? "You"
             : std::string(target->name, strnlen(target->name, sizeof(target->name)));
 
-        rows.push_back({ std::string(player.name, strnlen(player.name, sizeof(player.name))), player.observer_services.ToString(), watching });
+        rows.push_back({
+            std::string(player.name, strnlen(player.name, sizeof(player.name))),
+            player.steam_id,
+            player.observer_services.ToString(),
+            watching,
+            target && target->localplayer,
+        });
     }
 
-    if (rows.empty() && !is_menu_open)
+    // Fades in when someone starts watching & out after, the last rows shown meanwhile. Each one fades & slides
+    // in on its own too
+    static float window_alpha = 0.f;
+    static std::vector<Row> last_rows;
+    static std::unordered_map<std::string, float> row_alpha;
+
+    float step = ImGui::GetIO().DeltaTime * FADE_SPEED;
+    bool shown = !rows.empty() || is_menu_open;
+    if (shown)
+        last_rows = rows;
+    else
+        rows = last_rows;
+
+    window_alpha = std::clamp(window_alpha + (shown ? step : -step), 0.f, 1.f);
+    if (window_alpha <= 0.f) {
+        last_rows.clear();
+        row_alpha.clear();
         return;
+    }
+
+    std::vector<std::string> names;
+    for (const auto& row : rows)
+        names.push_back(row.name);
+    StepRows(row_alpha, names, step);
 
     // Measure
-    const float padding = 9.f;
-    const float column_gap = 14.f;
-    const float row_gap = 4.f;
-    const float line = ImGui::GetTextLineHeight();
+    const float padding = 12.f;
+    const float avatar = 26.f;
+    const float row_height = 34.f;
+    const float gap = 10.f;
+    const float min_width = 250.f;
+    const float title_font = 15.f;
+    const float name_font = 14.f;
+    const float small_font = 12.f;
+
+    auto measure = [&](float size, const char* str) { return this->font_alt->CalcTextSizeA(size, FLT_MAX, 0.f, str); };
 
     constexpr auto title = "Spectators";
-    constexpr auto empty = "No spectators";
+    constexpr auto empty = "No one is watching";
     auto count = std::to_string(rows.size());
 
-    float name_width = 0.f, mode_width = 0.f, target_width = 0.f;
+    float name_width = 0.f, detail_width = 0.f;
     for (const auto& row : rows) {
-        name_width = std::max(name_width, ImGui::CalcTextSize(row.name.c_str()).x);
-        mode_width = std::max(mode_width, ImGui::CalcTextSize(row.mode).x);
-        target_width = std::max(target_width, ImGui::CalcTextSize(row.target.c_str()).x);
+        name_width = std::max(name_width, measure(name_font, row.name.c_str()).x);
+        if (detailed) {
+            auto mode = measure(small_font, row.mode).x;
+            auto target = measure(small_font, row.target.c_str()).x;
+            detail_width = std::max(detail_width, mode + 12.f + 6.f + target + 12.f);
+        }
     }
 
-    float content = rows.empty() ? ImGui::CalcTextSize(empty).x
-        : detailed ? name_width + column_gap + mode_width + column_gap + target_width : name_width;
-    float header = ImGui::CalcTextSize(title).x + column_gap + ImGui::CalcTextSize(count.c_str()).x + 12.f;
+    auto title_size = measure(title_font, title);
+    auto count_size = measure(small_font, count.c_str());
+
+    float content = rows.empty() ? measure(name_font, empty).x : avatar + gap + name_width + (detailed ? gap * 2.f + detail_width : 0.f);
+    float header = 14.f + title_size.x + gap + count_size.x + 16.f;
 
     int lines = std::max<int>(1, static_cast<int>(rows.size()));
+    float header_height = title_size.y + 8.f;
     ImVec2 size(
-        std::max(160.f, padding * 2.f + std::max(content, header)),
-        CARD_STRIP + padding + line + 8.f + lines * (line + row_gap) - row_gap + padding
+        std::max(min_width, padding * 2.f + std::max(content, header)),
+        CARD_STRIP + padding + header_height + 8.f + lines * row_height + padding - 6.f
     );
 
     auto& pos = cfg::world::spectators::pos;
     bool hovered = is_menu_open && CardHandle("##spectators", pos, size);
 
-    // Draw
+    // Draw, dropping in a little while it fades in
     auto d = ImGui::GetBackgroundDrawList();
-    ImVec2 min(floorf(pos.x), floorf(pos.y));
+    int card_start = d->VtxBuffer.Size;
+    float card_ease = EaseOut(window_alpha);
+    ImVec2 min(floorf(pos.x), floorf(pos.y - (1.f - card_ease) * 8.f));
     ImVec2 max = min + size;
 
     DrawCard(d, min, max, hovered);
 
+    // Accent wash behind the header
+    d->AddRectFilledMultiColor(ImVec2(min.x + 1.f, min.y + CARD_STRIP), ImVec2(max.x - 1.f, min.y + CARD_STRIP + padding + header_height),
+        Accent(0.12f), Accent(0.02f), Accent(0.f), Accent(0.f));
+
     float y = min.y + CARD_STRIP + padding;
-    d->AddCircleFilled(ImVec2(min.x + padding + 3.f, y + line * 0.5f), 3.f, Accent(), 12);
-    d->AddText(ImVec2(min.x + padding + 12.f, y), IM_COL32(240, 240, 240, 255), title);
 
-    // Count in an accent pill on the right
-    auto count_size = ImGui::CalcTextSize(count.c_str());
-    ImVec2 pill_max(max.x - padding, y + line);
-    ImVec2 pill_min(pill_max.x - count_size.x - 10.f, y);
-    d->AddRectFilled(pill_min, pill_max, Accent(0.18f), line * 0.5f);
-    d->AddText(ImVec2(pill_min.x + 5.f, y), Accent(), count.c_str());
+    // Eye-like mark, then the title & the count in an accent pill
+    ImVec2 mark(min.x + padding + 5.f, y + title_size.y * 0.5f);
+    d->AddCircle(mark, 5.f, Accent(), 16, 1.5f);
+    d->AddCircleFilled(mark, 2.f, Accent(), 12);
+    d->AddText(this->font_alt, title_font, ImVec2(min.x + padding + 16.f, y), IM_COL32(240, 240, 244, 255), title);
 
-    y += line + 4.f;
-    d->AddLine(ImVec2(min.x + padding, y), ImVec2(max.x - padding, y), IM_COL32(255, 255, 255, 18));
-    y += 4.f;
+    ImVec2 pill_max(max.x - padding, y + title_size.y);
+    ImVec2 pill_min(pill_max.x - count_size.x - 16.f, y);
+    d->AddRectFilled(pill_min, pill_max, Accent(0.2f), title_size.y * 0.5f);
+    d->AddText(this->font_alt, small_font, ImVec2(pill_min.x + 8.f, y + (title_size.y - count_size.y) * 0.5f), Accent(), count.c_str());
 
-    if (rows.empty())
-        d->AddText(ImVec2(min.x + padding, y), IM_COL32(120, 120, 128, 255), empty);
+    y += header_height;
+    d->AddLine(ImVec2(min.x + padding, y), ImVec2(max.x - padding, y), IM_COL32(255, 255, 255, 16));
+    y += 8.f;
+
+    if (rows.empty()) {
+        auto empty_size = measure(name_font, empty);
+        d->AddText(this->font_alt, name_font, ImVec2(min.x + padding, y + (row_height - 6.f - empty_size.y) * 0.5f), IM_COL32(120, 120, 128, 255), empty);
+    }
 
     for (const auto& row : rows) {
-        float x = min.x + padding;
-        d->AddText(ImVec2(x, y), IM_COL32(230, 230, 235, 255), row.name.c_str());
+        int row_start = d->VtxBuffer.Size;
+        float row_ease = EaseOut(row_alpha[row.name]);
+        float x = min.x + padding + (1.f - row_ease) * -10.f;
+        float center_y = y + (row_height - 6.f) * 0.5f;
+
+        // Row background, lit for the ones watching us
+        ImVec2 row_min(min.x + padding - 4.f, y - 2.f);
+        ImVec2 row_max(max.x - padding + 4.f, y + row_height - 6.f + 2.f);
+        if (row.watching_us)
+            d->AddRectFilled(row_min, row_max, Accent(0.08f), 6.f);
+
+        // Profile picture in a circle, the first letter of the name until it is there (bots have none)
+        ImVec2 avatar_min(x, center_y - avatar * 0.5f);
+        ImVec2 avatar_max(x + avatar, center_y + avatar * 0.5f);
+        ImVec2 avatar_center = (avatar_min + avatar_max) * 0.5f;
+
+        if (auto texture = Avatars::Get(row.steam_id)) {
+            d->AddImageRounded(texture, avatar_min, avatar_max, ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE, avatar * 0.5f);
+        }
+        else {
+            d->AddCircleFilled(avatar_center, avatar * 0.5f, Accent(0.22f), 24);
+            char letter[2] = { row.name.empty() ? '?' : static_cast<char>(toupper(static_cast<unsigned char>(row.name[0]))), 0 };
+            auto letter_size = measure(13.f, letter);
+            d->AddText(this->font_alt, 13.f, avatar_center - letter_size * 0.5f, Accent(), letter);
+        }
+        d->AddCircle(avatar_center, avatar * 0.5f + 1.f, row.watching_us ? Accent(0.9f) : IM_COL32(255, 255, 255, 40), 24, 1.5f);
+
+        x += avatar + gap;
+        auto name_size = measure(name_font, row.name.c_str());
+        d->AddText(this->font_alt, name_font, ImVec2(x, center_y - name_size.y * 0.5f), IM_COL32(232, 232, 238, 255), row.name.c_str());
 
         if (detailed) {
-            x += name_width + column_gap;
-            d->AddText(ImVec2(x, y), IM_COL32(130, 130, 140, 255), row.mode);
+            // Mode in a quiet pill, then who is watched, ours in the accent
+            auto mode_size = measure(small_font, row.mode);
+            auto target_size = measure(small_font, row.target.c_str());
 
-            x += mode_width + column_gap;
-            d->AddText(ImVec2(x, y), row.target == "You" ? Accent() : IM_COL32(190, 190, 198, 255), row.target.c_str());
+            float right = max.x - padding;
+            ImVec2 target_pos(right - target_size.x, center_y - target_size.y * 0.5f);
+            d->AddText(this->font_alt, small_font, target_pos, row.watching_us ? Accent() : IM_COL32(190, 190, 198, 255), row.target.c_str());
+
+            ImVec2 mode_max(target_pos.x - 6.f, center_y + 9.f);
+            ImVec2 mode_min(mode_max.x - mode_size.x - 12.f, center_y - 9.f);
+            d->AddRectFilled(mode_min, mode_max, IM_COL32(255, 255, 255, 14), 9.f);
+            d->AddText(this->font_alt, small_font, ImVec2(mode_min.x + 6.f, center_y - mode_size.y * 0.5f), IM_COL32(150, 150, 160, 255), row.mode);
         }
 
-        y += line + row_gap;
+        FadeSince(d, row_start, row_ease);
+        y += row_height;
     }
+
+    FadeSince(d, card_start, card_ease);
+}
+
+void Overlays::RenderKeybinds() {
+    if (!cfg::world::keybinds::enabled)
+        return;
+
+    const bool is_menu_open = Renderer::IsOpen();
+
+    struct Row {
+        const char* name;
+        std::string key;
+        const char* mode;
+        bool on;
+    };
+
+    // The features with a key, while on. With the menu open all of them, to see where the window goes
+    static constexpr const char* THIRD_PERSON_MODES[] = { "Toggle", "Hold", "Always" };
+    bool free_cam = Freecam::GetMode() == Freecam::Mode::Free && !Freecam::IsDeadCamera();
+    bool third_person = View::IsThirdPersonOn() && Freecam::GetMode() == Freecam::Mode::Off;
+
+    std::vector<Row> rows;
+    if (cfg::view::third_person && (third_person || is_menu_open)) {
+        int mode = std::clamp(cfg::view::third_person_mode, 0, 2);
+        rows.push_back({ "Third Person", mode == 2 ? std::string("-") : Menu::GetKeyName(cfg::view::third_person_key), THIRD_PERSON_MODES[mode], third_person });
+    }
+    if (cfg::view::freecam && (free_cam || is_menu_open))
+        rows.push_back({ "Free Cam", Menu::GetKeyName(cfg::view::freecam_key), "Toggle", free_cam });
+
+    // Fades in when a key turns something on & out after, showing the last rows meanwhile. Each row fades in
+    // on its own too, sliding in from the left
+    static float window_alpha = 0.f;
+    static std::vector<Row> last_rows;
+    static std::unordered_map<std::string, float> row_alpha;
+
+    float step = ImGui::GetIO().DeltaTime * FADE_SPEED;
+    bool shown = !rows.empty() || is_menu_open;
+    if (shown)
+        last_rows = rows;
+    else
+        rows = last_rows;
+
+    window_alpha = std::clamp(window_alpha + (shown ? step : -step), 0.f, 1.f);
+    if (window_alpha <= 0.f) {
+        last_rows.clear();
+        row_alpha.clear();
+        return;
+    }
+
+    std::vector<std::string> names;
+    for (const auto& row : rows)
+        names.push_back(row.name);
+    StepRows(row_alpha, names, step);
+
+    // Measure
+    const float padding = 12.f;
+    const float row_height = 24.f;
+    const float gap = 10.f;
+    const float min_width = 200.f;
+    const float title_font = 15.f;
+    const float name_font = 14.f;
+    const float small_font = 12.f;
+
+    auto measure = [&](float size, const char* str) { return this->font_alt->CalcTextSizeA(size, FLT_MAX, 0.f, str); };
+
+    constexpr auto title = "Keybinds";
+    constexpr auto empty = "No keybind in use";
+
+    float name_width = 0.f, key_width = 0.f;
+    for (const auto& row : rows) {
+        name_width = std::max(name_width, measure(name_font, row.name).x);
+        key_width = std::max(key_width, measure(small_font, row.mode).x + 12.f + 6.f + measure(small_font, row.key.c_str()).x + 12.f);
+    }
+
+    auto title_size = measure(title_font, title);
+    float content = rows.empty() ? measure(name_font, empty).x : 14.f + name_width + gap * 2.f + key_width;
+    float header_height = title_size.y + 8.f;
+
+    int lines = std::max<int>(1, static_cast<int>(rows.size()));
+    ImVec2 size(
+        std::max(min_width, padding * 2.f + std::max(content, 16.f + title_size.x)),
+        CARD_STRIP + padding + header_height + 8.f + lines * row_height + padding - 6.f
+    );
+
+    auto& pos = cfg::world::keybinds::pos;
+    bool hovered = is_menu_open && CardHandle("##keybinds", pos, size);
+
+    // Draw, dropping in a little while it fades in
+    auto d = ImGui::GetBackgroundDrawList();
+    int card_start = d->VtxBuffer.Size;
+    float card_ease = EaseOut(window_alpha);
+    ImVec2 min(floorf(pos.x), floorf(pos.y - (1.f - card_ease) * 8.f));
+    ImVec2 max = min + size;
+
+    DrawCard(d, min, max, hovered);
+
+    d->AddRectFilledMultiColor(ImVec2(min.x + 1.f, min.y + CARD_STRIP), ImVec2(max.x - 1.f, min.y + CARD_STRIP + padding + header_height),
+        Accent(0.12f), Accent(0.02f), Accent(0.f), Accent(0.f));
+
+    float y = min.y + CARD_STRIP + padding;
+
+    // Key-like mark, then the title
+    ImVec2 mark_min(min.x + padding, y + title_size.y * 0.5f - 5.f);
+    d->AddRect(mark_min, mark_min + ImVec2(10.f, 10.f), Accent(), 2.f, 0, 1.5f);
+    d->AddText(this->font_alt, title_font, ImVec2(min.x + padding + 16.f, y), IM_COL32(240, 240, 244, 255), title);
+
+    y += header_height;
+    d->AddLine(ImVec2(min.x + padding, y), ImVec2(max.x - padding, y), IM_COL32(255, 255, 255, 16));
+    y += 8.f;
+
+    if (rows.empty()) {
+        auto empty_size = measure(name_font, empty);
+        d->AddText(this->font_alt, name_font, ImVec2(min.x + padding, y + (row_height - 6.f - empty_size.y) * 0.5f), IM_COL32(120, 120, 128, 255), empty);
+    }
+
+    for (const auto& row : rows) {
+        float center_y = y + (row_height - 6.f) * 0.5f;
+        int row_start = d->VtxBuffer.Size;
+        float row_ease = EaseOut(row_alpha[row.name]);
+        float slide = (1.f - row_ease) * -10.f;
+
+        // Dot lit while on, then the name
+        d->AddCircleFilled(ImVec2(min.x + padding + 4.f + slide, center_y), 3.5f, row.on ? Accent() : IM_COL32(255, 255, 255, 40), 12);
+
+        auto name_size = measure(name_font, row.name);
+        d->AddText(this->font_alt, name_font, ImVec2(min.x + padding + 14.f + slide, center_y - name_size.y * 0.5f),
+            row.on ? IM_COL32(232, 232, 238, 255) : IM_COL32(150, 150, 160, 255), row.name);
+
+        // Key on the right in the accent, its mode in a quiet pill before it
+        auto key_size = measure(small_font, row.key.c_str());
+        auto mode_size = measure(small_font, row.mode);
+
+        float right = max.x - padding;
+        ImVec2 key_pos(right - key_size.x, center_y - key_size.y * 0.5f);
+        d->AddText(this->font_alt, small_font, key_pos, row.on ? Accent() : IM_COL32(150, 150, 160, 255), row.key.c_str());
+
+        ImVec2 mode_max(key_pos.x - 6.f, center_y + 9.f);
+        ImVec2 mode_min(mode_max.x - mode_size.x - 12.f, center_y - 9.f);
+        d->AddRectFilled(mode_min, mode_max, IM_COL32(255, 255, 255, 14), 9.f);
+        d->AddText(this->font_alt, small_font, ImVec2(mode_min.x + 6.f, center_y - mode_size.y * 0.5f), IM_COL32(150, 150, 160, 255), row.mode);
+
+        FadeSince(d, row_start, row_ease);
+        y += row_height;
+    }
+
+    FadeSince(d, card_start, card_ease);
 }
 
 void Overlays::RenderSpeedChart() {
@@ -338,7 +610,8 @@ void Overlays::RenderSpeedChart() {
     auto& io = ImGui::GetIO();
     auto d = ImGui::GetBackgroundDrawList();
 
-    auto snapshot = Cache::CopySnapshot();
+    auto current = Cache::Current();
+    const auto& snapshot = *current;
     auto& local = snapshot.local;
 
     const static float padding = 10.0f;
@@ -446,7 +719,8 @@ void Overlays::RenderDebugWindow() {
     auto& io = ImGui::GetIO();
     auto d = ImGui::GetBackgroundDrawList();
 
-    auto snapshot = Cache::CopySnapshot();
+    auto current = Cache::Current();
+    const auto& snapshot = *current;
     auto& game = snapshot.game;
     auto& bomb = snapshot.bomb;
     auto& globals = snapshot.globals;
@@ -504,7 +778,8 @@ void Overlays::RenderRadar() {
     if (!cfg::world::radar::enabled || cfg::world::radar::mode != cfg::world::radar::MODE_OVERLAY)
         return;
 
-    auto snapshot = Cache::CopySnapshot();
+    auto current = Cache::Current();
+    const auto& snapshot = *current;
     auto& local = snapshot.local;
     auto& players = snapshot.players;
     auto& matrix = snapshot.game.view_matrix;
@@ -609,15 +884,18 @@ ImVec2 Overlays::DrawBombCard(ImDrawList* d, ImVec2 pos, const Bomb& bomb) {
 }
 
 ImVec2 Overlays::DrawBombCardImpl(ImDrawList* d, ImVec2 pos, const Bomb& bomb) {
-    const float padding = 8.f;
-    const float gap = 8.f;
-    const float bar_height = 3.f;
-    const float section_gap = 7.f;
+    const float padding = 12.f;
+    const float gap = 10.f;
+    const float badge = 40.f;           // Square with the C4 icon
+    const float time_font = 28.f;
+    const float label_font = 12.f;
+    const float bar_height = 6.f;
+    const float min_width = 240.f;
 
     const ImU32 green = IM_COL32(80, 210, 120, 255);
     const ImU32 red = IM_COL32(235, 70, 70, 255);
-
-    ImGui::PushFont(this->font_alt);
+    const ImU32 text = IM_COL32(240, 240, 244, 255);
+    const ImU32 dim = IM_COL32(140, 140, 150, 255);
 
     const bool planted = bomb.is_planted;
     const bool show_site = cfg::world::bomb::location;
@@ -625,82 +903,120 @@ ImVec2 Overlays::DrawBombCardImpl(ImDrawList* d, ImVec2 pos, const Bomb& bomb) {
     const bool show_defuse = planted && bomb.defusing;
 
     float length = planted ? bomb.timer_length : 40.f;
-    float left = planted ? bomb.time_left : length;
+    float left = std::max(planted ? bomb.time_left : length, 0.f);
     bool urgent = planted && left <= 10.f; // No time left to defuse without a kit
 
-    auto site_str = std::format("SITE {}", !planted || bomb.site == BombSite::A ? "A" : "B");
-    auto time_str = std::format("{:.0f}s", ceilf(std::max(left, 0.f)));
+    // Tenths once every one of them counts
+    auto time_str = left < 10.f ? std::format("{:.1f}", left) : std::format("{:.0f}", ceilf(left));
+    const char* site = !planted || bomb.site == BombSite::A ? "A" : "B";
+    const char* state_str = !planted ? "C4" : urgent ? "DEFUSE WITH KIT ONLY" : "PLANTED";
 
-    auto site_size = show_site ? ImGui::CalcTextSize(site_str.c_str()) : ImVec2();
-    auto time_size = show_timer ? ImGui::CalcTextSize(time_str.c_str()) : ImVec2();
-    float divider = show_site && show_timer ? 13.f : 0.f;
+    // Being defused: cutters for the icon, kit or not next to it, the time green while the defuse still makes it
+    const bool defusing = planted && bomb.defusing;
+    const ImU32 defuse_color = bomb.CanDefuse() ? green : red;
+    if (defusing)
+        state_str = bomb.defuse_kit ? "DEFUSING  -  WITH KIT" : "DEFUSING  -  NO KIT";
 
-    ImGui::PushFont(this->font_icons);
-    auto icon_size = ImGui::CalcTextSize(WeaponIcons::C4);
-    ImGui::PopFont();
+    auto measure = [&](float size, const char* str) { return this->font_alt->CalcTextSizeA(size, FLT_MAX, 0.f, str); };
+
+    auto time_size = show_timer ? measure(time_font, time_str.c_str()) : ImVec2();
+    auto unit_size = show_timer ? measure(label_font + 2.f, "s") : ImVec2();
+    auto state_size = measure(label_font, state_str);
+    auto site_size = measure(20.f, site);
+    float site_badge = show_site ? std::max(site_size.x + 18.f, 34.f) : 0.f;
 
     // Defuse row: DEFUSING, kit or not & the time it still takes
     constexpr auto defuse_label = "DEFUSING";
     const char* kit_label = bomb.defuse_kit ? "KIT" : "NO KIT";
     auto defuse_str = std::format("{:.1f}s", std::max(bomb.defuse_left, 0.f));
+    auto defuse_size = measure(13.f, defuse_label);
+    auto kit_size = measure(label_font, kit_label);
+    auto defuse_time_size = measure(13.f, defuse_str.c_str());
+    const float pill_padding = 7.f;
 
-    auto defuse_size = ImGui::CalcTextSize(defuse_label);
-    auto kit_size = ImGui::CalcTextSize(kit_label);
-    auto defuse_time_size = ImGui::CalcTextSize(defuse_str.c_str());
-    const float pill_padding = 5.f;
+    float info_width = std::max(time_size.x + unit_size.x + 3.f, state_size.x);
+    float width = std::max(min_width, padding * 2.f + badge + gap + info_width + gap + site_badge);
+    float height = CARD_STRIP + padding + badge + padding;
 
-    float content_height = std::max({ icon_size.y, site_size.y, time_size.y });
-    float line = ImGui::GetTextLineHeight();
-
-    float width = padding * 2.f + icon_size.x + gap + site_size.x + divider + time_size.x;
-    float height = CARD_STRIP + padding * 2.f + content_height + (show_timer ? bar_height + 6.f : 0.f);
+    if (show_timer)
+        height += bar_height + 10.f;
 
     if (show_defuse) {
         float row = defuse_size.x + gap + kit_size.x + pill_padding * 2.f + gap * 2.f + defuse_time_size.x;
         width = std::max(width, padding * 2.f + row);
-        height += section_gap + line + 5.f + bar_height;
+        height += 12.f + 18.f + 6.f + bar_height;
     }
 
-    if (!d) {
-        ImGui::PopFont();
+    if (!d)
         return ImVec2(width, height);
-    }
 
     ImVec2 min(floorf(pos.x), floorf(pos.y));
     ImVec2 max(min.x + width, min.y + height);
-    ImU32 highlight = urgent ? red : Accent();
+    ImU32 highlight = defusing ? defuse_color : urgent ? red : Accent();
+    auto tint = [&](float alpha) {
+        if (defusing)
+            return (defuse_color & ~IM_COL32_A_MASK) | (static_cast<ImU32>(alpha * 255) << IM_COL32_A_SHIFT);
+        return urgent ? IM_COL32(235, 70, 70, static_cast<int>(alpha * 255)) : Accent(alpha);
+    };
 
     DrawCard(d, min, max);
 
+    // Soft glow of the state color behind the icon side
+    d->AddRectFilledMultiColor(ImVec2(min.x + 1.f, min.y + CARD_STRIP), ImVec2(min.x + width * 0.55f, max.y - 1.f),
+        tint(0.10f), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0), tint(0.10f));
+
     float top = min.y + CARD_STRIP + padding;
-    float x = min.x + padding;
 
-    d->AddText(this->font_icons, 16.f, ImVec2(x, top + (content_height - icon_size.y) * 0.5f), highlight, WeaponIcons::C4);
-    x += icon_size.x + gap;
+    // C4 in a rounded square of the state color
+    ImVec2 badge_min(min.x + padding, top);
+    ImVec2 badge_max(badge_min.x + badge, badge_min.y + badge);
+    d->AddRectFilled(badge_min, badge_max, tint(0.16f), 8.f);
+    d->AddRect(badge_min, badge_max, tint(0.45f), 8.f);
 
+    const char* icon = defusing ? WeaponIcons::CUTTERS : WeaponIcons::C4;
+    auto icon_size = this->font_icons->CalcTextSizeA(22.f, FLT_MAX, 0.f, icon);
+    d->AddText(this->font_icons, 22.f, badge_min + (ImVec2(badge, badge) - icon_size) * 0.5f, highlight, icon);
+
+    // Time, big, with the state under it
+    float x = badge_max.x + gap;
+    if (show_timer) {
+        float time_y = top - 3.f;
+        d->AddText(this->font_alt, time_font, ImVec2(x, time_y), defusing ? defuse_color : urgent ? red : text, time_str.c_str());
+        d->AddText(this->font_alt, label_font + 2.f, ImVec2(x + time_size.x + 3.f, time_y + time_size.y - unit_size.y - 3.f), dim, "s");
+    }
+    d->AddText(this->font_alt, label_font, ImVec2(x, top + badge - state_size.y), defusing ? defuse_color : urgent ? red : dim, state_str);
+
+    // Site in a pill of the accent on the right
     if (show_site) {
-        d->AddText(ImVec2(x, top + (content_height - site_size.y) * 0.5f), IM_COL32(240, 240, 240, 255), site_str.c_str());
-        x += site_size.x;
+        ImVec2 site_min(max.x - padding - site_badge, top + (badge - 30.f) * 0.5f);
+        ImVec2 site_max(max.x - padding, site_min.y + 30.f);
+        d->AddRectFilled(site_min, site_max, Accent(0.18f), 8.f);
+        d->AddRect(site_min, site_max, Accent(0.55f), 8.f);
+        d->AddText(this->font_alt, 20.f, site_min + (site_max - site_min - site_size) * 0.5f, Accent(), site);
     }
 
-    if (divider > 0.f) {
-        float middle = x + divider * 0.5f;
-        d->AddLine(ImVec2(middle, top + 3.f), ImVec2(middle, top + content_height - 3.f), IM_COL32(255, 255, 255, 40));
-        x += divider;
-    }
-
-    float y = top + content_height;
+    float y = top + badge;
 
     if (show_timer) {
-        d->AddText(ImVec2(x, top + (content_height - time_size.y) * 0.5f), highlight, time_str.c_str());
-
         float progress = std::clamp(left / length, 0.f, 1.f);
-        ImVec2 bar_min(min.x + padding, y + 6.f);
+        ImVec2 bar_min(min.x + padding, y + 10.f);
         ImVec2 bar_max(max.x - padding, bar_min.y + bar_height);
+        float bar_width = bar_max.x - bar_min.x;
 
-        d->AddRectFilled(bar_min, bar_max, IM_COL32(255, 255, 255, 20), bar_height * 0.5f);
-        if (progress > 0.f)
-            d->AddRectFilled(bar_min, ImVec2(bar_min.x + (bar_max.x - bar_min.x) * progress, bar_max.y), highlight, bar_height * 0.5f);
+        d->AddRectFilled(bar_min, bar_max, IM_COL32(255, 255, 255, 18), bar_height * 0.5f);
+        if (progress > 0.f) {
+            ImVec2 fill_max(bar_min.x + bar_width * progress, bar_max.y);
+            d->AddRectFilled(bar_min, fill_max, highlight, bar_height * 0.5f);
+            d->AddCircleFilled(ImVec2(fill_max.x, bar_min.y + bar_height * 0.5f), bar_height * 0.5f + 1.5f, text, 12);
+        }
+
+        // Last moments a defuse still makes it: 10s without a kit, 5s with one
+        for (float mark : { 10.f, 5.f }) {
+            if (mark >= length)
+                continue;
+            float mx = bar_min.x + bar_width * (mark / length);
+            d->AddLine(ImVec2(mx, bar_min.y - 2.f), ImVec2(mx, bar_max.y + 2.f), IM_COL32(255, 255, 255, 70), 1.f);
+        }
 
         y = bar_max.y;
     }
@@ -709,35 +1025,35 @@ ImVec2 Overlays::DrawBombCardImpl(ImDrawList* d, ImVec2 pos, const Bomb& bomb) {
         // Green while the defuse ends in time, red once it cannot anymore
         ImU32 state = bomb.CanDefuse() ? green : red;
 
-        y += section_gap;
-        d->AddLine(ImVec2(min.x + padding, y - section_gap * 0.5f), ImVec2(max.x - padding, y - section_gap * 0.5f), IM_COL32(255, 255, 255, 14));
+        y += 12.f;
+        d->AddLine(ImVec2(min.x + padding, y - 6.f), ImVec2(max.x - padding, y - 6.f), IM_COL32(255, 255, 255, 14));
 
+        float row_y = y + (18.f - defuse_size.y) * 0.5f;
         x = min.x + padding;
-        d->AddText(ImVec2(x, y), state, defuse_label);
+        d->AddText(this->font_alt, 13.f, ImVec2(x, row_y), state, defuse_label);
         x += defuse_size.x + gap;
 
         // Kit pill, filled when there is one
         ImVec2 pill_min(x, y);
-        ImVec2 pill_max(x + kit_size.x + pill_padding * 2.f, y + line);
+        ImVec2 pill_max(x + kit_size.x + pill_padding * 2.f, y + 18.f);
         if (bomb.defuse_kit)
-            d->AddRectFilled(pill_min, pill_max, Accent(0.2f), line * 0.5f);
+            d->AddRectFilled(pill_min, pill_max, Accent(0.2f), 9.f);
         else
-            d->AddRect(pill_min, pill_max, IM_COL32(255, 255, 255, 40), line * 0.5f);
-        d->AddText(ImVec2(x + pill_padding, y), bomb.defuse_kit ? Accent() : IM_COL32(150, 150, 158, 255), kit_label);
+            d->AddRect(pill_min, pill_max, IM_COL32(255, 255, 255, 40), 9.f);
+        d->AddText(this->font_alt, label_font, ImVec2(x + pill_padding, y + (18.f - kit_size.y) * 0.5f), bomb.defuse_kit ? Accent() : dim, kit_label);
 
-        d->AddText(ImVec2(max.x - padding - defuse_time_size.x, y), state, defuse_str.c_str());
+        d->AddText(this->font_alt, 13.f, ImVec2(max.x - padding - defuse_time_size.x, row_y), state, defuse_str.c_str());
 
         // Defuse progress, filling up towards done
         float progress = 1.f - std::clamp(bomb.defuse_left / bomb.defuse_length, 0.f, 1.f);
-        ImVec2 bar_min(min.x + padding, y + line + 5.f);
+        ImVec2 bar_min(min.x + padding, y + 18.f + 6.f);
         ImVec2 bar_max(max.x - padding, bar_min.y + bar_height);
 
-        d->AddRectFilled(bar_min, bar_max, IM_COL32(255, 255, 255, 20), bar_height * 0.5f);
+        d->AddRectFilled(bar_min, bar_max, IM_COL32(255, 255, 255, 18), bar_height * 0.5f);
         if (progress > 0.f)
             d->AddRectFilled(bar_min, ImVec2(bar_min.x + (bar_max.x - bar_min.x) * progress, bar_max.y), state, bar_height * 0.5f);
     }
 
-    ImGui::PopFont();
     return ImVec2(width, height);
 }
 
@@ -746,9 +1062,10 @@ void Overlays::RenderBomb() {
         return;
 
     auto& io = ImGui::GetIO();
-    auto snapshot = Cache::CopySnapshot();
+    auto current = Cache::Current();
+    const auto& snapshot = *current;
 
-    auto& bomb = snapshot.bomb;
+    auto bomb = snapshot.bomb;  // Counted down below, our own copy
     auto& local = snapshot.local;
     auto& matrix = snapshot.game.view_matrix;
 
@@ -882,26 +1199,3 @@ void Overlays::RenderEspStatus() {
     d->AddText(this->font, this->font->LegacySize, pos, IM_COL32(255, 255, 255, 255), message, nullptr, max_width);
 }
 
-void Overlays::RenderSlideIndicator() {
-    // Fades with the slide walk state, under the crosshair
-    static float alpha = 0.f;
-
-    bool show = cfg::misc::slide_walk && cfg::misc::slide_walk_indicator && Movement::IsSliding();
-    alpha = std::clamp(alpha + ImGui::GetIO().DeltaTime * (show ? 8.f : -8.f), 0.f, 1.f);
-
-    if (alpha <= 0.f)
-        return;
-
-    auto d = ImGui::GetBackgroundDrawList();
-    auto center = ImGui::GetIO().DisplaySize * 0.5f;
-
-    constexpr auto label = "SLIDE";
-    auto text_size = ImGui::CalcTextSize(label);
-    auto size = ImVec2(text_size.x + 16.f, text_size.y + 6.f);
-    auto min = ImVec2(center.x - size.x * 0.5f, center.y + 36.f + (1.f - alpha) * 6.f);
-
-    auto accent = cfg::settings::accent;
-    d->AddRectFilled(min, min + size, ImGui::GetColorU32(IM_COL32(13, 13, 15, 255), 0.85f * alpha), 4.f);
-    d->AddRectFilled(min, ImVec2(min.x + 2.f, min.y + size.y), ImGui::GetColorU32(ImVec4(accent.r, accent.g, accent.b, alpha)), 1.f);
-    d->AddText(min + ImVec2(9.f, 3.f), ImGui::GetColorU32(ImVec4(accent.r, accent.g, accent.b, alpha)), label);
-}

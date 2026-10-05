@@ -47,6 +47,9 @@ public:
 	ProcessModule GetModule(const char* module_name);
 	std::wstring  ReadCommandLine();
 
+	// Address of a function the module exports, 0 when not there
+	uintptr_t     FindExport(const char* module_name, const char* export_name);
+
 	// Instance of an interface the module registered, one whose create function is "lea rax, [rip + instance]; ret"
 	uintptr_t     FindInterface(const char* module_name, const char* interface_name);
 	LPVOID		  Allocate(size_t size_in_bytes);
@@ -118,6 +121,17 @@ public:
 	{
 		if (address)
 			VirtualFreeEx(handle_, reinterpret_cast<void*>(address), 0, MEM_RELEASE);
+	}
+
+	// Starts a new thread of the game at function, without waiting for it
+	bool start_remote(uintptr_t function, uintptr_t argument = 0)
+	{
+		HANDLE thread = CreateRemoteThread(handle_, nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(function), reinterpret_cast<void*>(argument), 0, nullptr);
+		if (!thread)
+			return false;
+
+		CloseHandle(thread);
+		return true;
 	}
 
 	// Runs a game function taking up to one argument on a new thread of the game and waits for it

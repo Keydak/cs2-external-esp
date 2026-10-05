@@ -3,9 +3,13 @@
 #include "core/engine/Engine.hpp"
 #include "core/engine/cache/Cache.hpp"
 #include "core/features/Movement.hpp"
+#include "core/features/Subtick.hpp"
 #include "core/features/View.hpp"
+#include "core/features/Freecam.hpp"
 #include "core/features/Skins.hpp"
 #include "core/features/GameRadar.hpp"
+#include "core/features/ClanTag.hpp"
+#include "core/features/Visuals.hpp"
 #include "assets/fonts/WeaponIcons.h"
 #include "assets/images/Logo.h"
 #include "assets/models/PlayerModels.h"
@@ -258,10 +262,12 @@ namespace {
 		if (h > 0.01f)
 			d->AddRectFilled(highlight_min, highlight_max, C(col::hover, h), S(7.f));
 
-		auto text_size = ImGui::CalcTextSize(label);
+		// What follows ## is only the id, like everywhere in ImGui
+		auto label_end = ImGui::FindRenderedTextEnd(label);
+		auto text_size = ImGui::CalcTextSize(label, label_end);
 		auto text_pos = ImVec2(row.start.x + h * 2.f, row.start.y + (ROW_HEIGHT - text_size.y) * 0.5f);
 
-		d->AddText(text_pos, LerpColor(col::text_label, col::text, h), label);
+		d->AddText(text_pos, LerpColor(col::text_label, col::text, h), label, label_end);
 
 		if (tooltip) {
 			// Small hint so users know there is more info
@@ -684,6 +690,124 @@ namespace {
 		ImGui::PopTextWrapPos();
 		ImGui::PopStyleColor();
 		ImGui::Dummy(ImVec2(0, 6));
+	}
+
+	// Field at the right of the row, opens a list below it (above when there is no room), the description of an item
+	// shows while hovering it. Its own popup: the combo of ImGui takes the zero padding & spacing of the panels
+	bool DropdownRow(const char* label, int* value, const std::vector<const char*>& items, const char* const* descriptions = nullptr,
+		const char* tooltip = nullptr, float width = S(150.f)) {
+		ImGui::PushID(label);
+
+		auto row = BeginRow(label, tooltip);
+		auto d = ImGui::GetWindowDrawList();
+
+		const float height = S(26.f);
+		const float item_height = S(28.f);
+		const float padding = S(6.f);
+
+		auto pos = RowSlot(row, ImVec2(width, height));
+		ImGui::SetCursorScreenPos(pos);
+
+		if (ImGui::InvisibleButton("##field", ImVec2(width, height)))
+			ImGui::OpenPopup("##list");
+
+		bool open = ImGui::IsPopupOpen("##list");
+		float h = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() || open ? 1.f : 0.f, 16.f);
+
+		d->AddRectFilled(pos, pos + ImVec2(width, height), LerpColor(col::track, col::track_hover, h), S(7.f));
+		if (open)
+			d->AddRect(pos, pos + ImVec2(width, height), C(col::accent, 0.8f), S(7.f), 0, 1.f);
+
+		int current = std::clamp(*value, 0, static_cast<int>(items.size()) - 1);
+		auto text_size = ImGui::CalcTextSize(items[current]);
+		d->PushClipRect(pos, pos + ImVec2(width - S(24.f), height), true);
+		d->AddText(pos + ImVec2(S(10.f), (height - text_size.y) * 0.5f), C(col::text), items[current]);
+		d->PopClipRect();
+
+		// Chevron, points up while open
+		auto center = pos + ImVec2(width - S(13.f), height * 0.5f);
+		float s = S(3.5f), flip = open ? -1.f : 1.f;
+		d->AddTriangleFilled(center + ImVec2(-s, -s * 0.5f * flip), center + ImVec2(s, -s * 0.5f * flip), center + ImVec2(0.f, s * 0.6f * flip),
+			LerpColor(col::text_dim, open ? col::accent : col::text, h));
+
+		// The list, all items when they fit on the screen, scrolls otherwise
+		float list_height = items.size() * item_height + padding * 2.f;
+		float display = ImGui::GetIO().DisplaySize.y;
+		float below = display - (pos.y + height + S(4.f)) - S(8.f);
+		float above = pos.y - S(4.f) - S(8.f);
+		bool up = list_height > below && above > below;
+		float max_height = std::max(item_height * 3.f, up ? above : below);
+		float shown = std::min(list_height, max_height);
+
+		ImGui::SetNextWindowPos(up ? ImVec2(pos.x, pos.y - S(4.f) - shown) : ImVec2(pos.x, pos.y + height + S(4.f)));
+		ImGui::SetNextWindowSize(ImVec2(width, shown));
+
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(padding, padding));
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, 0.f));
+		ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, S(8.f));
+		ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, S(4.f));
+
+		bool changed = false;
+		if (ImGui::BeginPopup("##list", ImGuiWindowFlags_NoMove)) {
+			auto list = ImGui::GetWindowDrawList();
+			float inner = ImGui::GetContentRegionAvail().x;
+
+			for (int i = 0; i < static_cast<int>(items.size()); i++) {
+				ImGui::PushID(i);
+				auto min = ImGui::GetCursorScreenPos();
+
+				if (ImGui::InvisibleButton("##item", ImVec2(inner, item_height))) {
+					changed = *value != i;
+					*value = i;
+					ImGui::CloseCurrentPopup();
+				}
+
+				bool selected = i == current;
+				float hover = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() ? 1.f : 0.f, 18.f);
+
+				if (selected || hover > 0.01f)
+					list->AddRectFilled(min, min + ImVec2(inner, item_height), selected ? C(col::accent, 0.16f) : C(col::hover, hover), S(6.f));
+				if (selected)
+					list->AddRectFilled(min + ImVec2(0.f, S(7.f)), min + ImVec2(S(2.5f), item_height - S(7.f)), C(col::accent), 1.f);
+
+				auto size = ImGui::CalcTextSize(items[i]);
+				list->AddText(min + ImVec2(S(10.f) + hover * 2.f, (item_height - size.y) * 0.5f),
+					selected ? C(col::text) : LerpColor(col::text_dim, col::text, hover), items[i]);
+
+				if (descriptions && ImGui::IsItemHovered())
+					ImGui::SetTooltip("%s", descriptions[i]);
+
+				ImGui::PopID();
+			}
+
+			// Opened at the selection
+			if (ImGui::IsWindowAppearing())
+				ImGui::SetScrollY(std::max(0.f, current * item_height - shown * 0.5f));
+
+			ImGui::EndPopup();
+		}
+
+		ImGui::PopStyleVar(4);
+
+		EndRow(row);
+		ImGui::PopID();
+		return changed;
+	}
+
+	// Text input over the whole width of a panel
+	void TextField(const char* id, const char* hint, char* buffer, size_t size, const char* tooltip = nullptr) {
+		ImGui::PushStyleColor(ImGuiCol_FrameBg, col::track);
+		ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, col::track_hover);
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, S(6.f));
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(S(10.f), S(6.f)));
+		ImGui::Dummy(ImVec2(0, S(4.f)));
+		ImGui::SetNextItemWidth(-FLT_MIN);
+		ImGui::InputTextWithHint(id, hint, buffer, size);
+		if (tooltip && ImGui::IsItemHovered())
+			ImGui::SetTooltip("%s", tooltip);
+		ImGui::Dummy(ImVec2(0, S(4.f)));
+		ImGui::PopStyleVar(2);
+		ImGui::PopStyleColor(2);
 	}
 
 	// Combo row, call EndComboRow() only when it returns true
@@ -1584,6 +1708,11 @@ namespace {
 		std::vector<uint32_t> indices;
 		float height = 1.f;				// Feet at 0
 		float center_x = 0.f, center_z = 0.f;
+
+		// Made once with the model, so turning it costs no more than placing it: the unit normal of each
+		// triangle, & the vertices furthest out in some direction, all an outline needs
+		std::vector<ImVec4> normals;
+		std::vector<uint32_t> outside;
 	};
 
 	// CS2M v1: vertex & triangle counts, float3 positions (y up), uint16 indices below 65536 vertices, uint32 otherwise
@@ -1630,6 +1759,42 @@ namespace {
 		model->height = std::max(max_y, 0.1f);
 		model->center_x = (min_x + max_x) * 0.5f;
 		model->center_z = (min_z + max_z) * 0.5f;
+
+		model->normals.resize(triangle_count);
+		for (size_t t = 0; t < triangle_count; t++) {
+			const auto& a = model->vertices[model->indices[t * 3]];
+			const auto& b = model->vertices[model->indices[t * 3 + 1]];
+			const auto& c = model->vertices[model->indices[t * 3 + 2]];
+			float ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
+			float vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
+			float nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+			float length = sqrtf(nx * nx + ny * ny + nz * nz);
+			model->normals[t] = length > 0.f ? ImVec4(nx / length, ny / length, nz / length, 1.f) : ImVec4(0.f, 0.f, 0.f, 0.f);
+		}
+
+		// The furthest vertex along directions spread over a sphere: the outline from any side is close to theirs
+		constexpr int DIRECTIONS = 96;
+		std::vector<uint32_t> outside;
+		for (int k = 0; k < DIRECTIONS; k++) {
+			float y = 1.f - 2.f * (k + 0.5f) / DIRECTIONS;
+			float r = sqrtf(std::max(0.f, 1.f - y * y));
+			float angle = k * 2.399963f; // Golden angle
+			float dx = cosf(angle) * r, dz = sinf(angle) * r;
+
+			uint32_t best = 0;
+			float best_dot = -FLT_MAX;
+			for (uint32_t i = 0; i < vertex_count; i++) {
+				const auto& v = model->vertices[i];
+				float dot = v.x * dx + v.y * y + v.z * dz;
+				if (dot > best_dot) {
+					best_dot = dot;
+					best = i;
+				}
+			}
+			if (std::find(outside.begin(), outside.end(), best) == outside.end())
+				outside.push_back(best);
+		}
+		model->outside = std::move(outside);
 		return model;
 	}
 
@@ -1676,6 +1841,7 @@ namespace {
 		std::vector<ImVec2> points;	// 3 per triangle
 		std::vector<ImU32> colors;		// 1 per triangle
 		std::vector<std::vector<ImVec2>> shadows;
+		std::vector<ImVec2> hull;		// Outline of the drawing, for a glow that does not draw every triangle again
 	};
 
 	constexpr auto REBUILD_INTERVAL = std::chrono::milliseconds(33);
@@ -1702,18 +1868,32 @@ namespace {
 			cache.points.clear();
 			cache.colors.clear();
 			cache.shadows.clear();
+			cache.hull.clear();
 		}
 
 		return rebuild;
 	}
 
-	// scale: stretched from the anchor, the idle breathing moves the cached drawing without a rebuild
-	void DrawMeshCache(ImDrawList* d, const MeshCache& cache, ImVec2 anchor, ImVec2 scale = ImVec2(1.f, 1.f)) {
+	// scale: stretched from the anchor, the idle breathing moves the cached drawing without a rebuild.
+	// tint: every triangle in that one color & no shadow, the shape only, faded already.
+	// The cache has no fade of the menu in it, a fading page would rebuild it every frame: it is put on here
+	void DrawMeshCache(ImDrawList* d, const MeshCache& cache, ImVec2 anchor, ImVec2 scale = ImVec2(1.f, 1.f), ImU32 tint = 0) {
+		const float fade = ImGui::GetStyle().Alpha;
+		auto faded = [fade](ImU32 color) {
+			if (fade >= 1.f)
+				return color;
+			auto alpha = static_cast<ImU32>(((color >> IM_COL32_A_SHIFT) & 0xFF) * fade);
+			return (color & ~IM_COL32_A_MASK) | (alpha << IM_COL32_A_SHIFT);
+		};
+
 		for (const auto& shadow : cache.shadows) {
+			if (tint)
+				break;
+
 			std::vector<ImVec2> points(shadow.size());
 			for (size_t i = 0; i < shadow.size(); i++)
 				points[i] = anchor + shadow[i] * scale;
-			d->AddConvexPolyFilled(points.data(), static_cast<int>(points.size()), IM_COL32(0, 0, 0, 60));
+			d->AddConvexPolyFilled(points.data(), static_cast<int>(points.size()), faded(IM_COL32(0, 0, 0, 60)));
 		}
 
 		// Antialiased fills leave seams between the triangles, written straight into the buffers
@@ -1725,7 +1905,7 @@ namespace {
 			d->PrimReserve(static_cast<int>(count * 3), static_cast<int>(count * 3));
 
 			for (size_t t = start; t < start + count; t++) {
-				auto color = cache.colors[t];
+				auto color = tint ? tint : faded(cache.colors[t]);
 				d->PrimVtx(anchor + cache.points[t * 3] * scale, uv, color);
 				d->PrimVtx(anchor + cache.points[t * 3 + 1] * scale, uv, color);
 				d->PrimVtx(anchor + cache.points[t * 3 + 2] * scale, uv, color);
@@ -1733,9 +1913,74 @@ namespace {
 		}
 	}
 
+	// The outline glow of the game: a soft halo around the thing, drawn before it. Copies of the shape in the
+	// color, fainter the further out, from the outside in so the bright edge is on top.
+	// draw(offset, color) draws the shape moved by the offset in the color
+	template <typename Draw>
+	void DrawGlowAround(ImU32 color, Draw draw) {
+		constexpr int STEPS = 12;
+		constexpr float RINGS[][2] = { { 6.f, 0.07f }, { 4.5f, 0.12f }, { 3.f, 0.2f }, { 1.5f, 0.35f } }; // Radius, alpha
+
+		ImVec4 base = ImGui::ColorConvertU32ToFloat4(color);
+		for (const auto& [radius, alpha] : RINGS) {
+			ImU32 ring = ImGui::ColorConvertFloat4ToU32(ImVec4(base.x, base.y, base.z, base.w * alpha)); // The fade of the menu is in already
+			for (int i = 0; i < STEPS; i++) {
+				float angle = (i + (radius > 4.f ? 0.5f : 0.f)) * 2.f * std::numbers::pi_v<float> / STEPS;
+				draw(ImVec2(cosf(angle) * S(radius), sinf(angle) * S(radius)), ring);
+			}
+		}
+	}
+
+	// Color of a glow in the preview, 0 when it is off or cannot be written into the game
+	ImU32 PreviewGlow(bool enabled, const color_t& color) {
+		if (!enabled || !Visuals::IsAvailable())
+			return 0;
+		return ImGui::GetColorU32(ImVec4(color.r, color.g, color.b, color.a));
+	}
+
+	// A weapon icon lying on the floor where the model would be, the preview has no model of it.
+	// Under the point, the ESP icon is above it
+	void DrawStandIn(ImDrawList* d, view_matrix_t& m, Vec3_t pos, const char* icon, float size, ImU32 glow) {
+		Vec2_t screen;
+		auto font = Esp::GetIconFont();
+		if (!font || !icon || !*icon || !m.wts(pos, ImGui::GetIO().DisplaySize, screen, false))
+			return;
+
+		auto text_size = font->CalcTextSizeA(size, FLT_MAX, 0.f, icon);
+		ImVec2 at(floorf(screen.x - text_size.x * 0.5f), floorf(screen.y + S(3.f)));
+
+		if (glow)
+			DrawGlowAround(glow, [&](ImVec2 offset, ImU32 shade) { d->AddText(font, size, at + offset, shade, icon); });
+
+		d->AddText(font, size, at, C(IM_COL32(150, 152, 160, 255)), icon);
+	}
+
+	// Convex hull of points, counter clockwise on screen (y down), empty below 3 points
+	std::vector<ImVec2> ConvexHull(std::vector<ImVec2> points) {
+		std::sort(points.begin(), points.end(), [](const ImVec2& a, const ImVec2& b) { return a.x < b.x || (a.x == b.x && a.y < b.y); });
+
+		std::vector<ImVec2> hull;
+		auto turn = [](const ImVec2& o, const ImVec2& a, const ImVec2& b) { return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x); };
+
+		for (int pass = 0; pass < 2 && !points.empty(); pass++) {
+			size_t start = hull.size();
+			for (size_t k = 0; k < points.size(); k++) {
+				const auto& p = pass == 0 ? points[k] : points[points.size() - 1 - k];
+				while (hull.size() >= start + 2 && turn(hull[hull.size() - 2], hull.back(), p) <= 0.f)
+					hull.pop_back();
+				hull.push_back(p);
+			}
+			hull.pop_back();
+		}
+
+		if (hull.size() < 3)
+			hull.clear();
+		return hull;
+	}
+
 	// Model standing in a scene preview, the file is in meters with y up, the game in inches with z up.
 	// Its shadow falls on the floor (z 0) away from the light
-	void DrawSceneModel(ImDrawList* d, const PreviewModel& model, view_matrix_t& m, Vec3_t origin, float yaw, ImU32 color, bool shadow) {
+	void DrawSceneModel(ImDrawList* d, const PreviewModel& model, view_matrix_t& m, Vec3_t origin, float yaw, ImU32 color, bool shadow, ImU32 glow = 0) {
 		constexpr float INCHES = 39.37f;
 		auto display = ImGui::GetIO().DisplaySize;
 
@@ -1751,13 +1996,25 @@ namespace {
 		uint64_t shape = HashBytes(1469598103934665603ull, &model, sizeof(&model));
 		shape = HashBytes(shape, &color, sizeof(color));
 		shape = HashBytes(shape, &shadow, sizeof(shadow));
-		shape = HashBytes(shape, &ImGui::GetStyle().Alpha, sizeof(float)); // Fade of the menu
 
 		static std::map<const PreviewModel*, MeshCache> caches;
 		auto& cache = caches[&model];
 
-		if (!NeedsRebuild(cache, shape, view)) {
+		// The glow around the outline of the drawing: a few points each time, not every triangle again
+		auto draw = [&]() {
+			if (glow && !cache.hull.empty()) {
+				std::vector<ImVec2> points(cache.hull.size());
+				DrawGlowAround(glow, [&](ImVec2 offset, ImU32 shade) {
+					for (size_t i = 0; i < points.size(); i++)
+						points[i] = anchor + offset + cache.hull[i];
+					d->AddConvexPolyFilled(points.data(), static_cast<int>(points.size()), shade);
+				});
+			}
 			DrawMeshCache(d, cache, anchor);
+		};
+
+		if (!NeedsRebuild(cache, shape, view)) {
+			draw();
 			return;
 		}
 
@@ -1765,60 +2022,62 @@ namespace {
 		const float light[3] = { -0.62f, 0.5f, 0.6f };
 		float cos_yaw = cosf(yaw), sin_yaw = sinf(yaw);
 
-		std::vector<Vec3_t> world(model.vertices.size());
+		// Kept between rebuilds, a rebuild then allocates nothing
+		static std::vector<Vec3_t> world;
+		static std::vector<ImVec2> screen;
+		static std::vector<float> depth;
+		static std::vector<uint8_t> visible;
+		world.resize(model.vertices.size());
+		screen.resize(model.vertices.size());
+		depth.resize(model.vertices.size());
+		visible.resize(model.vertices.size());
+
 		for (size_t i = 0; i < model.vertices.size(); i++) {
 			const auto& v = model.vertices[i];
 			float x = (v.x - model.center_x) * INCHES, y = -(v.z - model.center_z) * INCHES;
 
-			world[i] = Vec3_t(
+			auto& p = world[i];
+			p = Vec3_t(
 				origin.x + x * cos_yaw - y * sin_yaw,
 				origin.y + x * sin_yaw + y * cos_yaw,
 				origin.z + v.y * INCHES
 			);
+
+			Vec2_t s;
+			visible[i] = m.wts(p, display, s, false);
+			screen[i] = ImVec2(s.x, s.y) - anchor;
+			depth[i] = m[3][0] * p.x + m[3][1] * p.y + m[3][2] * p.z + m[3][3];
 		}
 
-		if (shadow) {
-			// Outline of the model pressed onto the floor along the light
-			std::vector<ImVec2> points;
-			points.reserve(world.size());
+		// The outlines from the outside vertices only: the shadow pressed onto the floor along the light, & the glow
+		std::vector<ImVec2> outline, floor;
+		for (auto i : model.outside) {
+			if (visible[i])
+				outline.push_back(screen[i]);
 
-			for (const auto& p : world) {
+			if (shadow) {
+				const auto& p = world[i];
 				float t = p.z / light[2];
-				Vec2_t screen;
-				if (m.wts(Vec3_t(p.x - light[0] * t, p.y - light[1] * t, 0.f), display, screen, false))
-					points.push_back(screen);
+				Vec2_t s;
+				if (m.wts(Vec3_t(p.x - light[0] * t, p.y - light[1] * t, 0.f), display, s, false))
+					floor.push_back(ImVec2(s.x, s.y));
 			}
+		}
+		cache.hull = ConvexHull(std::move(outline));
 
-			// Convex hull, the shapes are boxy enough
-			std::sort(points.begin(), points.end(), [](const ImVec2& a, const ImVec2& b) { return a.x < b.x || (a.x == b.x && a.y < b.y); });
+		auto hull = ConvexHull(std::move(floor));
+		if (!hull.empty()) {
+			// Softer & a bit bigger first, so the edge fades
+			ImVec2 center(0.f, 0.f);
+			for (const auto& p : hull)
+				center += p;
+			center = center / static_cast<float>(hull.size());
 
-			std::vector<ImVec2> hull;
-			auto turn = [](const ImVec2& o, const ImVec2& a, const ImVec2& b) { return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x); };
-
-			for (int pass = 0; pass < 2 && !points.empty(); pass++) {
-				size_t start = hull.size();
-				for (size_t k = 0; k < points.size(); k++) {
-					const auto& p = pass == 0 ? points[k] : points[points.size() - 1 - k];
-					while (hull.size() >= start + 2 && turn(hull[hull.size() - 2], hull.back(), p) <= 0.f)
-						hull.pop_back();
-					hull.push_back(p);
-				}
-				hull.pop_back();
-			}
-
-			if (hull.size() >= 3) {
-				// Softer & a bit bigger first, so the edge fades
-				ImVec2 center(0.f, 0.f);
+			for (float grow : { 1.12f, 1.05f, 1.f }) {
+				std::vector<ImVec2> scaled;
 				for (const auto& p : hull)
-					center += p;
-				center = center / static_cast<float>(hull.size());
-
-				for (float grow : { 1.12f, 1.05f, 1.f }) {
-					std::vector<ImVec2> scaled;
-					for (const auto& p : hull)
-						scaled.push_back(center + (p - center) * grow - anchor);
-					cache.shadows.push_back(std::move(scaled));
-				}
+					scaled.push_back(center + (p - center) * grow - anchor);
+				cache.shadows.push_back(std::move(scaled));
 			}
 		}
 
@@ -1828,37 +2087,21 @@ namespace {
 			float light;
 		};
 
-		std::vector<ImVec2> screen(world.size());
-		std::vector<bool> visible(world.size());
-		for (size_t i = 0; i < world.size(); i++) {
-			Vec2_t s;
-			visible[i] = m.wts(world[i], display, s, false);
-			screen[i] = ImVec2(s.x, s.y) - anchor;
-		}
-
-		auto depth_of = [&](const Vec3_t& p) { return m[3][0] * p.x + m[3][1] * p.y + m[3][2] * p.z + m[3][3]; };
-
-		std::vector<Face> faces;
+		static std::vector<Face> faces;
+		faces.clear();
 		faces.reserve(model.indices.size() / 3);
 
 		for (uint32_t t = 0; t < model.indices.size() / 3; t++) {
 			uint32_t ia = model.indices[t * 3], ib = model.indices[t * 3 + 1], ic = model.indices[t * 3 + 2];
-			if (!visible[ia] || !visible[ib] || !visible[ic])
+			const auto& n = model.normals[t];
+			if (!visible[ia] || !visible[ib] || !visible[ic] || n.w == 0.f)
 				continue;
 
-			const auto& a = world[ia];
-			const auto& b = world[ib];
-			const auto& c = world[ic];
-
-			float ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
-			float vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
-			float nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-			float length = sqrtf(nx * nx + ny * ny + nz * nz);
-			if (length <= 0.f)
-				continue;
-
-			float facing = fabsf((nx * light[0] + ny * light[1] + nz * light[2]) / length);
-			faces.push_back({ depth_of(a) + depth_of(b) + depth_of(c), t, 0.35f + 0.65f * facing });
+			// The normal turned like the vertices: x, -z, y of the file, then the yaw
+			float nx = n.x, ny = -n.z, nz = n.y;
+			float wx = nx * cos_yaw - ny * sin_yaw, wy = nx * sin_yaw + ny * cos_yaw;
+			float facing = fabsf(wx * light[0] + wy * light[1] + nz * light[2]);
+			faces.push_back({ depth[ia] + depth[ib] + depth[ic], t, 0.35f + 0.65f * facing });
 		}
 
 		// Far first
@@ -1869,30 +2112,43 @@ namespace {
 		cache.colors.reserve(faces.size());
 
 		for (const auto& face : faces) {
-			cache.colors.push_back(ImGui::GetColorU32(ImVec4(base.x * face.light, base.y * face.light, base.z * face.light, base.w)));
+			cache.colors.push_back(ImGui::ColorConvertFloat4ToU32(ImVec4(base.x * face.light, base.y * face.light, base.z * face.light, base.w)));
 			cache.points.push_back(screen[model.indices[face.index * 3]]);
 			cache.points.push_back(screen[model.indices[face.index * 3 + 1]]);
 			cache.points.push_back(screen[model.indices[face.index * 3 + 2]]);
 		}
 
-		DrawMeshCache(d, cache, anchor);
+		draw();
 	}
 
 	// The player pre-rendered by scripts/render_player_previews.py: textured, holding the rifle, from FRAMES
-	// angles around. Drawing it is one image, the one of the angle it is turned to. False without the image
-	bool DrawPlayerPicture(ImDrawList* d, bool terrorist, ImVec2 min, ImVec2 max, float yaw) {
+	// angles around. Drawing it is one image, the one of the angle it is turned to. False without the image.
+	// coat: the glow chams, the shape in that color over the model, its shading still showing through
+	bool DrawPlayerPicture(ImDrawList* d, bool terrorist, ImVec2 min, ImVec2 max, float yaw, ImU32 glow = 0, ImU32 tint = 0, ImU32 coat = 0) {
 		struct Picture {
 			bool tried = false;
 			ImTextureID texture = 0;
+			bool shape_tried = false;
+			ImTextureID shape = 0;	// All white, tinted for the glow
 		};
 		static Picture pictures[2];
+
+		auto load = [&](bool silhouette) {
+			return terrorist
+				? ImageCache::FromMemory(player_preview_t, player_preview_t_size, player_preview_t_alpha, player_preview_t_alpha_size, silhouette)
+				: ImageCache::FromMemory(player_preview_ct, player_preview_ct_size, player_preview_ct_alpha, player_preview_ct_alpha_size, silhouette);
+		};
 
 		auto& picture = pictures[terrorist ? 0 : 1];
 		if (!picture.tried) {
 			picture.tried = true;
-			picture.texture = terrorist
-				? ImageCache::FromMemory(player_preview_t, player_preview_t_size, player_preview_t_alpha, player_preview_t_alpha_size)
-				: ImageCache::FromMemory(player_preview_ct, player_preview_ct_size, player_preview_ct_alpha, player_preview_ct_alpha_size);
+			picture.texture = load(false);
+		}
+
+		// Only made once the glow is turned on
+		if ((glow || coat) && !picture.shape_tried) {
+			picture.shape_tried = true;
+			picture.shape = load(true);
 		}
 
 		if (!picture.texture)
@@ -1919,19 +2175,27 @@ namespace {
 		ImVec2 image_min(feet.x - pp::FRAME_WIDTH * 0.5f * scale_x, feet.y - pp::FEET * scale_y);
 		ImVec2 image_max(image_min.x + pp::FRAME_WIDTH * scale_x, image_min.y + pp::FRAME_HEIGHT * scale_y);
 
-		d->AddImage(ImTextureRef(picture.texture), image_min, image_max, uv_min, uv_max, C(IM_COL32_WHITE));
+		if (glow && picture.shape)
+			DrawGlowAround(glow, [&](ImVec2 offset, ImU32 shade) {
+				d->AddImage(ImTextureRef(picture.shape), image_min + offset, image_max + offset, uv_min, uv_max, shade);
+			});
+
+		// Chams multiply the colors of the model, like the tint of the image
+		d->AddImage(ImTextureRef(picture.texture), image_min, image_max, uv_min, uv_max, tint ? tint : C(IM_COL32_WHITE));
+
+		if (coat && picture.shape)
+			d->AddImage(ImTextureRef(picture.shape), image_min, image_max, uv_min, uv_max, coat);
 		return true;
 	}
 
 	// Flat shaded, sorted back to front, standing on the bottom of the rect
-	void DrawModel(ImDrawList* d, const PreviewModel& model, ImVec2 min, ImVec2 max, float yaw, ImU32 color) {
+	void DrawModel(ImDrawList* d, const PreviewModel& model, ImVec2 min, ImVec2 max, float yaw, ImU32 color, ImU32 glow = 0) {
 		float scale = (max.y - min.y) / model.height;
 		ImVec2 anchor((min.x + max.x) * 0.5f, max.y);
 
 		uint64_t shape = HashBytes(1469598103934665603ull, &model, sizeof(&model));
 		shape = HashBytes(shape, &color, sizeof(color));
 		shape = HashBytes(shape, &scale, sizeof(scale));
-		shape = HashBytes(shape, &ImGui::GetStyle().Alpha, sizeof(float)); // Fade of the menu
 		uint64_t view = HashBytes(1469598103934665603ull, &yaw, sizeof(yaw));
 
 		static std::map<const PreviewModel*, MeshCache> caches;
@@ -1941,8 +2205,14 @@ namespace {
 		float breath = sinf(static_cast<float>(ImGui::GetTime()) * 2.2f);
 		ImVec2 idle(1.f + 0.004f * breath, 1.f + 0.006f * breath);
 
-		if (!NeedsRebuild(cache, shape, view)) {
+		auto draw = [&]() {
+			if (glow)
+				DrawGlowAround(glow, [&](ImVec2 offset, ImU32 shade) { DrawMeshCache(d, cache, anchor + offset, idle, shade); });
 			DrawMeshCache(d, cache, anchor, idle);
+		};
+
+		if (!NeedsRebuild(cache, shape, view)) {
+			draw();
 			return;
 		}
 
@@ -1998,13 +2268,13 @@ namespace {
 
 		for (const auto& face : faces) {
 			// Includes the alpha of the menu fade
-			cache.colors.push_back(ImGui::GetColorU32(ImVec4(base.x * face.light, base.y * face.light, base.z * face.light, base.w)));
+			cache.colors.push_back(ImGui::ColorConvertFloat4ToU32(ImVec4(base.x * face.light, base.y * face.light, base.z * face.light, base.w)));
 			cache.points.push_back(to_screen(view_space[model.indices[face.index * 3]]));
 			cache.points.push_back(to_screen(view_space[model.indices[face.index * 3 + 1]]));
 			cache.points.push_back(to_screen(view_space[model.indices[face.index * 3 + 2]]));
 		}
 
-		DrawMeshCache(d, cache, anchor, idle);
+		draw();
 	}
 
 	// Sidebar tab, the selection highlight is drawn separately so it can slide between tabs
@@ -2047,6 +2317,10 @@ namespace {
 
 bool Menu::Init() {
 	return GetInstance().InitImpl();
+}
+
+std::string Menu::GetKeyName(int key) {
+	return KeyName(key);
 }
 
 void Menu::Render() {
@@ -2391,24 +2665,78 @@ void Menu::RenderHeader() {
 		C(col::border)
 	);
 
-	// Master switch in a pill
-	constexpr auto label = "ESP";
-	auto label_size = ImGui::CalcTextSize(label);
+	// Right side: the DPI scale of the menu, then the notifications switch left of it
+	const float pill_height = S(34.f);
+	const float pill_y = pos.y + (HEADER_HEIGHT - pill_height) * 0.5f;
+	float right = pos.x + size.x - CONTENT_PADDING;
 
-	auto pill_size = ImVec2(TOGGLE_SIZE.x + label_size.x + S(44.f), S(34.f));
-	auto pill_min = ImVec2(pos.x + size.x - CONTENT_PADDING - pill_size.x, pos.y + (HEADER_HEIGHT - pill_size.y) * 0.5f);
+	auto pill = [&](ImVec2 min, ImVec2 pill_size) {
+		d->AddRectFilled(min, min + pill_size, C(col::panel), pill_size.y * 0.5f);
+		d->AddRect(min, min + pill_size, C(col::border), pill_size.y * 0.5f);
+	};
 
-	d->AddRectFilled(pill_min, pill_min + pill_size, C(col::panel), pill_size.y * 0.5f);
-	d->AddRect(pill_min, pill_min + pill_size, C(col::border), pill_size.y * 0.5f);
+	// DPI scale, steps of 5%. Applied the same way as before, once the mouse is let go
+	{
+		constexpr auto label = "DPI";
+		auto label_size = ImGui::CalcTextSize(label);
+		auto value = std::format("{:.0f}%", std::round(cfg::settings::ui_scale * 20.f) * 5.f);
+		auto value_size = ImGui::CalcTextSize("160%");
 
-	float on = Animate(ImGui::GetID("##master_state"), cfg::enabled ? 1.f : 0.f, 10.f);
-	auto dot = ImVec2(pill_min.x + S(15.f), pill_min.y + pill_size.y * 0.5f);
+		const float button = S(24.f);
+		auto pill_size = ImVec2(S(14.f) + label_size.x + S(10.f) + button + S(6.f) + value_size.x + S(6.f) + button + S(5.f), pill_height);
+		auto min = ImVec2(right - pill_size.x, pill_y);
+		pill(min, pill_size);
 
-	d->AddCircleFilled(dot, S(3.5f), LerpColor(col::text_faint, col::online, on), 16);
-	d->AddText(ImVec2(dot.x + S(10.f), pill_min.y + (pill_size.y - label_size.y) * 0.5f), LerpColor(col::text_dim, col::text, on), label);
+		float text_y = min.y + (pill_height - label_size.y) * 0.5f;
+		d->AddText(ImVec2(min.x + S(14.f), text_y), C(col::text_dim), label);
 
-	auto switch_pos = ImVec2(pill_min.x + pill_size.x - TOGGLE_SIZE.x - S(8.f), pill_min.y + (pill_size.y - TOGGLE_SIZE.y) * 0.5f);
-	ToggleSwitch("##master", &cfg::enabled, switch_pos);
+		auto step_button = [&](const char* id, const char* sign, ImVec2 at, float delta) {
+			ImGui::SetCursorScreenPos(at);
+			bool pressed = ImGui::InvisibleButton(id, ImVec2(button, button));
+			float hover = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() ? 1.f : 0.f, 16.f);
+
+			auto center = at + ImVec2(button, button) * 0.5f;
+			d->AddCircleFilled(center, button * 0.5f, C(LerpColor(col::track, col::track_hover, hover)), 20);
+
+			auto sign_size = ImGui::CalcTextSize(sign);
+			d->AddText(center - sign_size * 0.5f, C(LerpColor(col::text_dim, col::accent, hover)), sign);
+
+			if (pressed)
+				cfg::settings::ui_scale = std::clamp(std::round((cfg::settings::ui_scale + delta) * 20.f) / 20.f, 0.8f, 1.6f);
+		};
+
+		float x = min.x + S(14.f) + label_size.x + S(10.f);
+		float button_y = min.y + (pill_height - button) * 0.5f;
+		step_button("##scale_down", "-", ImVec2(x, button_y), -0.05f);
+
+		x += button + S(6.f);
+		auto shown_size = ImGui::CalcTextSize(value.c_str());
+		d->AddText(ImVec2(x + (value_size.x - shown_size.x) * 0.5f, text_y), C(col::text), value.c_str());
+
+		x += value_size.x + S(6.f);
+		step_button("##scale_up", "+", ImVec2(x, button_y), 0.05f);
+
+		right = min.x - S(8.f);
+	}
+
+	// Notifications: map building, notices of the program, the ESP off message
+	{
+		constexpr auto label = "Notifications";
+		auto label_size = ImGui::CalcTextSize(label);
+
+		auto pill_size = ImVec2(TOGGLE_SIZE.x + label_size.x + S(44.f), pill_height);
+		auto min = ImVec2(right - pill_size.x, pill_y);
+		pill(min, pill_size);
+
+		float on = Animate(ImGui::GetID("##notifications_state"), cfg::settings::notifications ? 1.f : 0.f, 10.f);
+		auto dot = ImVec2(min.x + S(15.f), min.y + pill_height * 0.5f);
+
+		d->AddCircleFilled(dot, S(3.5f), LerpColor(col::text_faint, col::accent, on), 16);
+		d->AddText(ImVec2(dot.x + S(10.f), min.y + (pill_height - label_size.y) * 0.5f), LerpColor(col::text_dim, col::text, on), label);
+
+		auto switch_pos = ImVec2(min.x + pill_size.x - TOGGLE_SIZE.x - S(8.f), min.y + (pill_height - TOGGLE_SIZE.y) * 0.5f);
+		ToggleSwitch("##notifications", &cfg::settings::notifications, switch_pos);
+	}
 }
 
 void Menu::RenderPlayersPreview() {
@@ -2453,9 +2781,28 @@ void Menu::RenderPlayersPreview() {
 
 		// The pre-rendered picture, the plain model when the picture cannot be made, a figure without both
 		auto model_min = box_min + ImVec2(0.f, box_size.y * 0.04f), model_max = box_max - ImVec2(0.f, box_size.y * 0.015f);
-		if (!DrawPlayerPicture(d, terrorist, model_min, model_max, model_yaw)) {
+		auto glow = esp_group == 0
+			? PreviewGlow(cfg::visuals::glow::team, cfg::visuals::glow::team_color)
+			: PreviewGlow(cfg::visuals::glow::enemies, cfg::visuals::glow::enemy_color);
+
+		// Textured chams multiply the model by the color. The glow of the game covers it in the color, about
+		// two thirds by the strength (the alpha), the shading still showing: tinted, then the color over it
+		bool chams = Visuals::IsAvailable() && (esp_group == 0 ? cfg::visuals::chams::team : cfg::visuals::chams::enemies);
+		const auto& chams_color = esp_group == 0 ? cfg::visuals::chams::team_color : cfg::visuals::chams::enemy_color;
+		int chams_type = Visuals::HasModelGlow()
+			? (esp_group == 0 ? cfg::visuals::chams::team_type : cfg::visuals::chams::enemy_type)
+			: cfg::visuals::chams::TYPE_TEXTURED;
+		namespace chams_cfg = cfg::visuals::chams;
+		bool chams_glow = chams && chams_type != chams_cfg::TYPE_TEXTURED;
+		ImU32 tint = 0;
+		if (chams && chams_type != chams_cfg::TYPE_GLOW)
+			tint = ImGui::GetColorU32(ImVec4(chams_color.r, chams_color.g, chams_color.b, 1.f));
+		float coat_alpha = 0.45f * chams_color.a;
+		ImU32 coat = chams_glow ? ImGui::GetColorU32(ImVec4(chams_color.r, chams_color.g, chams_color.b, coat_alpha)) : 0;
+
+		if (!DrawPlayerPicture(d, terrorist, model_min, model_max, model_yaw, glow, tint, coat)) {
 			if (auto model = GetPreviewModel(terrorist ? "t" : "ct"))
-				DrawModel(d, *model, model_min, model_max, model_yaw, IM_COL32(205, 205, 212, 255));
+				DrawModel(d, *model, model_min, model_max, model_yaw, chams ? ImGui::ColorConvertFloat4ToU32(ImVec4(chams_color.r, chams_color.g, chams_color.b, 1.f)) : IM_COL32(205, 205, 212, 255), glow);
 			else {
 				auto figure_inset = ImVec2(box_size.x * 0.14f, box_size.y * 0.05f);
 				DrawFigure(d, box_min + figure_inset, box_max - figure_inset, C(col::text_faint, 0.9f));
@@ -2709,6 +3056,34 @@ void Menu::RenderPlayersTab() {
 		ToggleColors("Skeleton", &group.skeleton, nullptr, &group.skeleton_visible, &group.skeleton_invisible);
 		ToggleColors("Head Tracker", &group.head_tracker, nullptr, &group.tracker_visible, &group.tracker_invisible);
 		ToggleColors("Tracers", &group.tracers, nullptr, &group.tracer_visible, &group.tracer_invisible);
+
+		// Written into the game
+		ImGui::BeginDisabled(!Visuals::IsAvailable());
+		Toggle("Outline Glow", esp_group == 0 ? &cfg::visuals::glow::team : &cfg::visuals::glow::enemies,
+			Visuals::IsAvailable() ? "Outline of the game, seen through walls" : "Only available when the game is launched with -insecure",
+			nullptr, esp_group == 0 ? &cfg::visuals::glow::team_color : &cfg::visuals::glow::enemy_color);
+		Toggle("Chams", esp_group == 0 ? &cfg::visuals::chams::team : &cfg::visuals::chams::enemies,
+			Visuals::IsAvailable()
+				? "The model colored by the game itself, where it can be seen.\nThe color mixes with the model, light colors show best. Behind walls: the outline glow"
+				: "Only available when the game is launched with -insecure",
+			nullptr, esp_group == 0 ? &cfg::visuals::chams::team_color : &cfg::visuals::chams::enemy_color);
+		if (esp_group == 0 ? cfg::visuals::chams::team : cfg::visuals::chams::enemies) {
+			static const std::vector<const char*> chams_types = { "Textured", "Glow", "Textured + Glow" };
+			static const char* chams_descriptions[] = {
+				"The model in the color, mixed with its textures",
+				"The spawn protection shader of the game in the color, at half: the model still shows",
+				"Both: the model in the color with the glow over it",
+			};
+
+			// Glow needs code of the game that might not be found
+			ImGui::BeginDisabled(!Visuals::HasModelGlow());
+			int* type = esp_group == 0 ? &cfg::visuals::chams::team_type : &cfg::visuals::chams::enemy_type;
+			DropdownRow("Chams Type", type, chams_types, chams_descriptions, Visuals::HasModelGlow()
+				? chams_descriptions[std::clamp(*type, 0, cfg::visuals::chams::TYPE_COUNT - 1)]
+				: "Only textured: the code of the game for the glow was not found");
+			ImGui::EndDisabled();
+		}
+		ImGui::EndDisabled();
 		Toggle("Visible Only", &group.visible_only, "Hides players behind walls & smokes");
 
 		if (esp_group == 0 && Cache::CopySnapshot().game.deathmatch)
@@ -2779,7 +3154,8 @@ void Menu::RenderBombPreview() {
 		}
 
 		if (auto model = GetPreviewModel("c4"))
-			DrawSceneModel(d, *model, matrix, bomb.pos, 0.f, IM_COL32(150, 140, 112, 255), true);
+			DrawSceneModel(d, *model, matrix, bomb.pos, 0.f, IM_COL32(150, 140, 112, 255), true,
+				PreviewGlow(cfg::visuals::glow::bomb, cfg::visuals::glow::bomb_color));
 
 		Esp::RenderPreview(d, matrix, &bomb, {}, nullptr);
 
@@ -2806,6 +3182,12 @@ void Menu::RenderBombTab() {
 	{
 		BeginPanel("BOMB ESP");
 		Toggle("Bomb ESP", &cfg::esp::bomb, "Box & icon on the planted bomb", nullptr, &cfg::esp::colors::bomb);
+
+		ImGui::BeginDisabled(!Visuals::IsAvailable());
+		Toggle("Outline Glow", &cfg::visuals::glow::bomb, Visuals::IsAvailable()
+			? "Outline of the game around the planted bomb, seen through walls.\nThe dropped bomb: in the items tab"
+			: "Only available when the game is launched with -insecure", nullptr, &cfg::visuals::glow::bomb_color);
+		ImGui::EndDisabled();
 		EndPanel();
 	}
 	EndColumn();
@@ -2841,7 +3223,9 @@ void Menu::RenderProjectilesPreview() {
 		smoke.detonated = true;
 		smoke.duration = 20.f;
 		smoke.time_left = 20.f - fmodf(time, 20.f);
-		smoke.area = PreviewArea(smoke.pos.x, smoke.pos.y, 135.f, 12.f, 16.f, 120.f);
+		// The shapes stay the same, made once
+		static const auto smoke_area = PreviewArea(smoke.pos.x, smoke.pos.y, 135.f, 12.f, 16.f, 120.f);
+		smoke.area = smoke_area;
 		grenades.push_back(smoke);
 
 		Grenade fire;
@@ -2850,7 +3234,8 @@ void Menu::RenderProjectilesPreview() {
 		fire.detonated = true;
 		fire.duration = 7.f;
 		fire.time_left = 7.f - fmodf(time, 7.f);
-		fire.area = PreviewArea(fire.pos.x, fire.pos.y, 95.f, 28.f, 16.f, 0.f);
+		static const auto fire_area = PreviewArea(fire.pos.x, fire.pos.y, 95.f, 28.f, 16.f, 0.f);
+		fire.area = fire_area;
 		grenades.push_back(fire);
 
 		// HE flying over, its trail behind it
@@ -2883,6 +3268,10 @@ void Menu::RenderProjectilesPreview() {
 		path.bounces.push_back(bounce);
 		path.end = end;
 
+		// The HE in the air, as an icon where its model would be
+		DrawStandIn(d, matrix, he.pos, WeaponIcons::FRAG_GRENADE, S(16.f),
+			PreviewGlow(cfg::visuals::glow::thrown, cfg::visuals::glow::thrown_colors::he));
+
 		Esp::RenderPreview(d, matrix, nullptr, grenades, &path);
 
 		d->PopClipRect();
@@ -2904,10 +3293,26 @@ void Menu::RenderProjectilesTab() {
 		Toggle("Throw Preview", &cfg::esp::grenades::prediction, "Path, bounces & landing spot of the grenade in your hand\nUses the map collision, built from the game files the first time a map is played");
 		Toggle("Landing Prediction", &cfg::esp::grenades::landing, "Where grenades in the air are going to land or explode, thrown by anyone\nUses the map collision too");
 		ImGui::EndDisabled();
+
+		ImGui::BeginDisabled(!Visuals::IsAvailable());
+		Toggle("Outline Glow", &cfg::visuals::glow::thrown, Visuals::IsAvailable()
+			? "Outline of the game around grenades in the air, seen through walls.\nGrenades on the ground: in the items tab"
+			: "Only available when the game is launched with -insecure");
+		if (cfg::visuals::glow::thrown) {
+			namespace thrown = cfg::visuals::glow::thrown_colors;
+			ColorRow("Smoke Glow", &thrown::smoke);
+			ColorRow("Molotov Glow", &thrown::molotov, "Also the incendiary");
+			ColorRow("Flash Glow", &thrown::flash);
+			ColorRow("HE Glow", &thrown::he);
+			ColorRow("Decoy Glow", &thrown::decoy);
+		}
+		ImGui::EndDisabled();
 		EndPanel();
 
 		BeginPanel("LOOK");
 		ImGui::BeginDisabled(!cfg::esp::grenades::enabled);
+		Toggle("Smoke Area", &cfg::esp::grenades::smoke_area, "Outline & fill of a popped smoke on the ground.\nIts icon & timer stay");
+		Toggle("Fire Area", &cfg::esp::grenades::fire_area, "Outline & fill of a molotov or incendiary fire on the ground.\nIts icon & timer stay");
 		Toggle("Glow", &cfg::esp::grenades::glow, "Popped smokes & burning fires glow on the ground");
 		Toggle("Icons", &cfg::esp::grenades::icons, "Icon of the grenade above it");
 		Toggle("Names", &cfg::esp::grenades::names, "Smoke, Molotov, Flash...");
@@ -2968,9 +3373,20 @@ void Menu::RenderItemsPreview() {
 			make(ItemKind::Kit, 0, "Defuse Kit", WeaponIcons::CUTTERS, Vec3_t(150.f, -90.f, 0.f), -1),
 		};
 
-		// The dropped bomb with its model
+		// The dropped bomb with its model, the rest as icons on the floor. Each kind with its own glow
 		if (auto model = GetPreviewModel("c4"))
-			DrawSceneModel(d, *model, matrix, items[4].pos, 0.4f, IM_COL32(150, 140, 112, 255), true);
+			DrawSceneModel(d, *model, matrix, items[4].pos, 0.4f, IM_COL32(150, 140, 112, 255), true,
+				PreviewGlow(cfg::visuals::glow::dropped_bomb, cfg::visuals::glow::dropped_bomb_color));
+
+		for (const auto& item : items) {
+			if (item.kind == ItemKind::Bomb)
+				continue;
+
+			auto glow = item.kind == ItemKind::Utility
+				? PreviewGlow(cfg::visuals::glow::utility, cfg::visuals::glow::utility_color)
+				: PreviewGlow(cfg::visuals::glow::items, cfg::visuals::glow::item_color);
+			DrawStandIn(d, matrix, item.pos, item.icon, S(22.f), glow);
+		}
 
 		Esp::RenderPreview(d, matrix, nullptr, {}, nullptr, &items, Vec3_t(-420.f, -380.f, 64.f));
 
@@ -3006,6 +3422,18 @@ void Menu::RenderItemsTab() {
 		SliderFloat("Max Distance", &it::max_distance, 5.f, 200.f, "%.0f m", "Items further away are not drawn");
 		SliderFloat("Text Size", &it::text_size, 8.f, 24.f, "%.0f px");
 		SliderFloat("Icon Size", &it::icon_size, 8.f, 28.f, "%.0f px");
+		ImGui::EndDisabled();
+
+		ImGui::BeginDisabled(!Visuals::IsAvailable());
+		Toggle("Weapon Outline Glow", &cfg::visuals::glow::items, Visuals::IsAvailable()
+			? "Outline of the game around weapons & defuse kits on the ground, seen through walls"
+			: "Only available when the game is launched with -insecure", nullptr, &cfg::visuals::glow::item_color);
+		Toggle("Utility Outline Glow", &cfg::visuals::glow::utility, Visuals::IsAvailable()
+			? "Outline of the game around grenades on the ground, seen through walls.\nThrown grenades: in the projectiles tab"
+			: "Only available when the game is launched with -insecure", nullptr, &cfg::visuals::glow::utility_color);
+		Toggle("Bomb Outline Glow", &cfg::visuals::glow::dropped_bomb, Visuals::IsAvailable()
+			? "Outline of the game around the dropped bomb, seen through walls.\nThe planted bomb: in the bomb tab"
+			: "Only available when the game is launched with -insecure", nullptr, &cfg::visuals::glow::dropped_bomb_color);
 		ImGui::EndDisabled();
 		EndPanel();
 
@@ -3541,19 +3969,33 @@ void Menu::RenderSkinsTab() {
 }
 
 void Menu::RenderMovementTab() {
+	constexpr auto unavailable = "Only available when the game is launched with -insecure";
+	const bool available = Movement::IsAvailable();
+
 	BeginColumn(0);
 	{
-		BeginPanel("MOVEMENT");
-		ImGui::BeginDisabled(!Movement::IsAvailable());
-		Toggle("Bunny Hop", &cfg::misc::bhop, Movement::IsAvailable()
-			? "Hold SPACE to jump automatically when landing"
-			: "Only available when the game is launched with -insecure");
-		Toggle("Quick Stop", &cfg::misc::quick_stop, Movement::IsAvailable()
-			? "Counter strafes for you when you let go of WASD, stopping right away"
-			: "Only available when the game is launched with -insecure");
-		Toggle("Null Binds", &cfg::misc::null_binds, Movement::IsAvailable()
-			? "Holding A & D (or W & S) moves towards the last one pressed instead of stopping,\nlike snap tap"
-			: "Only available when the game is launched with -insecure");
+		BeginPanel("JUMP");
+		ImGui::BeginDisabled(!available);
+		Toggle("Bunny Hop", &cfg::misc::bhop, available ? "Hold SPACE to jump automatically when landing" : unavailable);
+		Toggle("Auto Strafe", &cfg::misc::auto_strafe, available
+			? "In the air, moving the mouse left holds A, right holds D.\nTurn smoothly from side to side to gain speed"
+			: unavailable);
+		if (cfg::misc::auto_strafe) {
+			// Subtick needs the input layout of this game build
+			if (!Subtick::IsAvailable())
+				cfg::misc::auto_strafe_mode = 0;
+
+			ImGui::BeginDisabled(!Subtick::IsAvailable());
+			SegmentRow("Mode", &cfg::misc::auto_strafe_mode, { "Legit", "Subtick" }, Subtick::IsAvailable()
+				? "Legit: A & D follow your mouse, like doing it yourself\n"
+				  "Subtick: every tick is split into steps of A & D with the view turned for each, speed without turning.\n"
+				  "Flies where you look, or hold W A S D in the air to go that way from the view.\n"
+				  "Writes input events the game turns into commands: experimental, may be rejected or get you kicked"
+				: "Subtick: only with -insecure, on the game build it was made for");
+			ImGui::EndDisabled();
+
+			Toggle("Only With Space", &cfg::misc::auto_strafe_space, "Only while SPACE is held, so a normal jump stays untouched");
+		}
 		ImGui::EndDisabled();
 		EndPanel();
 	}
@@ -3561,140 +4003,280 @@ void Menu::RenderMovementTab() {
 
 	BeginColumn(1);
 	{
-		BeginPanel("SLIDE WALK (EXPERIMENTAL)");
-		ImGui::BeginDisabled(!Movement::IsAvailable());
-		Toggle("Slide Walk", &cfg::misc::slide_walk, Movement::IsAvailable()
-			? "Briefly presses the opposite of the direction you hold over and over,\nso the legs stop following the movement"
-			: "Only available when the game is launched with -insecure");
-		ImGui::BeginDisabled(!cfg::misc::slide_walk);
-		SegmentRow("Activation", &cfg::misc::slide_walk_mode, { "Hold", "Toggle", "Always" });
-		if (cfg::misc::slide_walk_mode != 2)
-			KeybindRow("Key", &cfg::misc::slide_walk_key);
-		SegmentRow("Pattern", &cfg::misc::slide_walk_pattern, { "Timer", "Speed" },
-			"Timer: flips at a fixed rhythm\nSpeed: flips whenever you go faster than the target, keeping a steady slide speed");
-
-		if (cfg::misc::slide_walk_pattern == 0) {
-			SliderFloat("Flip Rate", &cfg::misc::slide_walk_rate, 1.f, 32.f, "%.0f /s", "Flips to the opposite direction per second");
-
-			float percent = cfg::misc::slide_walk_ratio * 100.f;
-			if (SliderFloat("Opposite", &percent, 5.f, 60.f, "%.0f%%", "Part of each flip spent moving the other way\nHigher slides slower"))
-				cfg::misc::slide_walk_ratio = percent / 100.f;
-		}
-		else {
-			SliderFloat("Target Speed", &cfg::misc::slide_walk_speed, 40.f, 250.f, "%.0f u/s", "Speed the slide is held around");
-		}
-
-		Toggle("Auto Walk", &cfg::misc::slide_walk_auto, "Slides forward on its own while no direction is held");
-		Toggle("Indicator", &cfg::misc::slide_walk_indicator, "Shows SLIDE under the crosshair while active");
+		BeginPanel("GROUND");
+		ImGui::BeginDisabled(!available);
+		Toggle("Quick Stop", &cfg::misc::quick_stop, available
+			? "Counter strafes for you when you let go of WASD, stopping right away"
+			: unavailable);
+		Toggle("Null Binds", &cfg::misc::null_binds, available
+			? "Holding A & D (or W & S) moves towards the last one pressed instead of stopping,\nlike snap tap"
+			: unavailable);
 		ImGui::EndDisabled();
-		ImGui::EndDisabled();
+
+		if (available && cfg::misc::quick_stop && !Movement::UsesGameInput())
+			TextBlock("Game input unavailable, quick stop keys are sent through Windows");
 		EndPanel();
 	}
 	EndColumn();
 }
 
 void Menu::RenderMiscTab() {
-	BeginColumn(0);
-	{
-		BeginPanel("VIEW");
-		ImGui::BeginDisabled(!View::IsAvailable());
-		{
-			constexpr auto unavailable = "Only available when the game is launched with -insecure";
+	constexpr auto unavailable = "Only available when the game is launched with -insecure";
 
+	misc_page_progress = std::min(1.f, misc_page_progress + ImGui::GetIO().DeltaTime * TAB_SWITCH_SPEED);
+	float page = EaseOutCubic(misc_page_progress);
+
+	// Pages in a toolbar like the players tab, two columns of panels below
+	auto toolbar = ImGui::GetWindowPos() + ImVec2(column_layout.x, column_layout.y);
+	const float toolbar_height = S(46.f);
+
+	if (TabSwitch("##misc_page", &misc_page, { "Camera", "Profile", "Interface", "Visuals" }, toolbar))
+		misc_page_progress = 0.f;
+
+	auto columns = column_layout;
+	column_layout.y += toolbar_height + (1.f - page) * TAB_SLIDE;
+	column_layout.h -= toolbar_height;
+	ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * page);
+
+	switch (misc_page) {
+	case 0: {
+		BeginColumn(0);
+		{
+			BeginPanel("FIELD OF VIEW");
+			ImGui::BeginDisabled(!View::IsAvailable());
 			Toggle("FOV Override", &cfg::view::fov_enabled, View::IsAvailable()
 				? "Camera field of view, scoped weapons keep their zoom"
 				: unavailable);
-			ImGui::BeginDisabled(!cfg::view::fov_enabled);
-			SliderInt("FOV", &cfg::view::fov, 60, 140, "%d");
+			if (cfg::view::fov_enabled)
+				SliderInt("FOV", &cfg::view::fov, 60, 140, "%d");
 			ImGui::EndDisabled();
+			EndPanel();
 
-			// The console variables of the game, so the same limits
-			Toggle("Viewmodel Override", &cfg::view::viewmodel_enabled, View::IsAvailable()
-				? "Position & field of view of the weapon in your hands, like viewmodel_fov & viewmodel_offset_x/y/z in the console\nYour own values come back when turned off"
-				: unavailable);
-			ImGui::BeginDisabled(!cfg::view::viewmodel_enabled);
-			SliderFloat("Viewmodel FOV", &cfg::view::viewmodel_fov, 40.f, 120.f, "%.0f", "The game allows 60 - 68");
-			SliderFloat("Offset X", &cfg::view::viewmodel_x, -20.f, 20.f, "%.1f", "Left & right, the game allows -2 - 2.5");
-			SliderFloat("Offset Y", &cfg::view::viewmodel_y, -20.f, 20.f, "%.1f", "Forward & back, the game allows -2 - 2");
-			SliderFloat("Offset Z", &cfg::view::viewmodel_z, -20.f, 20.f, "%.1f", "Up & down, the game allows -2 - 2");
-			ImGui::EndDisabled();
-
-			if (cfg::view::viewmodel_enabled && !View::IsViewmodelAvailable())
-				TextBlock("Looking for the viewmodel settings of the game...");
-		}
-		ImGui::EndDisabled();
-		EndPanel();
-
-		BeginPanel("THIRD PERSON");
-		ImGui::BeginDisabled(!View::IsThirdPersonAvailable());
-		{
+			BeginPanel("THIRD PERSON");
+			ImGui::BeginDisabled(!View::IsThirdPersonAvailable());
 			Toggle("Third Person", &cfg::view::third_person, View::IsThirdPersonAvailable()
 				? "Camera behind your player, like the thirdperson command without sv_cheats"
 				: View::IsAvailable()
 					? "The third person code was not found in this game version"
-					: "Only available when the game is launched with -insecure");
-			ImGui::BeginDisabled(!cfg::view::third_person);
-			SegmentRow("Activation", &cfg::view::third_person_mode, { "Toggle", "Hold", "Always" });
-			if (cfg::view::third_person_mode != 2)
-				KeybindRow("Key", &cfg::view::third_person_key);
-			Toggle("Off While Scoped", &cfg::view::third_person_scoped_off, "Back to first person while looking through a scope");
+					: unavailable);
+			if (cfg::view::third_person) {
+				SegmentRow("Activation", &cfg::view::third_person_mode, { "Toggle", "Hold", "Always" });
+				if (cfg::view::third_person_mode != 2)
+					KeybindRow("Key", &cfg::view::third_person_key);
+				Toggle("Off While Scoped", &cfg::view::third_person_scoped_off, "Back to first person while looking through a scope");
+			}
 			ImGui::EndDisabled();
+			EndPanel();
 		}
-		ImGui::EndDisabled();
-		EndPanel();
-	}
-	EndColumn();
+		EndColumn();
 
-	BeginColumn(1);
-	{
-		BeginPanel("RADAR");
-		Toggle("Radar", &cfg::world::radar::enabled);
-		ImGui::BeginDisabled(!cfg::world::radar::enabled);
+		BeginColumn(1);
+		{
+			// The console variables of the game, so the same limits
+			BeginPanel("VIEWMODEL");
+			ImGui::BeginDisabled(!View::IsAvailable());
+			Toggle("Viewmodel Override", &cfg::view::viewmodel_enabled, View::IsAvailable()
+				? "Position & field of view of the weapon in your hands, like viewmodel_fov & viewmodel_offset_x/y/z in the console\nYour own values come back when turned off"
+				: unavailable);
+			if (cfg::view::viewmodel_enabled) {
+				SliderFloat("FOV", &cfg::view::viewmodel_fov, 40.f, 120.f, "%.0f", "The game allows 60 - 68");
+				SliderFloat("Offset X", &cfg::view::viewmodel_x, -20.f, 20.f, "%.1f", "Left & right, the game allows -2 - 2.5");
+				SliderFloat("Offset Y", &cfg::view::viewmodel_y, -20.f, 20.f, "%.1f", "Forward & back, the game allows -2 - 2");
+				SliderFloat("Offset Z", &cfg::view::viewmodel_z, -20.f, 20.f, "%.1f", "Up & down, the game allows -2 - 2");
 
-		// The radar of the game needs memory writes
-		if (!GameRadar::IsAvailable())
-			cfg::world::radar::mode = cfg::world::radar::MODE_OVERLAY;
+				if (!View::IsViewmodelAvailable())
+					TextBlock("Looking for the viewmodel settings of the game...");
+			}
+			ImGui::EndDisabled();
+			EndPanel();
 
-		ImGui::BeginDisabled(!GameRadar::IsAvailable());
-		SegmentRow("Type", &cfg::world::radar::mode, { "External", "Internal" }, GameRadar::IsAvailable()
-			? "External: our own radar window\nInternal: enemies show up on the radar of the game, even when nobody sees them"
-			: "Internal is only available when the game is launched with -insecure");
-		ImGui::EndDisabled();
+			const char* camera_missing = View::IsAvailable()
+				? "The camera code was not found in this game version"
+				: unavailable;
 
-		if (cfg::world::radar::mode == cfg::world::radar::MODE_OVERLAY) {
-			Toggle("Disable Rotation", &cfg::world::radar::no_rotate);
-			SliderFloat("Range", &cfg::world::radar::range, 100.f, 8000.f, "%.0f u");
+			BeginPanel("FREE CAM");
+			ImGui::BeginDisabled(!Freecam::IsAvailable());
+			Toggle("Free Cam", &cfg::view::freecam, Freecam::IsAvailable()
+				? "The camera flies on its own while your player stands still, only while alive\n"
+				  "The mouse looks around, W A S D fly where you look, space up, left ctrl down, left shift faster\n"
+				  "Your player gets none of it: no turning, walking, shooting or scoping"
+				: camera_missing);
+			if (cfg::view::freecam) {
+				KeybindRow("Key", &cfg::view::freecam_key);
+				SliderFloat("Speed", &cfg::view::freecam_speed, 100.f, 3000.f, "%.0f", "Units per second, three times faster with shift");
+				SliderFloat("Sensitivity", &cfg::view::freecam_sensitivity, 0.1f, 5.f, "%.2fx", "Turning with the mouse, times your sensitivity in the game");
+			}
+			ImGui::EndDisabled();
+			EndPanel();
+
+			BeginPanel("AFTER DEATH");
+			ImGui::BeginDisabled(!Freecam::IsDeadAvailable());
+			Toggle("Casual Spectate", &cfg::view::dead_spectate, Freecam::IsDeadAvailable()
+				? "Once you die, watch anyone like in casual, enemies too, no key needed\n"
+				  "Left & right click switch the player, space goes first person, third person, free cam"
+				: Freecam::IsAvailable()
+					? "The spectator camera was not found in this game version"
+					: camera_missing);
+			if (cfg::view::dead_spectate)
+				SliderFloat("Distance", &cfg::view::spectate_distance, 40.f, 300.f, "%.0f", "Behind them in third person, W & S change it");
+			ImGui::EndDisabled();
+			EndPanel();
 		}
-		ImGui::EndDisabled();
-		EndPanel();
-
-		BeginPanel("SPECTATORS");
-		Toggle("Spectator List", &cfg::world::spectators::enabled);
-		ImGui::BeginDisabled(!cfg::world::spectators::enabled);
-		Toggle("Detailed", &cfg::world::spectators::detailed);
-		Toggle("Only Self", &cfg::world::spectators::self_only, "Only display users spectating you");
-		ImGui::EndDisabled();
-		EndPanel();
-
-		BeginPanel("OVERLAY");
-		Toggle("Watermark", &cfg::settings::watermark);
-		Toggle("Sniper Crosshair", &cfg::world::crosshair::enabled, "Draws a crosshair while holding an unscoped sniper");
-		ImGui::BeginDisabled(!cfg::world::crosshair::enabled);
-		SegmentRow("Crosshair Style", &cfg::world::crosshair::style, { "Classic", "CS2" },
-			"Classic: small white cross\nCS2: your crosshair from the game settings (size, gap, color, outline, dot)");
-		if (cfg::world::crosshair::style == cfg::world::crosshair::STYLE_GAME && !GameCrosshair::Get().found)
-			TextBlock("No CS2 settings found in the Steam userdata, using the default crosshair");
-		ImGui::EndDisabled();
-		Toggle("Velocity Graph", &cfg::world::velocity::enabled);
-	#ifdef _DEBUG // Part of the velocity graph for developers
-		ImGui::BeginDisabled(!cfg::world::velocity::enabled);
-		SliderInt("Sample Rate", &cfg::world::velocity::sample_rate, 1, 100, "%d");
-		SliderFloat("Sample Length", &cfg::world::velocity::sample_length, 1.f, 20.f, "%.1f s");
-		ImGui::EndDisabled();
-	#endif
-		EndPanel();
+		EndColumn();
+		break;
 	}
-	EndColumn();
+
+	case 1: {
+		BeginColumn(0);
+		{
+			BeginPanel("CLAN TAG");
+			ImGui::BeginDisabled(!ClanTag::IsAvailable());
+			Toggle("Clan Tag", &cfg::misc::clantag, ClanTag::IsAvailable()
+				? "Animated tag, as the game shows it to you"
+				: unavailable);
+
+			if (cfg::misc::clantag) {
+				TextField("##clantag_text", "Tag... (tag 1|tag 2 take turns)", cfg::misc::clantag_text, sizeof(cfg::misc::clantag_text),
+					"Separate texts with | to show them one after another,\neach one a whole round of the animation");
+
+				// Where the tag goes, the name ones need the name update
+				ImGui::BeginDisabled(!ClanTag::IsNameAvailable());
+				SegmentRow("Position", &cfg::misc::clantag_target, { "Clan", "Before", "After", "Name" },
+					"Clan: [tag] name, in the clan slot of the game\n"
+					"Before: tag name, without brackets\n"
+					"After: name tag\n"
+					"Name: the tag is your whole name");
+				ImGui::EndDisabled();
+
+				static const char* descriptions[] = {
+					"Always the same", "On & off", "Moves left through itself",
+					"Typed in with a cursor & deleted again", "Letters found one by one, the rest guessed", "One capital moving through",
+					"Every letter fades in & out on its own ( . : )", "All guessed, letters lock in random order", "Now & then letters turn into symbols",
+					"Grows out of its middle & shrinks back", "- = # around the tag", "Comes in from the left, goes out to the right",
+				};
+
+				auto& modes = ClanTag::GetModes();
+				int mode = std::clamp(cfg::misc::clantag_mode, 0, static_cast<int>(modes.size()) - 1);
+				DropdownRow("Animation", &cfg::misc::clantag_mode, modes, descriptions, descriptions[mode]);
+
+				SliderFloat("Speed", &cfg::misc::clantag_speed, 100.f, 1500.f, "%.0f ms", "Time of each step of the animation (Static: 8 steps per text)");
+			}
+			ImGui::EndDisabled();
+			EndPanel();
+		}
+		EndColumn();
+
+		BeginColumn(1);
+		{
+			BeginPanel("NAME");
+			ImGui::BeginDisabled(!ClanTag::IsNameAvailable());
+			Toggle("Change Name", &cfg::misc::name_change, ClanTag::IsNameAvailable()
+				? "Your whole name in the scoreboard & kill feed, as the game shows it to you.\nEmpty keeps your real name"
+				: unavailable);
+			if (cfg::misc::name_change)
+				TextField("##name_text", "Name...", cfg::misc::name_text, sizeof(cfg::misc::name_text));
+			ImGui::EndDisabled();
+			EndPanel();
+		}
+		EndColumn();
+		break;
+	}
+
+	default: {
+		BeginColumn(0);
+		{
+			BeginPanel("RADAR");
+			Toggle("Radar", &cfg::world::radar::enabled);
+
+			// The radar of the game needs memory writes
+			if (!GameRadar::IsAvailable())
+				cfg::world::radar::mode = cfg::world::radar::MODE_OVERLAY;
+
+			if (cfg::world::radar::enabled) {
+				ImGui::BeginDisabled(!GameRadar::IsAvailable());
+				SegmentRow("Type", &cfg::world::radar::mode, { "External", "Internal" }, GameRadar::IsAvailable()
+					? "External: our own radar window\nInternal: enemies show up on the radar of the game, even when nobody sees them"
+					: "Internal is only available when the game is launched with -insecure");
+				ImGui::EndDisabled();
+
+				if (cfg::world::radar::mode == cfg::world::radar::MODE_OVERLAY) {
+					Toggle("Disable Rotation", &cfg::world::radar::no_rotate);
+					SliderFloat("Range", &cfg::world::radar::range, 100.f, 8000.f, "%.0f u");
+				}
+			}
+			EndPanel();
+
+			BeginPanel("SPECTATORS");
+			Toggle("Spectator List", &cfg::world::spectators::enabled);
+			if (cfg::world::spectators::enabled) {
+				Toggle("Detailed", &cfg::world::spectators::detailed);
+				Toggle("Only Self", &cfg::world::spectators::self_only, "Only display users spectating you");
+			}
+			EndPanel();
+
+			BeginPanel("KEYBINDS");
+			Toggle("Keybind List", &cfg::world::keybinds::enabled,
+				"Shows the features turned on by a key while they are on: third person, free cam.\n"
+				"With the menu open it shows them all & can be dragged");
+			EndPanel();
+		}
+		EndColumn();
+
+		BeginColumn(1);
+		{
+			BeginPanel("OVERLAY");
+			Toggle("Sniper Crosshair", &cfg::world::crosshair::enabled, "Draws a crosshair while holding an unscoped sniper");
+			if (cfg::world::crosshair::enabled) {
+				SegmentRow("Style", &cfg::world::crosshair::style, { "Classic", "CS2" },
+					"Classic: small white cross\nCS2: your crosshair from the game settings (size, gap, color, outline, dot)");
+				if (cfg::world::crosshair::style == cfg::world::crosshair::STYLE_GAME && !GameCrosshair::Get().found)
+					TextBlock("No CS2 settings found in the Steam userdata, using the default crosshair");
+			}
+			Toggle("Velocity Graph", &cfg::world::velocity::enabled);
+		#ifdef _DEBUG // Part of the velocity graph for developers
+			if (cfg::world::velocity::enabled) {
+				SliderInt("Sample Rate", &cfg::world::velocity::sample_rate, 1, 100, "%d");
+				SliderFloat("Sample Length", &cfg::world::velocity::sample_length, 1.f, 20.f, "%.1f s");
+			}
+		#endif
+			EndPanel();
+
+			BeginPanel("MATCHMAKING");
+			Toggle("Auto Accept", &cfg::misc::auto_accept,
+				"Accepts when a match is found, the cursor never moves.\n"
+				"-insecure: from memory like the button does. Else a click sent to the game window,\n"
+				"brought to the front if needed");
+			EndPanel();
+		}
+		EndColumn();
+		break;
+	}
+
+	case 3: {
+		namespace vis = cfg::visuals;
+		const bool writes = Visuals::IsAvailable();
+
+		BeginColumn(0);
+		{
+			BeginPanel("REMOVALS");
+			ImGui::BeginDisabled(!writes);
+			Toggle("No Flash", &vis::no_flash, writes ? "Flashbangs blind you less, or not at all" : unavailable);
+			if (vis::no_flash)
+				SliderFloat("Flash Strength", &vis::flash_alpha, 0.f, 255.f, "%.0f", "0 is no white at all, 255 is the game");
+
+			Toggle("No Smoke", &vis::no_smoke, writes
+				? "Smokes are not drawn. The smoke ESP still shows where they are"
+				: unavailable);
+			ImGui::EndDisabled();
+			EndPanel();
+		}
+		EndColumn();
+		break;
+	}
+	}
+
+	ImGui::PopStyleVar();
+	column_layout = columns;
 }
 
 void Menu::RenderConfigsTab() {
@@ -3721,6 +4303,8 @@ void Menu::RenderSettingsTab() {
 	BeginColumn(0);
 	{
 		BeginPanel("GENERAL");
+		Toggle("ESP", &cfg::enabled, "Master switch of everything drawn over the game");
+
 		if (Toggle("Streamproof", &cfg::settings::streamproof, "Hides the overlay from screen capture and streaming software"))
 		{
 			Window::SetAffinity(
@@ -3730,10 +4314,6 @@ void Menu::RenderSettingsTab() {
 		}
 
 		ColorRow("Menu Accent", &cfg::settings::accent, "The one color of the menu");
-
-		char scale_text[16];
-		snprintf(scale_text, sizeof(scale_text), "%.0f%%", std::round(cfg::settings::ui_scale * 20.f) * 5.f);
-		SliderRow("Menu Scale", &cfg::settings::ui_scale, 0.8f, 1.6f, scale_text, "Size of the menu, applied when the mouse is let go\nNever bigger than the screen");
 		EndPanel();
 
 	#ifdef _DEBUG
@@ -3743,6 +4323,15 @@ void Menu::RenderSettingsTab() {
 
 		SliderInt("Cache Refresh", &cfg::dev::cache_refresh_rate, 0, 100, "%d ms");
 		Toggle("Force Show Flags", &cfg::dev::force_show_flags);
+		EndPanel();
+	#endif
+
+	#ifdef _DEBUG
+		// Warnings, errors & info lines always show
+		BeginPanel("DEBUG LOG");
+		namespace logs = cfg::settings::logs;
+		Toggle("Skins", &logs::skins, "Debug lines of skins, knives & agents");
+		Toggle("Other", &logs::other, "Every other debug line");
 		EndPanel();
 	#endif
 	}
@@ -3755,7 +4344,13 @@ void Menu::RenderSettingsTab() {
 			Window::vsync = cfg::settings::vsync;
 
 		Toggle("Free CPU", &cfg::settings::free_cpu, "Let the CPU sleep to free resources\nOff as a last resort: more CPU use, less latency");
+		Toggle("Watermark", &cfg::settings::watermark, "Name, frame rate & map in the top right corner");
+
+	#ifdef _DEBUG
+		ImGui::BeginDisabled(!cfg::settings::watermark);
 		Toggle("Frame Times", &cfg::settings::frame_times, "Shows in the watermark where the time of a frame goes, in milliseconds");
+		ImGui::EndDisabled();
+	#endif
 		EndPanel();
 	}
 	EndColumn();

@@ -3,6 +3,8 @@
 #include "core/engine/Engine.hpp"
 #include "updater/http/HttpHelper.hpp"
 
+#include <algorithm>
+#include <format>
 #include <set>
 #include <optional>
 
@@ -74,6 +76,8 @@ bool Dumper::FetchRemoteImpl() {
         { offsets::controller::m_hPawn,                     "CCSPlayerController",                      "m_hPawn" },
         { offsets::controller::m_steamID,                   "CCSPlayerController",                      "m_steamID" },
         { offsets::controller::m_iszPlayerName,             "CCSPlayerController",                      "m_iszPlayerName" },
+        { offsets::controller::m_sSanitizedClanTag,         "CCSPlayerController",                      "m_sSanitizedClanTag" },
+        { offsets::controller::m_szClan,                    "CCSPlayerController",                      "m_szClan" },
         { offsets::controller::m_bIsLocalPlayerController,  "CCSPlayerController",                      "m_bIsLocalPlayerController" },
         { offsets::controller::m_pInGameMoneyServices,      "CCSPlayerController",                      "m_pInGameMoneyServices" },
         { offsets::controller::m_iAccount,                  "CCSPlayerController_InGameMoneyServices",  "m_iAccount" },
@@ -135,6 +139,15 @@ bool Dumper::FetchRemoteImpl() {
         { offsets::grenade::m_nFireLifetime,                "C_Inferno",                                "m_nFireLifetime" },
         { offsets::grenade::m_maxFireHalfWidth,             "C_Inferno",                                "m_maxFireHalfWidth" },
         { offsets::grenade::m_bExplodeEffectBegan,          "C_BaseCSGrenadeProjectile",                "m_bExplodeEffectBegan" },
+
+        { offsets::visuals::m_flFlashMaxAlpha,              "C_CSPlayerPawnBase",                       "m_flFlashMaxAlpha" },
+        { offsets::visuals::m_bSmokeEffectSpawned,          "C_SmokeGrenadeProjectile",                 "m_bSmokeEffectSpawned" },
+        { offsets::visuals::m_zoomLevel,                    "C_CSWeaponBaseGun",                        "m_zoomLevel" },
+        { offsets::visuals::m_clrRender,                    "C_BaseModelEntity",                        "m_clrRender" },
+        { offsets::visuals::m_Glow,                         "C_BaseModelEntity",                        "m_Glow" },
+        { offsets::visuals::m_iGlowType,                    "CGlowProperty",                            "m_iGlowType" },
+        { offsets::visuals::m_glowColorOverride,            "CGlowProperty",                            "m_glowColorOverride" },
+        { offsets::visuals::m_bGlowing,                     "CGlowProperty",                            "m_bGlowing" },
         { offsets::grenade::m_nExplodeEffectTickBegin,      "C_BaseCSGrenadeProjectile",                "m_nExplodeEffectTickBegin" },
         { offsets::grenade::m_bPinPulled,                   "C_BaseCSGrenade",                          "m_bPinPulled" },
         { offsets::grenade::m_flThrowStrength,              "C_BaseCSGrenade",                          "m_flThrowStrength" },
@@ -169,6 +182,7 @@ bool Dumper::FetchRemoteImpl() {
         { offsets::econ::m_unMusicID,                       "CCSPlayerController_InventoryServices",    "m_unMusicID" },
 
         { offsets::rules::m_pGameModeRules,                "C_CSGameRules",                            "m_pGameModeRules" },
+        { offsets::rules::m_gamePhase,                     "C_CSGameRules",                            "m_gamePhase" },
 
         { offsets::bone::m_modelState,                      "CSkeletonInstance",                        "m_modelState" },
 
@@ -360,9 +374,131 @@ bool Dumper::InitImpl() {
     if (!ResolveThirdPerson(client))
         LOGF(WARNING, "Could not find the third person code, third person is disabled");
 
+    // The view of each frame, optional
+    if (!ResolveCamera(client))
+        LOGF(WARNING, "Could not find the camera code, free cam & spectating are disabled");
+
+    // Accepting a match from memory, optional: without it the button is clicked
+    {
+        auto ready = ScanMemory(offsets::signatures::setLocalPlayerReady, client.base, client.base + client.size);
+        if (!ready.empty()) {
+            auto at = ready.at(0);
+            offsets::lobby::matchmaking = at + 0x39 + process->read<int32_t>(at + 0x34) - client.base;
+            offsets::lobby::accept = at + 0x70 + process->read<int32_t>(at + 0x6C) - client.base;
+            LOGF(VERBOSE, "Found the match accept at 0x{:X} (matchmaking 0x{:X})", offsets::lobby::accept, offsets::lobby::matchmaking);
+        }
+        else {
+            LOGF(WARNING, "Could not find the match accept code, auto accept clicks the button");
+        }
+    }
+
     // Skin regeneration, optional
     if (!ResolveSkins(client))
         LOGF(WARNING, "Could not find the skin regeneration code, skin changer is disabled");
+
+    // Music of the main menu, optional
+    if (!ResolveMenuMusic(client))
+        LOGF(WARNING, "Could not find the music of the main menu, it keeps the kit of the inventory");
+
+    // Clan tag, optional
+    if (auto found = ScanMemory(offsets::signatures::updateClanTag, client.base, client.base + client.size); !found.empty()) {
+        offsets::controller::fnUpdateClanTag = found.at(0) - client.base;
+        LOGF(VERBOSE, "Found the clan tag update at 0x{:X}", offsets::controller::fnUpdateClanTag);
+    } else
+        LOGF(WARNING, "Could not find the clan tag update, the clan tag is disabled");
+
+    // User commands, optional: only read for the subtick strafe
+    {
+        auto managers = ScanMemory(offsets::signatures::userCmdManagers, client.base, client.base + client.size);
+        auto sequence = ScanMemory(offsets::signatures::userCmdSequence, client.base, client.base + client.size);
+
+        if (!managers.empty() && !sequence.empty()) {
+            constexpr size_t lea = 36; // mov r14, [rip + managers]
+            offsets::usercmd::dwManagers = managers.at(0) + lea + 7 + Engine::GetProcess()->read<int32_t>(managers.at(0) + lea + 3) - client.base;
+            offsets::usercmd::m_nSequence = Engine::GetProcess()->read<int32_t>(sequence.at(0) + 3);
+            LOGF(VERBOSE, "Found the user commands at 0x{:X}, sequence 0x{:X}", offsets::usercmd::dwManagers, offsets::usercmd::m_nSequence);
+        } else
+            LOGF(WARNING, "Could not find the user commands");
+    }
+
+    // Name, optional
+    if (auto found = ScanMemory(offsets::signatures::updateName, client.base, client.base + client.size); !found.empty()) {
+        offsets::controller::fnUpdateName = found.at(0) - client.base;
+        LOGF(VERBOSE, "Found the name update at 0x{:X}", offsets::controller::fnUpdateName);
+    } else
+        LOGF(WARNING, "Could not find the name update, the name change is disabled");
+
+    // Render color, optional: only for chams
+    if (auto found = ScanMemory(offsets::signatures::setRenderColor, client.base, client.base + client.size); !found.empty()) {
+        offsets::visuals::fnSetRenderColor = found.at(0) - client.base;
+        LOGF(VERBOSE, "Found 'SetRenderColor' at 0x{:X}", offsets::visuals::fnSetRenderColor);
+    } else
+        LOGF(WARNING, "Could not find 'SetRenderColor', chams are disabled");
+
+    // Glow chams, optional
+    {
+        auto process = Engine::GetProcess();
+        auto end = client.base + client.size;
+        auto attributes = ScanMemory(offsets::signatures::chamsAttributes, client.base, end);
+        auto node = ScanMemory(offsets::signatures::chamsSceneNode, client.base, end);
+        auto list = ScanMemory(offsets::signatures::chamsSceneList, client.base, end);
+        auto object = ScanMemory(offsets::signatures::chamsSceneObject, client.base, end);
+        auto updater = ScanMemory(offsets::signatures::chamsUpdater, client.base, end);
+
+        if (!attributes.empty() && !node.empty() && !list.empty() && !object.empty() && !updater.empty()) {
+            namespace vis = offsets::visuals;
+            auto at = attributes.at(0);
+            constexpr size_t CALL = 55; // The call at the end of the pattern
+
+            vis::sceneObjectAttributes = process->read<int32_t>(at + 3);
+            vis::dwSceneSystem = at + 17 + process->read<int32_t>(at + 13) - client.base;
+            vis::sceneSystemAllocateAttributes = process->read<int32_t>(at + 25);
+            vis::fnSetAttributeFloat4 = at + CALL + 5 + process->read<int32_t>(at + CALL + 1) - client.base;
+            vis::m_pSceneNode = process->read<int32_t>(node.at(0) + 13);
+            vis::sceneNodeCount = process->read<uint8_t>(list.at(0) + 2);
+            vis::sceneNodeList = process->read<uint8_t>(list.at(0) + 11);
+            vis::sceneHandleObject = process->read<uint8_t>(object.at(0) + 11);
+            vis::m_pSceneObjectUpdater = process->read<int32_t>(updater.at(0) + 22);
+
+            LOGF(VERBOSE, "Found the glow chams: updater 0x{:X}, node 0x{:X} ({:X}, {:X}), object 0x{:X}, attributes 0x{:X}, set 0x{:X}",
+                vis::m_pSceneObjectUpdater, vis::m_pSceneNode, vis::sceneNodeCount, vis::sceneNodeList, vis::sceneHandleObject,
+                vis::sceneObjectAttributes, vis::fnSetAttributeFloat4);
+        } else
+            LOGF(WARNING, "Could not find the code for the glow chams, only textured chams");
+    }
+
+    // Smoke clouds, optional: only for no smoke
+    {
+        auto process = Engine::GetProcess();
+        auto volume = ScanMemory(offsets::signatures::smokeVolume, client.base, client.base + client.size);
+        auto start = ScanMemory(offsets::signatures::smokeStart, client.base, client.base + client.size);
+
+        if (!volume.empty() && !start.empty()) {
+            // The start time of the cloud itself is written a bit later: movss [rsi + start], xmm6
+            uint8_t code[0x100]{};
+            process->read_raw(start.at(0), code, sizeof(code));
+
+            for (size_t i = 20; i + 5 <= sizeof(code); i++) {
+                if (code[i] == 0xF3 && code[i + 1] == 0x0F && code[i + 2] == 0x11 && code[i + 3] == 0x76) {
+                    offsets::visuals::smokeVolumeStart = code[i + 4];
+                    break;
+                }
+            }
+
+            offsets::visuals::smokeVolume = process->read<int32_t>(volume.at(0) + 12);
+            offsets::visuals::smokeRenderObject = *reinterpret_cast<int32_t*>(&code[3]);
+            offsets::visuals::smokeRenderStart = *reinterpret_cast<int32_t*>(&code[16]);
+        }
+
+        if (offsets::visuals::smokeVolume && offsets::visuals::smokeVolumeStart)
+            LOGF(VERBOSE, "Found the smoke cloud at 0x{:X}, start 0x{:X}, render object 0x{:X}, its start 0x{:X}",
+                offsets::visuals::smokeVolume, offsets::visuals::smokeVolumeStart,
+                offsets::visuals::smokeRenderObject, offsets::visuals::smokeRenderStart);
+        else {
+            offsets::visuals::smokeVolume = 0;
+            LOGF(WARNING, "Could not find the smoke cloud, no smoke is disabled");
+        }
+    }
 
     // server.dll, optional: only the MVP anthem needs it. Loaded with the first map, so tried again later
     ResolveServer();
@@ -380,6 +516,31 @@ bool Dumper::InitImpl() {
 
     LOGF(INFO, "Successfully dumped offsets...");
 
+    return true;
+}
+
+bool Dumper::ResolveMenuMusic(ProcessModule client) {
+    auto process = Engine::GetProcess();
+
+    auto object = ScanMemory(offsets::signatures::menuMusic, client.base, client.base + client.size);
+    auto fields = ScanMemory(offsets::signatures::menuMusicFields, client.base, client.base + client.size);
+    if (object.empty() || fields.empty())
+        return false;
+
+    // call <getter>, the getter is "lea rax, [rip + object]; ret"
+    auto getter = object.at(0) + 9 + process->read<int32_t>(object.at(0) + 5);
+
+    uint8_t lea[8]{};
+    process->read_raw(getter, lea, sizeof(lea));
+    if (lea[0] != 0x48 || lea[1] != 0x8D || lea[2] != 0x05 || lea[7] != 0xC3)
+        return false;
+
+    offsets::econ::dwMenuMusic = getter + 7 + *reinterpret_cast<int32_t*>(&lea[3]) - client.base;
+    offsets::econ::m_pszMenuMusicOverride = process->read<int32_t>(fields.at(0) + 3);
+    offsets::econ::m_pszMenuMusicType = process->read<int32_t>(fields.at(0) + 10);
+
+    LOGF(VERBOSE, "Found the menu music at 0x{:X}, override 0x{:X}, type 0x{:X}",
+        offsets::econ::dwMenuMusic, offsets::econ::m_pszMenuMusicOverride, offsets::econ::m_pszMenuMusicType);
     return true;
 }
 
@@ -444,12 +605,117 @@ bool Dumper::ResolveThirdPerson(ProcessModule client) {
     constexpr size_t jump_at = 40;
     auto checks = ScanMemory(offsets::signatures::thirdPersonCheats, client.base, client.base + 0x4000000);
 
-    if (!checks.empty() && process->read<uint8_t>(checks.at(0) + jump_at) == 0x75) {
+    if (!checks.empty() && RestoreJump(checks.at(0) + jump_at, 0x75)) {
         offsets::input::cheatsCheckJump = checks.at(0) + jump_at - client.base;
         LOGF(VERBOSE, "Found the third person sv_cheats check at 0x{:X}", offsets::input::cheatsCheckJump);
     }
     else {
         LOGF(WARNING, "Could not find the third person sv_cheats check, third person needs sv_cheats 1");
+    }
+    return true;
+}
+
+bool Dumper::RestoreJump(uintptr_t address, uint8_t opcode) {
+    auto process = Engine::GetProcess();
+    auto current = process->read<uint8_t>(address);
+
+    if (current == opcode)
+        return true;
+
+    // Still our jmp from an earlier run that was closed without putting it back
+    constexpr uint8_t JMP_SHORT = 0xEB;
+    if (current != JMP_SHORT)
+        return false;
+
+    if (!process->patch_code(address, &opcode, sizeof(opcode)))
+        return false;
+
+    LOGF(INFO, "Put back the jump at 0x{:X} an earlier run left patched", address);
+    return true;
+}
+
+bool Dumper::ResolveCamera(ProcessModule client) {
+    auto process = Engine::GetProcess();
+
+    auto views = ScanMemory(offsets::signatures::overrideView, client.base, client.base + client.size);
+    auto modes = ScanMemory(offsets::signatures::clientModes, client.base, client.base + client.size);
+    if (views.empty() || modes.empty())
+        return false;
+
+    // The fields of CViewSetup, from the debug view of the function: movsd [rdi + disp32], xmm0
+    constexpr size_t ORIGIN_AT = 0x98, ANGLES_AT = 0xC1;
+    constexpr uint8_t MOVSD_STORE[] = { 0xF2, 0x0F, 0x11, 0x87 };
+    // & the field of view at its end: movss [rdi + disp32], xmm0. Optional, the built-in value else
+    constexpr size_t FOV_AT = 0x26F;
+    constexpr uint8_t MOVSS_STORE[] = { 0xF3, 0x0F, 0x11, 0x87 };
+
+    uint8_t code[FOV_AT + 8]{};
+    if (!process->read_raw(views.at(0), code, sizeof(code)))
+        return false;
+
+    if (!std::equal(std::begin(MOVSD_STORE), std::end(MOVSD_STORE), code + ORIGIN_AT) ||
+        !std::equal(std::begin(MOVSD_STORE), std::end(MOVSD_STORE), code + ANGLES_AT))
+        return false;
+
+    offsets::camera::m_vecOrigin = *reinterpret_cast<int32_t*>(code + ORIGIN_AT + sizeof(MOVSD_STORE));
+    offsets::camera::m_angView = *reinterpret_cast<int32_t*>(code + ANGLES_AT + sizeof(MOVSD_STORE));
+    if (std::equal(std::begin(MOVSS_STORE), std::end(MOVSS_STORE), code + FOV_AT))
+        offsets::camera::m_flFov = *reinterpret_cast<int32_t*>(code + FOV_AT + sizeof(MOVSS_STORE));
+    offsets::camera::overrideView = views.at(0) - client.base;
+
+    // lea rcx, [rip + modes] at +3, 7 long
+    offsets::camera::dwClientMode = modes.at(0) + 3 + 7 + process->read<int32_t>(modes.at(0) + 6) - client.base;
+
+    LOGF(VERBOSE, "Found the camera: client mode 0x{:X}, OverrideView 0x{:X}, origin 0x{:X}, angles 0x{:X}",
+        offsets::camera::dwClientMode, offsets::camera::overrideView, offsets::camera::m_vecOrigin, offsets::camera::m_angView);
+
+    // GetLocalPawn: the CS OverrideView calls the base one at +0xA, which calls it at +0x2C after xor ecx, ecx
+    auto call_target = [&](uintptr_t at) { return at + 5 + process->read<int32_t>(at + 1); };
+    if (code[0xA] == 0xE8) {
+        auto base = call_target(views.at(0) + 0xA);
+        uint8_t call[3]{};
+        if (process->read_raw(base + 0x2A, call, sizeof(call)) && call[0] == 0x33 && call[1] == 0xC9 && call[2] == 0xE8) {
+            offsets::camera::getLocalPawn = call_target(base + 0x2C) - client.base;
+            LOGF(VERBOSE, "Found GetLocalPawn at 0x{:X}", offsets::camera::getLocalPawn);
+        }
+    }
+
+    // The spectator keys, optional. Its start: mov [rsp + 0x10], rbx; push rbp, or the patch an earlier run left
+    auto binds = ScanMemory(offsets::signatures::spectatorBinds, client.base, client.base + client.size);
+    if (!binds.empty()) {
+        constexpr uint8_t ORIGINAL[] = { 0x48, 0x89, 0x5C, 0x24, 0x10, 0x55 };
+        constexpr uint8_t PATCHED[] = { 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3 };
+        auto start = binds.at(0) - sizeof(ORIGINAL);
+
+        uint8_t bytes[sizeof(ORIGINAL)]{};
+        process->read_raw(start, bytes, sizeof(bytes));
+        // Either all of them taken, or jmp rel32 + nop to the filter in our page
+        bool left = std::equal(std::begin(PATCHED), std::end(PATCHED), bytes) || (bytes[0] == 0xE9 && bytes[5] == 0x90);
+        if (left && process->patch_code(start, ORIGINAL, sizeof(ORIGINAL))) {
+            LOGF(INFO, "Put back the spectator keys an earlier run left patched");
+            std::copy(std::begin(ORIGINAL), std::end(ORIGINAL), bytes);
+        }
+
+        if (std::equal(std::begin(ORIGINAL), std::end(ORIGINAL), bytes)) {
+            offsets::camera::spectatorBinds = start - client.base;
+            LOGF(VERBOSE, "Found the spectator keys at 0x{:X}", offsets::camera::spectatorBinds);
+        }
+    }
+
+    // The spectator camera, optional: without it the camera stays the one of the game after death
+    constexpr size_t OBSERVER_JUMP_AT = 26;
+    auto observer = ScanMemory(offsets::signatures::observerView, client.base, client.base + client.size);
+    if (!observer.empty() && RestoreJump(observer.at(0) + OBSERVER_JUMP_AT, 0x74)) {
+        offsets::camera::observerViewJump = observer.at(0) + OBSERVER_JUMP_AT - client.base;
+
+        // lea r8, [rbx + angles]; mov rcx, rsi; lea rdx, [rbx + origin]; call
+        constexpr size_t OBSERVER_CALL_AT = 45;
+        if (process->read<uint8_t>(observer.at(0) + OBSERVER_CALL_AT) == 0xE8)
+            offsets::camera::observerViewCall = observer.at(0) + OBSERVER_CALL_AT - client.base;
+        LOGF(VERBOSE, "Found the spectator camera at 0x{:X}", offsets::camera::observerViewJump);
+    }
+    else {
+        LOGF(WARNING, "Could not find the spectator camera, free cam & spectating are only available while alive");
     }
     return true;
 }
@@ -666,7 +932,8 @@ void Dumper::ScanBlock(byte* buffer, const std::vector<short>& next, const std::
         if ((i + length) >= size)
             return;
 
-        int Num = next[buffer[i + length]];
+        // A wildcard matches the next byte too: never skip past the last one
+        int Num = (std::max)(next[buffer[i + length]], next[256]);
         if (Num == -1)
             i += (length - next[256]);
         else

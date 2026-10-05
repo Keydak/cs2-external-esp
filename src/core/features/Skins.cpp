@@ -6,6 +6,7 @@
 #include "updater/http/HttpHelper.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <set>
 
 namespace {
@@ -13,7 +14,7 @@ namespace {
     const std::string agents_url = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/agents.json";
     const std::string music_kits_url = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/music_kits.json";
     const std::string cache_file = "skins_cache.json";
-    constexpr int CACHE_VERSION = 5; // Bumped when the cached fields change
+    constexpr int CACHE_VERSION = 6; // Bumped when the cached fields change
 
     constexpr uint32_t INVALID_ITEM_ID = 0xFFFFFFFF; // Not an inventory item, the game skips the inventory lookup
     constexpr int QUALITY_UNUSUAL = 3; // The star quality of knives & gloves
@@ -99,6 +100,15 @@ namespace {
 
     bool SameSkin(const cfg::skins::item_t& a, const cfg::skins::item_t& b) {
         return a.paint_kit == b.paint_kit && a.seed == b.seed && a.wear == b.wear;
+    }
+
+    // Not an item of the inventory any more but ours: the game takes the skin from our attributes
+    void ClaimItem(uintptr_t item, uint32_t account_id) {
+        auto p = Engine::GetProcess();
+        if (p->read<uint32_t>(item + offsets::econ::m_iItemIDHigh) != INVALID_ITEM_ID)
+            p->write<uint32_t>(item + offsets::econ::m_iItemIDHigh, INVALID_ITEM_ID);
+        if (p->read<uint32_t>(item + offsets::econ::m_iAccountID) != account_id)
+            p->write<uint32_t>(item + offsets::econ::m_iAccountID, account_id);
     }
 
     uintptr_t AttributeVectorOf(uintptr_t item) {
@@ -442,6 +452,9 @@ void Skins::LoadMusicKits() {
         kit.definition_index = JsonInt(entry, "def_index");
         kit.image = JsonString(entry, "image");
 
+        if (auto original = entry.find("original"); original != entry.end() && original->is_object())
+            kit.code_name = JsonString(*original, "name");
+
         // Every kit is listed again as StatTrak, same music
         auto name = JsonString(entry, "name");
         if (!kit.definition_index || name.starts_with("StatTrak") || !seen.insert(kit.definition_index).second)
@@ -523,6 +536,7 @@ bool Skins::LoadCache() {
             MusicKitInfo kit;
             kit.definition_index = entry.value("index", 0);
             kit.name = entry.value("name", "");
+            kit.code_name = entry.value("code", "");
             kit.image = entry.value("image", "");
             kit.rarity_color = entry.value("rarity", 0u);
             music_kits.push_back(std::move(kit));
@@ -585,6 +599,7 @@ void Skins::SaveCache() {
         data["music_kits"].push_back({
             { "index", kit.definition_index },
             { "name", kit.name },
+            { "code", kit.code_name },
             { "image", kit.image },
             { "rarity", kit.rarity_color },
         });
@@ -632,8 +647,16 @@ void Skins::Apply() {
     }
 
     auto pawn = Engine::GetLocalPawn();
-    if (!pawn || p->read<int>(pawn + offsets::pawn::m_iHealth) <= 0)
+    bool alive = pawn && p->read<int>(pawn + offsets::pawn::m_iHealth) > 0;
+
+    // Also while dead, or the spawn after it is not seen
+    TrackSpawn(pawn, alive);
+
+    if (!alive)
         return;
+
+    if (this->skins_started == std::chrono::steady_clock::time_point{})
+        this->skins_started = std::chrono::steady_clock::now();
 
     // Work on a copy, so the menu is not blocked while we write
     bool enabled;
@@ -690,7 +713,8 @@ void Skins::Apply() {
         int index = p->read<uint16_t>(item + offsets::pawn::m_iItemDefinitionIndex);
 
         // Changes the index to the new knife, its skin is looked up below
-        bool knife_changed = ApplyKnife(pawn, weapon, item, index, knife);
+        bool model_changed = false;
+        bool knife_changed = ApplyKnife(pawn, weapon, item, index, knife, model_changed);
 
         auto want = wanted.find(index);
         bool has_skin = want != wanted.end() && want->second.paint_kit > 0;
@@ -704,6 +728,17 @@ void Skins::Apply() {
             it = this->weapons.end();
         }
 
+        // The knife changed again (the server sent the one of the game after our change): a skin made anew, from new
+        // attributes. The old ones only ever gave the knife of the second change no material
+        std::optional<uint32_t> original_id_high;
+        if (knife_changed && it != this->weapons.end()) {
+            original_id_high = it->second.original_id_high;
+            Detach(it->second);
+            p->free_remote(it->second.block);
+            this->weapons.erase(it);
+            it = this->weapons.end();
+        }
+
         if (has_skin) {
             if (it == this->weapons.end()) {
                 Applied applied{};
@@ -713,9 +748,8 @@ void Skins::Apply() {
                 if (!Attach(applied))
                     continue;
 
-                applied.original_id_high = p->read<uint32_t>(item + offsets::econ::m_iItemIDHigh);
-                p->write<uint32_t>(item + offsets::econ::m_iItemIDHigh, INVALID_ITEM_ID);
-                p->write<uint32_t>(item + offsets::econ::m_iAccountID, account_id);
+                applied.original_id_high = original_id_high.value_or(p->read<uint32_t>(item + offsets::econ::m_iItemIDHigh));
+                ClaimItem(item, account_id);
 
                 it = this->weapons.emplace(weapon, applied).first;
                 rebuild.push_back(weapon);
@@ -727,6 +761,9 @@ void Skins::Apply() {
                 it->second.built = false;
                 it->second.attempts = 0;
 
+                // The game puts its own knife back with an update from the server right after a spawn, the item id
+                // with it: the item of the inventory again, without our skin, until it is ours once more
+                ClaimItem(item, account_id);
                 WriteAttributes(it->second);
                 rebuild.push_back(weapon);
             }
@@ -734,8 +771,10 @@ void Skins::Apply() {
                 // Might have finished since the last try
                 if (CountMaterials(weapon) > 0)
                     it->second.built = true;
-                else
+                else {
+                    ClaimItem(item, account_id);
                     rebuild.push_back(weapon);
+                }
             }
 
             // Skins made for the old model need the old mesh
@@ -744,8 +783,11 @@ void Skins::Apply() {
                 if (auto skin = info->FindSkin(want->second.paint_kit))
                     legacy = skin->legacy_model;
 
+            // A model set just now is still loading, the game crashes switching its mesh. The skin made again once the
+            // model is there sets it then
             bool rebuilding = std::find(rebuild.begin(), rebuild.end(), weapon) != rebuild.end();
-            CollectMeshMasks(pawn, weapon, legacy ? 2 : 1, rebuilding, masks);
+            if (!model_changed)
+                CollectMeshMasks(pawn, weapon, legacy ? 2 : 1, rebuilding, masks);
         }
         else if (it != this->weapons.end()) {
             // Skin removed, back to the default look
@@ -754,7 +796,8 @@ void Skins::Apply() {
             p->free_remote(it->second.block);
             this->weapons.erase(it);
 
-            CollectMeshMasks(pawn, weapon, 1, true, masks);
+            if (!model_changed)
+                CollectMeshMasks(pawn, weapon, 1, true, masks);
             rebuild.push_back(weapon);
         }
     }
@@ -763,6 +806,12 @@ void Skins::Apply() {
     for (auto it = this->knives.begin(); it != this->knives.end();) {
         if (std::find(live.begin(), live.end(), it->first) == live.end())
             it = this->knives.erase(it);
+        else
+            ++it;
+    }
+    for (auto it = this->knife_seen.begin(); it != this->knife_seen.end();) {
+        if (std::find(live.begin(), live.end(), it->first) == live.end())
+            it = this->knife_seen.erase(it);
         else
             ++it;
     }
@@ -801,29 +850,6 @@ void Skins::Apply() {
     HideThirdPersonGloves(pawn, this->gloves.block && hide_third_person);
     ApplyAgent(pawn, agent);
 
-    // TEMP: glove diagnostics, once per second while custom gloves are set
-    static auto last_log = now;
-    if (glove && now - last_log >= 1s) {
-        last_log = now;
-
-        auto gloves_item = pawn + offsets::econ::m_EconGloves;
-        auto vector = p->read<AttributeVector>(AttributeVectorOf(gloves_item));
-        auto helper = pawn + offsets::skins::gloveHelper;
-
-        LOGF(INFO, "[gloves] reapply={} index={} initialized={} id_high=0x{:X} quality={} attributes={} memory=0x{:X} ours={} paint={} glove_entity=0x{:X} -> 0x{:X} cached_model=0x{:X} helper_pawn_ok={}",
-            p->read<bool>(pawn + offsets::econ::m_bNeedToReApplyGloves),
-            p->read<uint16_t>(gloves_item + offsets::pawn::m_iItemDefinitionIndex),
-            p->read<bool>(gloves_item + offsets::econ::m_bInitialized),
-            p->read<uint32_t>(gloves_item + offsets::econ::m_iItemIDHigh),
-            p->read<int>(gloves_item + offsets::econ::m_iEntityQuality),
-            vector.size, vector.memory, vector.memory && vector.memory == this->gloves.block,
-            vector.memory ? p->read<float>(vector.memory + offsetof(EconItemAttribute, value)) : -1.f,
-            p->read<uint32_t>(helper),
-            Engine::GetEntityFromHandle(p->read<uint32_t>(helper)),
-            p->read<uintptr_t>(helper + 0xA8),
-            p->read<uintptr_t>(helper + 0xB0) == pawn
-        );
-    }
 }
 
 void Skins::ApplyGloves(uintptr_t pawn, uint32_t account_id, int glove, const std::map<int, cfg::skins::item_t>& wanted) {
@@ -949,6 +975,9 @@ void Skins::ApplyMusicKit(int music_kit) {
     if (!p)
         return;
 
+    // The main menu has no controller
+    ApplyMenuMusic(music_kit);
+
     auto controller = p->read<uintptr_t>(Engine::GetClient().base + offsets::localPlayerController);
 
     // A new controller (map change) starts with what the game gave it
@@ -974,6 +1003,47 @@ void Skins::ApplyMusicKit(int music_kit) {
         if (auto server_controller = GetServerController(controller))
             ApplyMusicTarget(this->music_targets[2], server_controller + offsets::econ::server_m_iMusicKitID, true, music_kit);
     }
+}
+
+// The main menu plays the kit of the inventory, unless a kit name is in its override (the store previews kits so)
+void Skins::ApplyMenuMusic(int music_kit) {
+    auto p = Engine::GetProcess();
+    if (!offsets::econ::dwMenuMusic || !offsets::econ::m_pszMenuMusicOverride)
+        return;
+
+    constexpr size_t NAME_SIZE = 64;
+    auto address = Engine::GetClient().base + offsets::econ::dwMenuMusic + offsets::econ::m_pszMenuMusicOverride;
+    auto current = p->read<uintptr_t>(address);
+
+    auto ours = [&](uintptr_t pointer) {
+        return this->menu_music_names && (pointer == this->menu_music_names || pointer == this->menu_music_names + NAME_SIZE);
+    };
+
+    const MusicKitInfo* kit = music_kit ? FindMusicKit(music_kit) : nullptr;
+
+    if (!kit || kit->code_name.empty() || kit->code_name.size() >= NAME_SIZE) {
+        // Removed: the inventory one plays again
+        if (ours(current))
+            p->write<uintptr_t>(address, 0);
+        this->menu_music_written.clear();
+        return;
+    }
+
+    if (!this->menu_music_names && !(this->menu_music_names = p->allocate_remote(NAME_SIZE * 2)))
+        return;
+
+    // Another kit: written to the other name, the game restarts the music when the pointer changes
+    if (kit->code_name != this->menu_music_written) {
+        this->menu_music_slot ^= 1;
+        auto name = this->menu_music_names + NAME_SIZE * this->menu_music_slot;
+        p->write_bytes(name, std::vector<uint8_t>(kit->code_name.c_str(), kit->code_name.c_str() + kit->code_name.size() + 1));
+        this->menu_music_written = kit->code_name;
+    }
+
+    // Left alone while the store previews a kit, ours again once it is done
+    auto name = this->menu_music_names + NAME_SIZE * this->menu_music_slot;
+    if (current != name && (!current || ours(current)))
+        p->write<uintptr_t>(address, name);
 }
 
 void Skins::ApplyMusicTarget(MusicTarget& target, uintptr_t address, bool wide, int music_kit) {
@@ -1101,15 +1171,29 @@ std::string Skins::GetModelName(uintptr_t entity) {
     return buffer;
 }
 
-// The game sets the player model on every spawn, so this keeps setting ours
+// The game sets the player model on every spawn, so this sets ours right after
+constexpr auto AGENT_SPAWN_WINDOW = 3s;
+
+void Skins::TrackSpawn(uintptr_t pawn, bool alive) {
+    // A spawn: another pawn alive, or the same one alive again. Not the pawn we first see, that one might be mid life
+    if (alive && this->agent_pawn && (pawn != this->agent_pawn || !this->agent_alive)) {
+        this->agent_spawned = std::chrono::steady_clock::now();
+        this->agent_waiting = false;
+        this->agent_next_try = {};
+    }
+
+    if (pawn)
+        this->agent_pawn = pawn;
+    this->agent_alive = alive;
+}
+
 void Skins::ApplyAgent(uintptr_t pawn, int agent) {
     if (!offsets::skins::setModel)
         return;
 
-    auto p = Engine::GetProcess();
     auto now = std::chrono::steady_clock::now();
-    auto current = GetModelName(pawn);
 
+    auto current = GetModelName(pawn);
     if (current.empty())
         return;
 
@@ -1141,6 +1225,15 @@ void Skins::ApplyAgent(uintptr_t pawn, int agent) {
     // The model might take a moment to load, so not every tick
     if (now < this->agent_next_try)
         return;
+
+    // Only right after a spawn, like the game. A new model while alive leaves the old skeleton with an owner that is
+    // gone, the game crashes on it a frame later
+    if (now - this->agent_spawned > AGENT_SPAWN_WINDOW) {
+        if (!this->agent_waiting)
+            LOGF(INFO, "The agent changes on the next spawn");
+        this->agent_waiting = true;
+        return;
+    }
 
     this->agent_next_try = now + 1s;
 
@@ -1174,13 +1267,17 @@ bool Skins::SetModel(uintptr_t entity, const std::string& model) {
     return CallInGame(Engine::GetClient().base + offsets::skins::setModel, entity, this->strings);
 }
 
+constexpr auto KNIFE_REBUILD_DELAY = 500ms;
+constexpr auto KNIFE_CHANGE_WINDOW = 3s;
+
 // Turns the default knife into another one: item, weapon data & both models. True when it changed now
-bool Skins::ApplyKnife(uintptr_t pawn, uintptr_t weapon, uintptr_t item, int& index, int knife) {
+bool Skins::ApplyKnife(uintptr_t pawn, uintptr_t weapon, uintptr_t item, int& index, int knife, bool& model_changed) {
     if (!offsets::skins::subclassChanged || !offsets::skins::setModel || !IsKnife(index))
         return false;
 
     auto p = Engine::GetProcess();
     auto now = std::chrono::steady_clock::now();
+    auto seen = this->knife_seen.try_emplace(weapon, now).first->second;
     auto it = this->knives.find(weapon);
 
     // A knife from the game, new or the game put its own back
@@ -1204,10 +1301,24 @@ bool Skins::ApplyKnife(uintptr_t pawn, uintptr_t weapon, uintptr_t item, int& in
         if (now < state.next_try)
             return false;
 
-        // The game uses the first person model of the knife in hand while we make a new one, wait until it is put away
-        auto weapon_services = p->read<uintptr_t>(pawn + offsets::pawn::m_pWeaponServices);
-        if (weapon_services && Engine::GetEntityFromHandle(p->read<uint32_t>(weapon_services + offsets::pawn::m_hActiveWeapon)) == weapon)
+        // Only a knife that just came, like the game does: right after a spawn or a new knife. A knife changed later
+        // on leaves a skeleton whose owner is gone, the game crashes on it with its next update of the weapon. The
+        // knives there when we started might be mid life too
+        bool new_knife = seen > this->skins_started + 1s && now - seen <= KNIFE_CHANGE_WINDOW;
+        bool spawned = now - this->agent_spawned <= KNIFE_CHANGE_WINDOW;
+
+        if (!new_knife && !spawned) {
+            if (!this->knife_waiting)
+                LOGF(INFO, "The knife changes on the next spawn");
+            this->knife_waiting = true;
             return false;
+        }
+        this->knife_waiting = false;
+
+        // Also with the knife in hand: the change only happens right after a spawn, waiting for it to be put away would
+        // miss that. The first person model of the old knife the game might keep is replaced below
+        auto weapon_services = p->read<uintptr_t>(pawn + offsets::pawn::m_pWeaponServices);
+        bool in_hand = weapon_services && Engine::GetEntityFromHandle(p->read<uint32_t>(weapon_services + offsets::pawn::m_hActiveWeapon)) == weapon;
 
         state.next_try = now + 1s;
 
@@ -1219,12 +1330,14 @@ bool Skins::ApplyKnife(uintptr_t pawn, uintptr_t weapon, uintptr_t item, int& in
             return false;
 
         SetModel(weapon, model);
+        model_changed = true;
 
-        LOGF(VERBOSE, "Knife {} -> {}, model {}", index, target, GetModelName(weapon));
+        LOGF(VERBOSE, "Knife {} -> {}, model {}{}", index, target, GetModelName(weapon), in_hand ? ", in hand" : "");
 
         index = target;
         state.applied_index = target;
         state.fixes = 0;
+        state.rebuild_at = now + KNIFE_REBUILD_DELAY;
 
         // Back to the knife of the game, nothing left to keep
         if (!knife) {
@@ -1246,8 +1359,23 @@ bool Skins::ApplyKnife(uintptr_t pawn, uintptr_t weapon, uintptr_t item, int& in
             state.fixes++;
 
             SetModel(hud, model);
+            model_changed = true;
             LOGF(VERBOSE, "Knife first person model {} -> {}", hud_model, GetModelName(hud));
+
+            // A new model has the materials of the default knife
+            state.rebuild_at = now + KNIFE_REBUILD_DELAY;
         }
+    }
+
+    // The skin made right after a change can be on the model that was still loading, or on the first person model
+    // we replaced since: once more on the model that is there now
+    if (state.rebuild_at != std::chrono::steady_clock::time_point{} && now < state.rebuild_at)
+        model_changed = true; // Still loading, its mesh waits too
+
+    if (state.rebuild_at != std::chrono::steady_clock::time_point{} && now >= state.rebuild_at) {
+        state.rebuild_at = {};
+        LOGF(VERBOSE, "Knife {} skin made again", index);
+        return true;
     }
 
     return false;
@@ -1286,9 +1414,21 @@ void Skins::ShowDefaultGloves(uintptr_t pawn, bool show) {
         CallInGame(Engine::GetClient().base + offsets::skins::showDefaultGloves, pawn, show);
 }
 
-// function(first, second) on a thread of the game
+// function(first, second) on a thread of the game, first being an entity. Only while that entity is still there when
+// the game runs it: the call waits for the game, which might have deleted the entity meanwhile (a first person model
+// it recreates, a weapon dropped). A model set on a deleted one leaves a skeleton the game crashes on later
 bool Skins::CallInGame(uintptr_t function, uintptr_t first, uintptr_t second) {
     auto p = Engine::GetProcess();
+
+    // CEntityInstance::m_pEntity, its CEntityIdentity is the slot of the entity list: the entity first, its handle at 0x10
+    constexpr std::ptrdiff_t ENTITY_IDENTITY = 0x10;
+    constexpr std::ptrdiff_t IDENTITY_HANDLE = 0x10;
+    constexpr std::ptrdiff_t SKIPPED = CODE_SIZE - 8;  // Set by the code when the entity was gone
+
+    auto identity = first ? p->read<uintptr_t>(first + ENTITY_IDENTITY) : 0;
+    if (!identity || p->read<uintptr_t>(identity) != first)
+        return false;
+    auto handle = p->read<uint32_t>(identity + IDENTITY_HANDLE);
 
     if (!this->code)
         this->code = p->allocate_remote(CODE_SIZE, PAGE_EXECUTE_READWRITE);
@@ -1298,23 +1438,52 @@ bool Skins::CallInGame(uintptr_t function, uintptr_t first, uintptr_t second) {
 
     std::vector<uint8_t> code;
     auto emit = [&](std::initializer_list<uint8_t> bytes) { code.insert(code.end(), bytes); };
+    auto emit32 = [&](uint32_t value) { for (int i = 0; i < 4; i++) code.push_back(static_cast<uint8_t>(value >> (i * 8))); };
     auto emit64 = [&](uint64_t value) { for (int i = 0; i < 8; i++) code.push_back(static_cast<uint8_t>(value >> (i * 8))); };
 
     emit({ 0x48, 0x83, 0xEC, 0x28 });           // sub rsp, 0x28
+
+    // The slot still holds this entity with the same handle, or the call is skipped
+    emit({ 0x48, 0xB8 }); emit64(identity);     // mov rax, identity
     emit({ 0x48, 0xB9 }); emit64(first);        // mov rcx, first
+    emit({ 0x48, 0x39, 0x08 });                 // cmp [rax], rcx
+    emit({ 0x75, 0x00 });                       // jne skip
+    size_t skip_entity = code.size() - 1;
+    emit({ 0x81, 0x78, IDENTITY_HANDLE }); emit32(handle); // cmp dword ptr [rax + 0x10], handle
+    emit({ 0x75, 0x00 });                       // jne skip
+    size_t skip_handle = code.size() - 1;
+
     emit({ 0x48, 0xBA }); emit64(second);       // mov rdx, second
     emit({ 0x49, 0xBB }); emit64(function);     // mov r11, function
     emit({ 0x41, 0xFF, 0xD3 });                 // call r11
+    emit({ 0xEB, 0x00 });                       // jmp done
+    size_t to_done = code.size() - 1;
+
+    size_t skip = code.size();
+    emit({ 0x48, 0xB8 }); emit64(this->code + SKIPPED); // mov rax, &skipped
+    emit({ 0xC6, 0x00, 0x01 });                 // mov byte ptr [rax], 1
+
+    size_t done = code.size();
     emit({ 0x48, 0x83, 0xC4, 0x28 });           // add rsp, 0x28
     emit({ 0x33, 0xC0 });                       // xor eax, eax
     emit({ 0xC3 });                             // ret
 
+    code[skip_entity] = static_cast<uint8_t>(skip - (skip_entity + 1));
+    code[skip_handle] = static_cast<uint8_t>(skip - (skip_handle + 1));
+    code[to_done] = static_cast<uint8_t>(done - (to_done + 1));
+
+    p->write<uint8_t>(this->code + SKIPPED, 0);
     p->write_bytes(this->code, code);
     FlushInstructionCache(p->handle_, reinterpret_cast<void*>(this->code), code.size());
 
     if (!GameThread::Call(this->code)) {
         LOGF(WARNING, "Call into the game did not finish in time");
         this->code = 0;
+        return false;
+    }
+
+    if (p->read<uint8_t>(this->code + SKIPPED)) {
+        LOGF(VERBOSE, "Call into the game skipped, entity 0x{:X} was deleted meanwhile", first);
         return false;
     }
 

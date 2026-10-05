@@ -33,6 +33,9 @@ public:
     static void Free();
     static void Destroy();
     static bool Init();
+
+    // The name in big letters & the credits, once at the start
+    static void Banner();
 private:
     LogHelper(){};
 

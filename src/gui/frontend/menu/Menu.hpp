@@ -28,6 +28,9 @@ public:
 
     static ImVec2 GetPos();
     static ImVec2 GetSize();
+
+    // Name of a key like the keybind rows show it: "Mouse 5", "F6"
+    static std::string GetKeyName(int key);
 private:
     Menu() {};
 
@@ -87,6 +90,10 @@ private:
     float skin_page_progress = 1.f;     // Pages slide in like tabs
 
     void OpenSkinPage(SkinPage page, int item = 0);
+
+    // Misc tab: camera, profile, interface
+    int misc_page = 0;
+    float misc_page_progress = 1.f;
 
     float applied_scale = 0.f; // cfg::settings::ui_scale, once the mouse is let go
 

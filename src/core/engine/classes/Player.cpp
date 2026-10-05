@@ -98,7 +98,11 @@ bool Player::UpdatePawn() {
 
 	UpdateObserverServices();
 
-	if (!alive) // No need to continue 
+	// From the controller, also while dead: it decides who is an enemy for everything else. Dead, our pawn is the
+	// spectator one, its team is not always ours
+	this->team = p->read<uint8_t>(controller + offsets::pawn::m_iTeamNum);
+
+	if (!alive) // No need to continue
 		return true;
 
 	this->pos = p->read<Vec3_t>(pawn + offsets::pawn::m_vOldOrigin);
@@ -108,8 +112,6 @@ bool Player::UpdatePawn() {
 
 	this->vel = p->read<Vec3_t>(pawn + offsets::pawn::m_vecAbsVelocity);
 	this->eye = this->pos + p->read<Vec3_t>(pawn + offsets::pawn::m_vecViewOffset);
-
-	this->team = p->read<uint8_t>(pawn + offsets::pawn::m_iTeamNum);
 
 	this->armor = p->read<int>(pawn + offsets::pawn::m_ArmorValue);
 	this->defusing = p->read<bool>(pawn + offsets::pawn::m_bIsDefusing);
@@ -184,7 +186,7 @@ bool Player::UpdateWeapon() {
 	return true;
 }
 
-bool Player::GetBounds(view_matrix_t matrix, Vec2_t size, std::pair<Vec2_t, Vec2_t>& bounds) {
+bool Player::GetBounds(view_matrix_t matrix, Vec2_t size, std::pair<Vec2_t, Vec2_t>& bounds) const {
 	Vec2_t origin;
 	bool pt1 = matrix.wts(this->pos, size, origin);
 

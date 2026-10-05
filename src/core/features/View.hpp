@@ -12,12 +12,19 @@ public:
     static bool Init();
     static bool IsAvailable();
     static bool IsThirdPersonAvailable();
+    // Third person is on right now, by its key or forced by the free cam
+    static bool IsThirdPersonOn();
 
     // The viewmodel_* console variables were found
     static bool IsViewmodelAvailable();
 
     // Restores what was changed in the game, on exit
     static void Shutdown();
+
+    // ConVarData of a console variable of the game, its float value at VALUE. 0 when not there. Replicated ones hold
+    // the value of the server we play on
+    static uintptr_t FindConVar(std::string_view name);
+    static constexpr size_t CONVAR_VALUE = 0x58;
 private:
     View() {};
 

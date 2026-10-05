@@ -24,7 +24,13 @@
 #include "core/engine/Engine.hpp"
 #include "gui/renderer/Renderer.hpp"
 #include "core/features/View.hpp"
+#include "core/features/Freecam.hpp"
 #include "core/features/Skins.hpp"
+#include "core/features/Movement.hpp"
+#include "core/features/AutoAccept.hpp"
+#include "core/features/ClanTag.hpp"
+#include "core/features/Subtick.hpp"
+#include "core/features/Visuals.hpp"
 #include "core/engine/GameThread.hpp"
 
 #include <external/exception.hpp>
@@ -34,8 +40,9 @@ int main()
     c_exception_handler::setup();
 
     LogHelper::Init();
+    LogHelper::Banner();
 
-    LOGF(INFO, "Compiled {}, Welcome to cs2-external-esp-recode!", __TIMESTAMP__);
+    LOGF(INFO, "Compiled {}, welcome to CS2-EXTERNAL!", __TIMESTAMP__);
 
     // Needs to be ran as ADMINISTRATOR
     if (!SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS))
@@ -62,8 +69,14 @@ int main()
     // Locking
     Renderer::Thread();
 
+    Freecam::Shutdown();
     View::Shutdown();
     Skins::Shutdown();
+    Movement::Shutdown();
+    AutoAccept::Shutdown();
+    ClanTag::Shutdown();
+    Subtick::Shutdown();
+    Visuals::Shutdown();
     GameThread::Shutdown();
 
 exit:

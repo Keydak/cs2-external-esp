@@ -32,7 +32,12 @@ private:
     std::vector<WORD> StrSigToArray(const std::string& sig);
     DWORD64 Scan(const std::string sig, ProcessModule module);
     bool ResolveThirdPerson(ProcessModule client);
+    bool ResolveCamera(ProcessModule client);
+
+    // A short conditional jump we turn into jmp: true when it is opcode, put back first when an earlier run left it jmp
+    bool RestoreJump(uintptr_t address, uint8_t opcode);
     bool ResolveSkins(ProcessModule client);
+    bool ResolveMenuMusic(ProcessModule client);
     void GetNextArray(std::vector<short>& next, const std::vector<WORD>& signature);
     std::vector<DWORD64> ScanMemory(const std::string& sig, DWORD64 start, DWORD64 end, int number = 1);
     void ScanBlock(byte* buffer, const std::vector<short>& next, const std::vector<WORD>& signature, DWORD64 start, DWORD size, std::vector<DWORD64>& result);

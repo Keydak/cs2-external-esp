@@ -67,7 +67,7 @@ HWND pProcess::GetWindowHandleFromProcessId(DWORD ProcessId) {
 		MODULEINFO module_info;
 		DWORD _;
 
-		handle_ = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_CREATE_THREAD |
+		handle_ = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_CREATE_THREAD | PROCESS_DUP_HANDLE |
                                 PROCESS_VM_READ | PROCESS_VM_WRITE, FALSE, pid_);
 
 		if (!handle_)
@@ -145,13 +145,12 @@ ProcessModule pProcess::GetModule(const char* lModule)
 	return { 0, 0 };
 }
 
-uintptr_t pProcess::FindInterface(const char* module_name, const char* interface_name)
+uintptr_t pProcess::FindExport(const char* module_name, const char* export_name)
 {
 	auto module = GetModule(module_name);
 	if (!module.base)
 		return 0;
 
-	// CreateInterface from the exports
 	auto pe = read<uint32_t>(module.base + 0x3C);
 	auto exports = read<uint32_t>(module.base + pe + 0x88);
 	if (!pe || !exports)
@@ -162,16 +161,22 @@ uintptr_t pProcess::FindInterface(const char* module_name, const char* interface
 	auto names = read<uint32_t>(module.base + exports + 0x20);
 	auto ordinals = read<uint32_t>(module.base + exports + 0x24);
 
-	uintptr_t create_interface = 0;
-	for (uint32_t i = 0; i < name_count && !create_interface; i++) {
-		char name[32]{};
+	for (uint32_t i = 0; i < name_count; i++) {
+		char name[256]{};	// C++ names are long: ?LoadKV3@@... is 70
 		read_raw(module.base + read<uint32_t>(module.base + names + 4 * i), name, sizeof(name) - 1);
 
-		if (std::string_view(name) == "CreateInterface") {
+		if (std::string_view(name) == export_name) {
 			auto ordinal = read<uint16_t>(module.base + ordinals + 2 * i);
-			create_interface = module.base + read<uint32_t>(module.base + functions + 4 * ordinal);
+			return module.base + read<uint32_t>(module.base + functions + 4 * ordinal);
 		}
 	}
+
+	return 0;
+}
+
+uintptr_t pProcess::FindInterface(const char* module_name, const char* interface_name)
+{
+	auto create_interface = FindExport(module_name, "CreateInterface");
 	if (!create_interface)
 		return 0;
 

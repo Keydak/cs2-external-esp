@@ -27,6 +27,7 @@ struct GrenadePath {
 
 struct Grenade {
     GrenadeType type = GrenadeType::HE;
+    uintptr_t entity = 0;
     Vec3_t pos{};
     int team = 0;
     bool detonated = false;     // Smoke popped or fire burning, no more flight

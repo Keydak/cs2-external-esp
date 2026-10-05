@@ -229,11 +229,17 @@
     <ClCompile Include="updater\Updater.cpp" />
     <ClCompile Include="core\engine\classes\Weapon.cpp" />
     <ClCompile Include="core\features\Movement.cpp" />
+    <ClCompile Include="core\features\AutoAccept.cpp" />
+    <ClCompile Include="core\features\ClanTag.cpp" />
+    <ClCompile Include="core\features\Subtick.cpp" />
+    <ClCompile Include="core\features\Visuals.cpp" />
+    <ClCompile Include="core\features\Freecam.cpp" />
     <ClCompile Include="core\features\View.cpp" />
     <ClCompile Include="core\features\GameRadar.cpp" />
     <ClCompile Include="core\engine\GameThread.cpp" />
     <ClCompile Include="core\features\Skins.cpp" />
     <ClCompile Include="gui\frontend\images\ImageCache.cpp" />
+    <ClCompile Include="gui\frontend\images\Avatars.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="assets\fonts\Icons.h" />
@@ -243,11 +249,17 @@
     <ClInclude Include="assets\models\PlayerPreviews.h" />
     <ClInclude Include="common.hpp" />
     <ClInclude Include="core\features\Movement.hpp" />
+    <ClInclude Include="core\features\AutoAccept.hpp" />
+    <ClInclude Include="core\features\ClanTag.hpp" />
+    <ClInclude Include="core\features\Subtick.hpp" />
+    <ClInclude Include="core\features\Visuals.hpp" />
+    <ClInclude Include="core\features\Freecam.hpp" />
     <ClInclude Include="core\features\View.hpp" />
     <ClInclude Include="core\features\GameRadar.hpp" />
     <ClInclude Include="core\engine\GameThread.hpp" />
     <ClInclude Include="core\features\Skins.hpp" />
     <ClInclude Include="gui\frontend\images\ImageCache.hpp" />
+    <ClInclude Include="gui\frontend\images\Avatars.hpp" />
     <ClInclude Include="config\Config.hpp" />
     <ClInclude Include="config\Current.hpp" />
     <ClInclude Include="core\engine\cache\Cache.hpp" />

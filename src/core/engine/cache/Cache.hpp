@@ -7,6 +7,8 @@
 #include "core/engine/classes/Items.hpp"
 #include "core/engine/classes/GrenadePrediction.hpp"
 
+#include <memory>
+
 using namespace std::chrono;
 
 struct Snapshot {
@@ -39,9 +41,15 @@ public:
 
 	static Snapshot CopySnapshot();
 
+	// The last finished refresh, shared & never changed: taking it costs nothing & never waits on a refresh.
+	// For what runs every frame, CopySnapshot copies all the players
+	static std::shared_ptr<const Snapshot> Current();
+
 	static bool Refresh();
 private:
 	std::mutex mtx;
+	std::mutex publish_mtx;		// Only around swapping the pointer
+	std::shared_ptr<const Snapshot> published;
 	milliseconds duration{1};
 	steady_clock::time_point last{};
 
@@ -53,8 +61,8 @@ private:
 	milliseconds grenade_rate{30};
 	steady_clock::time_point last_grenade_scan{};
 
-	// Who we can see, by player index
-	std::unordered_map<int, bool> visibility;
+	// Which bones we can see, by player index
+	std::unordered_map<int, uint32_t> visibility;
 	milliseconds visibility_rate{15};
 	steady_clock::time_point last_visibility{};
 

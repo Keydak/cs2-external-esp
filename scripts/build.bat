@@ -55,11 +55,15 @@ set SRCS=scripts\msvc\compatibility.cpp ^
          src/core/engine/classes/Weapon.cpp ^
          src/core/engine/classes/ObserverServices.cpp ^
          src/core/features/Movement.cpp ^
+         src/core/features/AutoAccept.cpp ^
+         src/core/features/ClanTag.cpp ^
+         src/core/features/Subtick.cpp ^
          src/core/features/View.cpp ^
          src/core/features/GameRadar.cpp ^
          src/core/engine/GameThread.cpp ^
          src/core/features/Skins.cpp ^
          src/gui/frontend/images/ImageCache.cpp ^
+         src/gui/frontend/images/Avatars.cpp ^
          src/core/logger/LogHelper.cpp ^
          src/core/memory/Memory.cpp ^
          src/core/offsets/Dumper.cpp ^

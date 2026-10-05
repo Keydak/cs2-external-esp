@@ -16,7 +16,11 @@ namespace {
 
     constexpr uintptr_t JOB_STATE = 0x00;       // uint32
     constexpr uintptr_t JOB_FUNCTION = 0x08;    // uint64
+    constexpr uintptr_t PAGE_VTABLE = 0x10;     // uint64, the real vtable, for a later run when this one did not put it back
+    constexpr uintptr_t PAGE_MAGIC = 0x18;      // uint64
+    constexpr uint64_t MAGIC = 0x4854474D41474543; // "CEGAMGTH"
     constexpr uintptr_t JOB_THREAD = 0x20;      // uint32, id of the main thread
+    constexpr uintptr_t JOB_NOTHING = 0x30;     // xor eax, eax; ret, what a cancelled job runs instead
 
     constexpr uintptr_t COMMON_STUB = 0x40;
     constexpr uintptr_t ENTRY_STUBS = 0x100;
@@ -33,6 +37,24 @@ bool GameThread::Init() {
 
 bool GameThread::IsAvailable() {
     return GetInstance().installed;
+}
+
+bool GameThread::Ensure() {
+    auto& i = GetInstance();
+    if (i.installed)
+        return true;
+
+    std::lock_guard<std::mutex> lock(i.mtx);
+    i.RetryInstall();
+    return i.installed;
+}
+
+void GameThread::RetryInstall() {
+    if (this->installed || !Engine::IsInsecure() || std::chrono::steady_clock::now() < this->next_install)
+        return;
+
+    this->next_install = std::chrono::steady_clock::now() + 5s;
+    InitImpl();
 }
 
 bool GameThread::Call(uintptr_t function, DWORD timeout_ms) {
@@ -79,6 +101,49 @@ uint32_t GameThread::FindMainThread() {
     return result;
 }
 
+uintptr_t GameThread::FindLeftoverVtable(uintptr_t copy, uintptr_t client, size_t image_size) {
+    auto p = Engine::GetProcess();
+
+    constexpr size_t TABLE = ENTRY_STUBS + MAX_ENTRIES * ENTRY_STUB_SIZE + sizeof(uintptr_t);
+    auto page = copy - TABLE;
+
+    // A page of ours knows the real one
+    if (p->read<uint64_t>(page + PAGE_MAGIC) == MAGIC) {
+        auto real = p->read<uintptr_t>(page + PAGE_VTABLE);
+        LOGF(INFO, "The CCSGOInput vtable was still ours from an earlier run, real one at 0x{:X}", real);
+        return real;
+    }
+
+    // Older pages did not store it: the first stub holds the first function (mov rax, function), the RTTI
+    // pointer before the copy is the one before the real vtable
+    uint8_t stub[10]{};
+    p->read_raw(p->read<uintptr_t>(copy), stub, sizeof(stub));
+    if (stub[0] != 0x48 || stub[1] != 0xB8)
+        return 0;
+
+    uintptr_t first = *reinterpret_cast<uintptr_t*>(&stub[2]);
+    uintptr_t rtti = p->read<uintptr_t>(copy - sizeof(uintptr_t));
+
+    constexpr size_t CHUNK = 1 << 20;
+    std::vector<uint8_t> buffer(CHUNK + sizeof(uintptr_t) * 2);
+
+    for (size_t offset = 0; offset < image_size; offset += CHUNK) {
+        size_t size = std::min(buffer.size(), image_size - offset);
+        if (!p->read_raw(client + offset, buffer.data(), size))
+            continue;
+
+        for (size_t i = 0; i + sizeof(uintptr_t) * 2 <= size; i += sizeof(uintptr_t)) {
+            if (*reinterpret_cast<uintptr_t*>(&buffer[i]) == rtti && *reinterpret_cast<uintptr_t*>(&buffer[i + 8]) == first) {
+                auto real = client + offset + i + sizeof(uintptr_t);
+                LOGF(INFO, "The CCSGOInput vtable was still ours from an earlier run, real one at 0x{:X}", real);
+                return real;
+            }
+        }
+    }
+
+    return 0;
+}
+
 bool GameThread::InitImpl() {
     if (this->installed)
         return true;
@@ -101,6 +166,10 @@ bool GameThread::InitImpl() {
     auto in_client = [&](uintptr_t address) {
         return address >= client.base && address < client.base + image_size;
     };
+
+    // Still our copy from an earlier run that was closed without putting the real one back
+    if (this->vtable && !in_client(this->vtable))
+        this->vtable = FindLeftoverVtable(this->vtable, client.base, image_size);
 
     if (!this->vtable || !in_client(this->vtable)) {
         LOGF(WARNING, "Could not read the CCSGOInput vtable, calls into the game use a thread of their own");
@@ -136,6 +205,12 @@ bool GameThread::InitImpl() {
     put32(at, JOB_IDLE);
     at = JOB_THREAD;
     put32(at, main_thread);
+    at = PAGE_VTABLE;
+    put64(at, this->vtable);
+    at = PAGE_MAGIC;
+    put64(at, MAGIC);
+    at = JOB_NOTHING;
+    put(at, { 0x31, 0xC0, 0xC3 });
 
     // Common stub, rax holds the real function. Keeps the argument registers for it
     at = COMMON_STUB;
@@ -203,6 +278,7 @@ bool GameThread::InitImpl() {
     p->write_bytes(this->page, code);
     FlushInstructionCache(p->handle_, reinterpret_cast<void*>(this->page), code.size());
 
+    this->entries = entries;
     this->copy = this->page + first;
     p->write<uintptr_t>(this->object, this->copy);
     this->installed = true;
@@ -239,10 +315,7 @@ bool GameThread::CallImpl(uintptr_t function, DWORD timeout_ms) {
     std::lock_guard<std::mutex> lock(this->mtx);
 
     // The input object might not have existed yet at startup
-    if (!this->installed && Engine::IsInsecure() && std::chrono::steady_clock::now() >= this->next_install) {
-        this->next_install = std::chrono::steady_clock::now() + 5s;
-        InitImpl();
-    }
+    RetryInstall();
 
     // Without the hook, a thread of our own like before
     if (!this->installed)
@@ -262,10 +335,29 @@ bool GameThread::CallImpl(uintptr_t function, DWORD timeout_ms) {
     p->write<uint32_t>(this->page + JOB_STATE, JOB_QUEUED);
 
     if (!WaitIdle(timeout_ms)) {
-        LOGF(WARNING, "The game did not run our call in time, it stays queued");
+        // The game is loading or in the menu. Run later, the call would work on entities of a map that is gone
+        // & write into memory the game uses for something else by then. The stub reads the function only after
+        // taking the job, so the job either already runs with what is current or runs nothing
+        p->write<uintptr_t>(this->page + JOB_FUNCTION, this->page + JOB_NOTHING);
+        LOGF(WARNING, "The game did not run our call in time, it was cancelled");
         return false;
     }
 
+    return true;
+}
+
+uintptr_t GameThread::GetOriginal(size_t index) {
+    auto& i = GetInstance();
+    return i.installed && index < i.entries.size() ? i.entries[index] : 0;
+}
+
+bool GameThread::Redirect(size_t index, uintptr_t target) {
+    auto& i = GetInstance();
+    if (!i.installed || index >= i.entries.size())
+        return false;
+
+    auto p = Engine::GetProcess();
+    p->write<uintptr_t>(i.copy + index * sizeof(uintptr_t), target ? target : i.page + ENTRY_STUBS + index * ENTRY_STUB_SIZE);
     return true;
 }
 

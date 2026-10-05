@@ -6,6 +6,11 @@
 #include "core/features/View.hpp"
 #include "core/features/Skins.hpp"
 #include "core/features/GameRadar.hpp"
+#include "core/features/AutoAccept.hpp"
+#include "core/features/ClanTag.hpp"
+#include "core/features/Subtick.hpp"
+#include "core/features/Visuals.hpp"
+#include "core/features/Freecam.hpp"
 #include "core/engine/GameThread.hpp"
 
 #include <algorithm>
@@ -97,7 +102,7 @@ bool Engine::InitImpl() {
 
     auto command_line = process->ReadCommandLine();
     std::transform(command_line.begin(), command_line.end(), command_line.begin(), std::towlower);
-    this->insecure = command_line.find(L"-insecure") != std::wstring::npos;
+    this->insecure = command_line.find(L"") != std::wstring::npos;
 
     if (this->insecure)
         LOGF(INFO, "Game launched with -insecure, memory writing features are available");
@@ -130,6 +135,11 @@ bool Engine::InitImpl() {
     GameThread::Init();
     Skins::Init();
     GameRadar::Init();
+    AutoAccept::Init();
+    ClanTag::Init();
+    Subtick::Init();
+    Visuals::Init();
+    Freecam::Init();
 
     LOGF(INFO, "Successfully initialized engine...");
     return true;

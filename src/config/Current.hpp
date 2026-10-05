@@ -139,6 +139,8 @@ namespace cfg {
 			inline bool prediction = true; // Grenade in hand
 			inline bool landing = true; // Grenades in the air, thrown by anyone
 
+			inline bool smoke_area = true;	// Shape of a popped smoke on the ground
+			inline bool fire_area = true;	// Shape of a molotov fire on the ground
 			inline bool glow = true;		// Popped smokes & fires glow on the ground
 			inline bool icons = true;		// Label of each grenade
 			inline bool names = false;
@@ -169,6 +171,12 @@ namespace cfg {
 			inline bool self_only = true;
 
 			inline Vec2_t pos{ 10.f, 100.f };
+		}
+
+		// Window with the keys of the features on right now (third person, free cam)
+		namespace keybinds {
+			inline bool enabled = true;
+			inline Vec2_t pos{ 10.f, 250.f };
 		}
 
 		namespace bomb {
@@ -220,6 +228,16 @@ namespace cfg {
 		inline int third_person_mode = 0;               // Toggle, hold, always
 		inline int third_person_key = VK_XBUTTON2;
 		inline bool third_person_scoped_off = true;     // Back to first person while scoped
+
+		// Free cam: the camera flies on its own while our player stands still, see Freecam
+		inline bool freecam = false;
+		inline int freecam_key = VK_F6;                 // Toggles it
+		inline float freecam_speed = 600.f;             // Units per second, x3 with shift
+		inline float freecam_sensitivity = 1.f;         // Times the sensitivity of the game
+
+		// Dead: anyone like casual, clicks switch the player, space goes first person, third person, free cam
+		inline bool dead_spectate = true;
+		inline float spectate_distance = 100.f;         // Behind them in third person
 	}
 
 	namespace skins {
@@ -250,17 +268,65 @@ namespace cfg {
 		inline bool bhop = false;
 		inline bool quick_stop = false;
 		inline bool null_binds = false;
+		inline bool auto_strafe = false;
+		inline bool auto_strafe_space = true;   // Only while SPACE is held
+		inline int auto_strafe_mode = 0;        // Legit (keys following the mouse), subtick (steps inside each tick)
+		inline bool auto_accept = false;
 
-		// Experimental: flips between a held direction and its opposite, the legs stop following the movement
-		inline bool slide_walk = false;
-		inline int slide_walk_key = VK_XBUTTON1;  // Held to slide
-		inline float slide_walk_rate = 8.f;       // Flips per second
-		inline float slide_walk_ratio = 0.35f;    // Part of each flip spent on the opposite direction
-		inline int slide_walk_mode = 0;           // Hold, toggle, always
-		inline int slide_walk_pattern = 0;        // Timer, speed
-		inline float slide_walk_speed = 130.f;    // Speed pattern target
-		inline bool slide_walk_auto = false;      // Slide forward with no direction held
-		inline bool slide_walk_indicator = true;
+		// Clan tag in front of our name, in the scoreboard & kill feed (what the game shows us, offline)
+		inline bool clantag = false;
+		inline char clantag_text[64] = "Cs2 External";  // Several texts separated by | take turns
+		inline int clantag_mode = 0;            // ClanTag::GetModes()
+		inline float clantag_speed = 350.f;     // Milliseconds per step of the animation
+		inline int clantag_target = 0;          // Clan slot ([tag] name), before the name, after it, the whole name
+
+		inline bool name_change = false;
+		inline char name_text[33] = "";         // Empty keeps the real name
+	}
+
+	// Removals & glow written into the game
+	namespace visuals {
+		inline bool no_flash = false;
+		inline float flash_alpha = 0.f;         // 0 - 255, how white a flash still gets
+		inline bool no_smoke = false;
+
+		// Players tinted in a color by the game itself (its render color), seen where the model is seen
+		namespace chams {
+			// Textured: the model in the color. Glow: the spawn protection shader of the game in the color
+			enum type_t { TYPE_TEXTURED, TYPE_GLOW, TYPE_BOTH, TYPE_COUNT };
+
+			inline bool enemies = false;
+			inline bool team = false;
+			inline int enemy_type = TYPE_TEXTURED;
+			inline int team_type = TYPE_TEXTURED;
+			inline color_t enemy_color{ 1.f, 0.2f, 0.6f, 1.f };
+			inline color_t team_color{ 0.2f, 0.6f, 1.f, 1.f };
+		}
+
+		namespace glow {
+			inline bool enemies = false;
+			inline bool team = false;
+			inline bool bomb = false;           // Planted C4
+			inline bool items = false;          // Dropped weapons & defuse kits
+			inline bool utility = false;        // Grenades lying around
+			inline bool dropped_bomb = false;   // C4 lying around
+			inline bool thrown = false;         // Grenades in the air
+			inline color_t enemy_color{ 1.f, 0.25f, 0.25f, 1.f };
+			inline color_t team_color{ 0.3f, 0.6f, 1.f, 1.f };
+			inline color_t bomb_color{ 1.f, 0.84f, 0.f, 1.f };
+			inline color_t item_color{ 0.85f, 0.85f, 0.9f, 1.f };
+			inline color_t utility_color{ 0.45f, 0.85f, 1.f, 1.f };
+			inline color_t dropped_bomb_color{ 1.f, 0.6f, 0.1f, 1.f };
+
+			// Grenades in the air, by type
+			namespace thrown_colors {
+				inline color_t smoke{ 0.35f, 0.9f, 0.45f, 1.f };
+				inline color_t molotov{ 1.f, 0.5f, 0.1f, 1.f };   // Also the incendiary
+				inline color_t flash{ 1.f, 1.f, 0.6f, 1.f };
+				inline color_t he{ 1.f, 0.25f, 0.25f, 1.f };
+				inline color_t decoy{ 0.75f, 0.75f, 0.8f, 1.f };
+			}
+		}
 	}
 
 	namespace settings {
@@ -268,9 +334,16 @@ namespace cfg {
 		inline bool streamproof = false;
 		inline bool vsync = false;
 		inline bool free_cpu = true;
-		inline bool frame_times = false; // Not stored, where the time of a frame goes in the watermark
+		inline bool frame_times = false; // Not stored, where the time of a frame goes in the watermark (debug builds)
+		inline bool notifications = true; // Map building, notices of the program, the ESP off message
 		inline color_t accent = { 1.f, 0.44f, 0.26f, 1.f }; // Menu
 		inline float ui_scale = 1.15f; // Menu size
+
+		// Which debug lines of the console are shown, warnings, errors & info lines always are
+		namespace logs {
+			inline bool skins = true;	// Skins, knives & agents
+			inline bool other = true;	// Every other debug line
+		}
 	}
 
 	// Not stored, just for testing

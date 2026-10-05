@@ -24,25 +24,27 @@ namespace {
         return offset.x * offset.x + offset.y * offset.y + offset.z * offset.z < radius * radius;
     }
 
-    // Visible when any part of the body can be seen from our eyes, through neither the map nor a smoke
-    bool IsVisible(const Player& local, const Player& player, const std::vector<Grenade>& grenades) {
+    // The bones seen from our eyes, through neither the map nor a smoke: a bit per bone index. Each bone of the
+    // skeleton, so it shows which part is seen. Any of them makes the player visible
+    uint32_t VisibleBones(const Player& local, const Player& player, const std::vector<Grenade>& grenades) {
         // Nothing to trace against, everything counts as visible
         if (!local.alive || !MapCollision::IsLoaded())
-            return true;
+            return ~0u;
 
-        if (player.bone_list.size() <= bone_index::foot_heel_R)
-            return true;
+        if (player.bone_list.size() <= bone_index::chest)
+            return ~0u;
 
-        // Any of these seen is enough, so a player showing only a leg or an arm counts as visible
-        const DWORD points[] = {
-            bone_index::head, bone_index::spine_2, bone_index::pelvis,
-            bone_index::hand_L, bone_index::hand_R, bone_index::elbow_L, bone_index::elbow_R,
-            bone_index::knee_L, bone_index::knee_R, bone_index::foot_heel_L, bone_index::foot_heel_R,
-        };
+        // The bones of the skeleton, each once
+        uint32_t wanted = 0;
+        for (const auto& connection : connections)
+            wanted |= 1u << connection[0] | 1u << connection[1];
 
-        for (auto bone : points) {
+        uint32_t seen = 0;
+        for (DWORD bone = 0; bone < 32; bone++) {
+            if (!(wanted & 1u << bone))
+                continue;
+
             const auto& target = player.bone_list[bone].pos;
-
             if (MapCollision::Blocked(local.eye, target))
                 continue;
 
@@ -59,15 +61,27 @@ namespace {
             }
 
             if (!smoked)
-                return true;
+                seen |= 1u << bone;
         }
 
-        return false;
+        return seen;
     }
 }
 
 bool Cache::Refresh() {
     return Get().RefreshImpl();
+}
+
+std::shared_ptr<const Snapshot> Cache::Current() {
+    auto& cache = Get();
+    {
+        std::lock_guard<std::mutex> lock(cache.publish_mtx);
+        if (cache.published)
+            return cache.published;
+    }
+
+    static const auto empty = std::make_shared<const Snapshot>();
+    return empty;
 }
 
 Snapshot Cache::CopySnapshot() {
@@ -141,13 +155,15 @@ bool Cache::RefreshImpl() {
         visibility.clear();
         for (const auto& player : scan)
             if (player.alive && !player.localplayer)
-                visibility[player.index] = IsVisible(this->local, player, grenades);
+                visibility[player.index] = VisibleBones(this->local, player, grenades);
         last_visibility = now;
     }
 
     for (auto& player : scan)
-        if (auto it = visibility.find(player.index); it != visibility.end())
-            player.visible = it->second;
+        if (auto it = visibility.find(player.index); it != visibility.end()) {
+            player.visible_bones = it->second;
+            player.visible = it->second != 0;
+        }
 
     // Game time, the newest pawn update
     float game_time = 0.f;
@@ -199,6 +215,14 @@ bool Cache::RefreshImpl() {
 
         duration = duration_cast<std::chrono::milliseconds>(last - now);
         last = now;
+    }
+
+    // Double buffered: the frame draws the last one whole while the next is read. Only this thread writes the
+    // members, read here without the lock
+    auto next = std::make_shared<const Snapshot>(Snapshot{ game, bomb, local, globals, players, grenades, items, grenade_path });
+    {
+        std::lock_guard<std::mutex> lock(publish_mtx);
+        published = std::move(next);
     }
 
     return true;

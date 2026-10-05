@@ -419,3 +419,6 @@ FodyWeavers.xsd
 CLAUDE.md
 
 skins_cache.json
+
+# Update check (local tool, its report & state)
+update-project/

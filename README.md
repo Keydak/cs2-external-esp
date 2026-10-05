@@ -18,13 +18,16 @@ Simple external ESP for Counter-Strike 2. After years of development the codebas
 * **Visibility check**: players behind walls or inside smokes are drawn differently.
 * **Game crosshair**: the crosshair overlay now follows your own CS2 crosshair settings (style, color, size, dot).
 * **Configs tab**: export / import configs & skin loadouts as separate files in `export/`, rename, delete & set one as **Default** (loaded on start).
+* **Auto accept**: clicks ACCEPT when a match is found, brings the game to the front if needed. It only looks at the game window, nothing in the game is read or written for it.
 * **Performance**: frame time breakdown in the watermark, lighter ESP & cache for low-end PCs.
 
 **Memory writing (only with `-insecure`, see the warning below)**
 * **Skin changer**: weapon skins, knives, gloves, agents & music kits (round music & MVP anthem), with player model previews.
 * **View**: custom FOV, viewmodel override (FOV 40 – 120, offsets ±20) & third person.
 * **Game radar**: enemies shown on the radar of the game.
-* **Movement**: bunny hop, quick stop, null binds & slide walk.
+* **Visuals**: no flash (with a strength slider), no smoke. Chams (players colored by the game itself) & the outline glow of the game for players, the bomb, dropped items, dropped grenades & thrown grenades (a color per type), in their ESP tabs.
+* **Movement**: bunny hop, auto strafe (follows the mouse), quick stop & null binds.
+* **Clan tag & name**: custom tag with 12 animations (blink, scroll, typing, bruteforce, wave, fade, decrypt, glitch, expand, pulse, slide…), several texts taking turns, shown in the clan slot, before / after the name or as the whole name, and a custom name. Set by the game itself on its main thread, only you see them.
 
 > [!WARNING]
 > **The features under "Memory writing" are dangerous.** They write into the memory of the game (and patch some of its code), which is far easier for an anti-cheat to notice than only reading it.
@@ -85,6 +88,8 @@ git clone --recursive https://github.com/IMXNOOBX/cs2-external-esp
 
 ## 💫 Credits
 
+* [**IMXNOOBX**](https://github.com/IMXNOOBX) for the original [cs2-external-esp](https://github.com/IMXNOOBX/cs2-external-esp), which this fork is built on.
+* [**keydak**](https://github.com/keydak) for this fork and the features added to it.
 * All [contributors](https://github.com/IMXNOOBX/cs2-external-esp/graphs/contributors) who have helped improve the project!
 * [**a2x**](https://github.com/a2x) for his [offset dumper](https://github.com/a2x/cs2-dumper) and constant updates to it!
 

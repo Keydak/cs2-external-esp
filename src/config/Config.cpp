@@ -194,6 +194,8 @@ void Config::ApplySettings(json data) {
 		cfg::esp::grenades::timers = esp["grenades"].value("timers", true);
 		cfg::esp::grenades::prediction = esp["grenades"].value("prediction", true);
 		cfg::esp::grenades::landing = esp["grenades"].value("landing", true);
+		cfg::esp::grenades::smoke_area = esp["grenades"].value("smoke_area", true);
+		cfg::esp::grenades::fire_area = esp["grenades"].value("fire_area", true);
 		cfg::esp::grenades::glow = esp["grenades"].value("glow", true);
 		cfg::esp::grenades::icons = esp["grenades"].value("icons", true);
 		cfg::esp::grenades::names = esp["grenades"].value("names", false);
@@ -220,6 +222,14 @@ void Config::ApplySettings(json data) {
 	cfg::world::spectators::detailed = data["world"]["spectators"].value("detailed", false);
 	cfg::world::spectators::self_only = data["world"]["spectators"].value("self_only", true);
 	cfg::world::spectators::pos = JsonToVec2(data["world"]["spectators"], "pos", {10.f, 100.f});
+
+	// New, missing in configs made before it: value() of the null that [] makes throws & stops the whole load
+	cfg::world::keybinds::enabled = true;
+	cfg::world::keybinds::pos = { 10.f, 250.f };
+	if (data["world"].contains("keybinds") && data["world"]["keybinds"].is_object()) {
+		cfg::world::keybinds::enabled = data["world"]["keybinds"].value("enabled", true);
+		cfg::world::keybinds::pos = JsonToVec2(data["world"]["keybinds"], "pos", { 10.f, 250.f });
+	}
 
 	// bomb
 	cfg::world::bomb::location = data["world"]["bomb"].value("location", true);
@@ -250,15 +260,59 @@ void Config::ApplySettings(json data) {
 		cfg::misc::bhop = data["misc"].value("bhop", false);
 		cfg::misc::quick_stop = data["misc"].value("quick_stop", false);
 		cfg::misc::null_binds = data["misc"].value("null_binds", false);
-		cfg::misc::slide_walk = data["misc"].value("slide_walk", false);
-		cfg::misc::slide_walk_key = data["misc"].value("slide_walk_key", VK_XBUTTON1);
-		cfg::misc::slide_walk_rate = data["misc"].value("slide_walk_rate", 8.f);
-		cfg::misc::slide_walk_ratio = data["misc"].value("slide_walk_ratio", 0.35f);
-		cfg::misc::slide_walk_mode = data["misc"].value("slide_walk_mode", 0);
-		cfg::misc::slide_walk_pattern = data["misc"].value("slide_walk_pattern", 0);
-		cfg::misc::slide_walk_speed = data["misc"].value("slide_walk_speed", 130.f);
-		cfg::misc::slide_walk_auto = data["misc"].value("slide_walk_auto", false);
-		cfg::misc::slide_walk_indicator = data["misc"].value("slide_walk_indicator", true);
+		cfg::misc::auto_strafe = data["misc"].value("auto_strafe", false);
+		cfg::misc::auto_strafe_space = data["misc"].value("auto_strafe_space", true);
+		cfg::misc::auto_strafe_mode = std::clamp(data["misc"].value("auto_strafe_mode", 0), 0, 1);
+		cfg::misc::auto_accept = data["misc"].value("auto_accept", false);
+		cfg::misc::clantag = data["misc"].value("clantag", false);
+		cfg::misc::clantag_mode = std::clamp(data["misc"].value("clantag_mode", 0), 0, 11);
+		cfg::misc::clantag_speed = std::clamp(data["misc"].value("clantag_speed", 350.f), 100.f, 1500.f);
+		snprintf(cfg::misc::clantag_text, sizeof(cfg::misc::clantag_text), "%s", data["misc"].value("clantag_text", std::string("Cs2 External")).c_str());
+		cfg::misc::clantag_target = std::clamp(data["misc"].value("clantag_target", data["misc"].value("clantag_brackets", true) ? 0 : 1), 0, 3);
+		cfg::misc::name_change = data["misc"].value("name_change", false);
+		snprintf(cfg::misc::name_text, sizeof(cfg::misc::name_text), "%s", data["misc"].value("name_text", std::string()).c_str());
+	}
+
+	// visuals
+	if (data.contains("visuals")) {
+		namespace vis = cfg::visuals;
+		const auto& from = data["visuals"];
+		vis::no_flash = from.value("no_flash", false);
+		vis::flash_alpha = std::clamp(from.value("flash_alpha", 0.f), 0.f, 255.f);
+		vis::no_smoke = from.value("no_smoke", false);
+
+		if (from.contains("chams")) {
+			const auto& chams = from["chams"];
+			vis::chams::enemies = chams.value("enemies", false);
+			vis::chams::team = chams.value("team", false);
+			vis::chams::enemy_type = std::clamp(chams.value("enemy_type", 0), 0, vis::chams::TYPE_COUNT - 1);
+			vis::chams::team_type = std::clamp(chams.value("team_type", 0), 0, vis::chams::TYPE_COUNT - 1);
+			vis::chams::enemy_color = JsonToColor(chams, "enemy_color", vis::chams::enemy_color);
+			vis::chams::team_color = JsonToColor(chams, "team_color", vis::chams::team_color);
+		}
+
+		if (from.contains("glow")) {
+			const auto& glow = from["glow"];
+			vis::glow::enemies = glow.value("enemies", false);
+			vis::glow::team = glow.value("team", false);
+			vis::glow::bomb = glow.value("bomb", false);
+			vis::glow::items = glow.value("items", false);
+			vis::glow::utility = glow.value("utility", false);
+			vis::glow::dropped_bomb = glow.value("dropped_bomb", false);
+			vis::glow::thrown = glow.value("thrown", false);
+			vis::glow::enemy_color = JsonToColor(glow, "enemy_color", vis::glow::enemy_color);
+			vis::glow::team_color = JsonToColor(glow, "team_color", vis::glow::team_color);
+			vis::glow::bomb_color = JsonToColor(glow, "bomb_color", vis::glow::bomb_color);
+			vis::glow::item_color = JsonToColor(glow, "item_color", vis::glow::item_color);
+			vis::glow::utility_color = JsonToColor(glow, "utility_color", vis::glow::utility_color);
+			vis::glow::dropped_bomb_color = JsonToColor(glow, "dropped_bomb_color", vis::glow::dropped_bomb_color);
+			namespace thrown = vis::glow::thrown_colors;
+			thrown::smoke = JsonToColor(glow, "thrown_smoke", thrown::smoke);
+			thrown::molotov = JsonToColor(glow, "thrown_molotov", thrown::molotov);
+			thrown::flash = JsonToColor(glow, "thrown_flash", thrown::flash);
+			thrown::he = JsonToColor(glow, "thrown_he", thrown::he);
+			thrown::decoy = JsonToColor(glow, "thrown_decoy", thrown::decoy);
+		}
 	}
 
 	// view
@@ -269,6 +323,12 @@ void Config::ApplySettings(json data) {
 		cfg::view::third_person_mode = data["view"].value("third_person_mode", 0);
 		cfg::view::third_person_key = data["view"].value("third_person_key", VK_XBUTTON2);
 		cfg::view::third_person_scoped_off = data["view"].value("third_person_scoped_off", true);
+		cfg::view::freecam = data["view"].value("freecam", false);
+		cfg::view::freecam_key = data["view"].value("freecam_key", VK_F6);
+		cfg::view::freecam_speed = std::clamp(data["view"].value("freecam_speed", 600.f), 100.f, 3000.f);
+		cfg::view::freecam_sensitivity = std::clamp(data["view"].value("freecam_sensitivity", 1.f), 0.1f, 5.f);
+		cfg::view::spectate_distance = std::clamp(data["view"].value("spectate_distance", 100.f), 40.f, 300.f);
+		cfg::view::dead_spectate = data["view"].value("dead_spectate", true);
 		cfg::view::viewmodel_enabled = data["view"].value("viewmodel_enabled", false);
 		cfg::view::viewmodel_fov = data["view"].value("viewmodel_fov", 68.f);
 		cfg::view::viewmodel_x = data["view"].value("viewmodel_x", 2.5f);
@@ -279,11 +339,19 @@ void Config::ApplySettings(json data) {
 	// utils
 	//cfg::settings::console = data["utils"].value("console", true);
 	cfg::settings::watermark = data["utils"].value("watermark", true);
+	cfg::settings::notifications = data["utils"].value("notifications", true);
 	cfg::settings::streamproof = data["utils"].value("streamproof", false);
 	cfg::settings::vsync = data["utils"].value("vsync", true);
 	cfg::settings::free_cpu = data["utils"].value("free_cpu", true);
 	cfg::settings::accent = JsonToColor(data["utils"], "accent", cfg::settings::accent);
 	cfg::settings::ui_scale = std::clamp(data["utils"].value("ui_scale", 1.15f), 0.8f, 1.6f);
+
+	{
+		namespace logs = cfg::settings::logs;
+		auto log = data["utils"].value("log", nlohmann::json::object());
+		logs::skins = log.value("skins", true);
+		logs::other = log.value("other", true);
+	}
 	//cfg::settings::open_menu_key = data["utils"].value("open_menu_key", 0);
 }
 
@@ -350,6 +418,8 @@ json Config::SettingsJson() {
 	data["esp"]["grenades"]["timers"] = cfg::esp::grenades::timers;
 	data["esp"]["grenades"]["prediction"] = cfg::esp::grenades::prediction;
 	data["esp"]["grenades"]["landing"] = cfg::esp::grenades::landing;
+	data["esp"]["grenades"]["smoke_area"] = cfg::esp::grenades::smoke_area;
+	data["esp"]["grenades"]["fire_area"] = cfg::esp::grenades::fire_area;
 	data["esp"]["grenades"]["glow"] = cfg::esp::grenades::glow;
 	data["esp"]["grenades"]["icons"] = cfg::esp::grenades::icons;
 	data["esp"]["grenades"]["names"] = cfg::esp::grenades::names;
@@ -362,6 +432,9 @@ json Config::SettingsJson() {
 	data["world"]["spectators"]["detailed"] = cfg::world::spectators::detailed;
 	data["world"]["spectators"]["self_only"] = cfg::world::spectators::self_only;
 	Vec2ToJson(data["world"]["spectators"], "pos", cfg::world::spectators::pos);
+
+	data["world"]["keybinds"]["enabled"] = cfg::world::keybinds::enabled;
+	Vec2ToJson(data["world"]["keybinds"], "pos", cfg::world::keybinds::pos);
 
 	// bomb
 	data["world"]["bomb"]["location"] = cfg::world::bomb::location;
@@ -404,15 +477,54 @@ json Config::SettingsJson() {
 	data["misc"]["bhop"] = cfg::misc::bhop;
 	data["misc"]["quick_stop"] = cfg::misc::quick_stop;
 	data["misc"]["null_binds"] = cfg::misc::null_binds;
-	data["misc"]["slide_walk"] = cfg::misc::slide_walk;
-	data["misc"]["slide_walk_key"] = cfg::misc::slide_walk_key;
-	data["misc"]["slide_walk_rate"] = cfg::misc::slide_walk_rate;
-	data["misc"]["slide_walk_ratio"] = cfg::misc::slide_walk_ratio;
-	data["misc"]["slide_walk_mode"] = cfg::misc::slide_walk_mode;
-	data["misc"]["slide_walk_pattern"] = cfg::misc::slide_walk_pattern;
-	data["misc"]["slide_walk_speed"] = cfg::misc::slide_walk_speed;
-	data["misc"]["slide_walk_auto"] = cfg::misc::slide_walk_auto;
-	data["misc"]["slide_walk_indicator"] = cfg::misc::slide_walk_indicator;
+	data["misc"]["auto_strafe"] = cfg::misc::auto_strafe;
+	data["misc"]["auto_strafe_space"] = cfg::misc::auto_strafe_space;
+	data["misc"]["auto_strafe_mode"] = cfg::misc::auto_strafe_mode;
+	data["misc"]["auto_accept"] = cfg::misc::auto_accept;
+	data["misc"]["clantag"] = cfg::misc::clantag;
+	data["misc"]["clantag_mode"] = cfg::misc::clantag_mode;
+	data["misc"]["clantag_speed"] = cfg::misc::clantag_speed;
+	data["misc"]["clantag_text"] = std::string(cfg::misc::clantag_text);
+	data["misc"]["clantag_target"] = cfg::misc::clantag_target;
+	data["misc"]["name_change"] = cfg::misc::name_change;
+	data["misc"]["name_text"] = std::string(cfg::misc::name_text);
+
+	// visuals
+	{
+		namespace vis = cfg::visuals;
+		auto& to = data["visuals"];
+		to["no_flash"] = vis::no_flash;
+		to["flash_alpha"] = vis::flash_alpha;
+		to["no_smoke"] = vis::no_smoke;
+
+		auto& chams = to["chams"];
+		chams["enemies"] = vis::chams::enemies;
+		chams["team"] = vis::chams::team;
+		chams["enemy_type"] = vis::chams::enemy_type;
+		chams["team_type"] = vis::chams::team_type;
+		ColorToJson(chams, "enemy_color", vis::chams::enemy_color);
+		ColorToJson(chams, "team_color", vis::chams::team_color);
+
+		auto& glow = to["glow"];
+		glow["enemies"] = vis::glow::enemies;
+		glow["team"] = vis::glow::team;
+		glow["bomb"] = vis::glow::bomb;
+		glow["items"] = vis::glow::items;
+		glow["utility"] = vis::glow::utility;
+		glow["dropped_bomb"] = vis::glow::dropped_bomb;
+		glow["thrown"] = vis::glow::thrown;
+		ColorToJson(glow, "enemy_color", vis::glow::enemy_color);
+		ColorToJson(glow, "team_color", vis::glow::team_color);
+		ColorToJson(glow, "bomb_color", vis::glow::bomb_color);
+		ColorToJson(glow, "item_color", vis::glow::item_color);
+		ColorToJson(glow, "utility_color", vis::glow::utility_color);
+		ColorToJson(glow, "dropped_bomb_color", vis::glow::dropped_bomb_color);
+		ColorToJson(glow, "thrown_smoke", vis::glow::thrown_colors::smoke);
+		ColorToJson(glow, "thrown_molotov", vis::glow::thrown_colors::molotov);
+		ColorToJson(glow, "thrown_flash", vis::glow::thrown_colors::flash);
+		ColorToJson(glow, "thrown_he", vis::glow::thrown_colors::he);
+		ColorToJson(glow, "thrown_decoy", vis::glow::thrown_colors::decoy);
+	}
 
 	// view
 	data["view"]["fov_enabled"] = cfg::view::fov_enabled;
@@ -421,6 +533,12 @@ json Config::SettingsJson() {
 	data["view"]["third_person_mode"] = cfg::view::third_person_mode;
 	data["view"]["third_person_key"] = cfg::view::third_person_key;
 	data["view"]["third_person_scoped_off"] = cfg::view::third_person_scoped_off;
+	data["view"]["freecam"] = cfg::view::freecam;
+	data["view"]["freecam_key"] = cfg::view::freecam_key;
+	data["view"]["freecam_speed"] = cfg::view::freecam_speed;
+	data["view"]["freecam_sensitivity"] = cfg::view::freecam_sensitivity;
+	data["view"]["spectate_distance"] = cfg::view::spectate_distance;
+	data["view"]["dead_spectate"] = cfg::view::dead_spectate;
 	data["view"]["viewmodel_enabled"] = cfg::view::viewmodel_enabled;
 	data["view"]["viewmodel_fov"] = cfg::view::viewmodel_fov;
 	data["view"]["viewmodel_x"] = cfg::view::viewmodel_x;
@@ -430,11 +548,16 @@ json Config::SettingsJson() {
 	// utils
 	//data["utils"]["console"] = cfg::settings::console;
 	data["utils"]["watermark"] = cfg::settings::watermark;
+	data["utils"]["notifications"] = cfg::settings::notifications;
 	data["utils"]["streamproof"] = cfg::settings::streamproof;
 	data["utils"]["vsync"] = cfg::settings::vsync;
 	data["utils"]["free_cpu"] = cfg::settings::free_cpu;
 	ColorToJson(data["utils"], "accent", cfg::settings::accent);
 	data["utils"]["ui_scale"] = cfg::settings::ui_scale;
+	data["utils"]["log"] = {
+		{ "skins", cfg::settings::logs::skins },
+		{ "other", cfg::settings::logs::other },
+	};
 	//data["utils"]["open_menu_key"] = cfg::settings::open_menu_key;
 
 	return data;
@@ -586,7 +709,7 @@ std::filesystem::path Config::PresetFolder(Preset kind) {
 std::string Config::CleanPresetName(const std::string& name) {
 	std::string clean;
 	for (char c : name) {
-		if (static_cast<unsigned char>(c) < 32 || std::string_view("<>:\"/\|?*").find(c) != std::string_view::npos)
+		if (static_cast<unsigned char>(c) < 32 || std::string_view("<>:\"/\\|?*").find(c) != std::string_view::npos)
 			continue;
 		clean += c;
 	}

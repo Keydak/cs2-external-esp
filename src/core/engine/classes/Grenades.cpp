@@ -209,20 +209,9 @@ void Grenades::ReadGrenade(uintptr_t entity, GrenadeType type, steady_clock::tim
         state.first_seen = now;
     state.seen = true;
 
-    // TEMP: compare real throws with the last prediction, for calibration
-    if (inserted && type != GrenadeType::Fire) {
-        auto start = p->read<Vec3_t>(entity + offsets::grenade::m_vInitialPosition);
-        auto velocity = p->read<Vec3_t>(entity + offsets::grenade::m_vInitialVelocity);
-        auto& ps = GrenadePrediction::last_start;
-        auto& pv = GrenadePrediction::last_velocity;
-
-        LOGF(INFO, "[nade] actual start=({:.1f} {:.1f} {:.1f}) vel=({:.1f} {:.1f} {:.1f}) | predicted start=({:.1f} {:.1f} {:.1f}) vel=({:.1f} {:.1f} {:.1f})",
-            start.x, start.y, start.z, velocity.x, velocity.y, velocity.z,
-            ps.x, ps.y, ps.z, pv.x, pv.y, pv.z);
-    }
-
     Grenade grenade;
     grenade.type = type;
+    grenade.entity = entity;
     grenade.team = p->read<uint8_t>(entity + offsets::pawn::m_iTeamNum);
 
     if (auto node = p->read<uintptr_t>(entity + offsets::pawn::m_pGameSceneNode))
@@ -238,12 +227,6 @@ void Grenades::ReadGrenade(uintptr_t entity, GrenadeType type, steady_clock::tim
         if (!state.detonated) {
             state.detonated = true;
             state.detonated_at = now;
-
-            // TEMP: how far the landing prediction was from the real smoke, for calibration
-            if (state.landing.valid) {
-                LOGF(INFO, "[nade] smoke landed {:.1f}u from its prediction (predicted {:.2f}s, took {:.2f}s)",
-                    state.landing.end.dist_to_3d(grenade.pos), state.landing.time, SecondsSince(state.first_seen, now));
-            }
         }
 
         // Shaped once against the map, a plain disc until its collision is loaded

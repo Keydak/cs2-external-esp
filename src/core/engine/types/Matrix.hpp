@@ -4,11 +4,14 @@ struct view_matrix_t {
     float* operator[ ](int index) {
         return matrix[index];
     }
+    const float* operator[ ](int index) const {
+        return matrix[index];
+    }
 
     float matrix[4][4];
 
 	// World To Screen
-	bool wts(const Vec3_t& pos, const Vec2_t& screen, Vec2_t& out, bool check_bounds = true) {
+	bool wts(const Vec3_t& pos, const Vec2_t& screen, Vec2_t& out, bool check_bounds = true) const {
 		auto bounds = RECT(
 			0, 0,
 			screen.x,

@@ -14,8 +14,8 @@ public:
     static ImTextureID Get(const std::string& url);
 
     // PNG or JPEG bytes made into a texture right away, the gray of another image as its transparency
-    // when given (JPEG has none). 0 when it fails
-    static ImTextureID FromMemory(const void* data, size_t size, const void* alpha = nullptr, size_t alpha_size = 0);
+    // when given (JPEG has none). silhouette: all white, only the shape, to be tinted. 0 when it fails
+    static ImTextureID FromMemory(const void* data, size_t size, const void* alpha = nullptr, size_t alpha_size = 0, bool silhouette = false);
 private:
     ImageCache() {};
 

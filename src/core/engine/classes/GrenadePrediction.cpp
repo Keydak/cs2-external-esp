@@ -156,9 +156,6 @@ bool GrenadePrediction::Predict(uintptr_t pawn, GrenadePath& path) {
 
     auto velocity = forward * (THROW_SPEED * (strength * 0.7f + 0.3f)) + player_velocity * PLAYER_VELOCITY_SCALE;
 
-    last_start = position;
-    last_velocity = velocity;
-
     return Simulate(*type, position, velocity, path);
 }
 

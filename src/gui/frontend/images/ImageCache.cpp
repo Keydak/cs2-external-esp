@@ -110,7 +110,7 @@ namespace {
     }
 }
 
-ImTextureID ImageCache::FromMemory(const void* data, size_t size, const void* alpha, size_t alpha_size) {
+ImTextureID ImageCache::FromMemory(const void* data, size_t size, const void* alpha, size_t alpha_size, bool silhouette) {
     // Decoding needs COM on this thread, fine when it is already there in another mode
     HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
@@ -125,6 +125,10 @@ ImTextureID ImageCache::FromMemory(const void* data, size_t size, const void* al
         if (masked)
             for (size_t i = 0; i < pixels.size(); i += 4)
                 pixels[i + 3] = mask[i];
+
+        if (silhouette)
+            for (size_t i = 0; i < pixels.size(); i += 4)
+                pixels[i] = pixels[i + 1] = pixels[i + 2] = 255;
 
         if (masked || !alpha)
             texture = CreateTexture(pixels, width, height);

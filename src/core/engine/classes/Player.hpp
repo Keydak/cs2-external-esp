@@ -10,7 +10,7 @@ public:
         : index(index), entity_list(el), list_entry(le){}
 
     bool Update();
-    bool GetBounds(view_matrix_t matrix, Vec2_t size, std::pair<Vec2_t, Vec2_t>& bounds);
+    bool GetBounds(view_matrix_t matrix, Vec2_t size, std::pair<Vec2_t, Vec2_t>& bounds) const;
     uintptr_t GetPawnAddress() const { return pawn; }
 public:
     int8_t index = -1; // To use as invalid/un-initialize check
@@ -34,6 +34,7 @@ public:
     bool localplayer = false;
     bool has_c4 = false;
     bool visible = true;            // Seen from our eyes, through neither the map nor a smoke. Set by the cache
+    uint32_t visible_bones = ~0u;   // The same for each bone, a bit per bone index. Any of them makes it visible
     bool has_defuser = false;
     float simulation_time = 0.f;    // Game time the pawn was last updated at
 
