@@ -8,8 +8,18 @@
 #include "gui/frontend/images/Avatars.hpp"
 #include "core/features/View.hpp"
 #include "core/features/Freecam.hpp"
+#include "core/features/Subtick.hpp"
+#include "core/features/Movement.hpp"
+
+#include "core/engine/Engine.hpp"
+#include "core/offsets/Dumper.hpp"
+#include "core/features/VoteEvents.hpp"
 
 #include <algorithm>
+#include <cstring>
+#include <ctime>
+#include <deque>
+#include <optional>
 #include <unordered_map>
 
 bool Overlays::Init() {
@@ -64,6 +74,7 @@ void Overlays::RenderImpl() {
     {
         RenderSpectatorList();
         RenderKeybinds();
+        RenderVotes();
         RenderSpeedChart();
         RenderRadar();
         RenderBomb();
@@ -483,6 +494,24 @@ void Overlays::RenderKeybinds() {
     }
     if (cfg::view::freecam && (free_cam || is_menu_open))
         rows.push_back({ "Free Cam", Menu::GetKeyName(cfg::view::freecam_key), "Toggle", free_cam });
+
+    // Movement, unless picked to be hidden
+    namespace kb = cfg::world::keybinds;
+    bool bhop = cfg::misc::bhop && Movement::IsPlaying() && (GetAsyncKeyState(VK_SPACE) & 0x8000);
+    if (cfg::misc::bhop && Movement::IsAvailable() && !kb::hide_bhop && (bhop || is_menu_open))
+        rows.push_back({ "Bunny Hop", Menu::GetKeyName(VK_SPACE), "Hold", bhop });
+
+    bool air_strafe = Subtick::IsAirStrafeOn();
+    if (cfg::misc::auto_strafe && Subtick::IsAvailable() && !kb::hide_air_strafe && (air_strafe || is_menu_open)) {
+        int mode = std::clamp(cfg::misc::air_strafe_mode, 0, 2);
+        rows.push_back({ "Air Strafe", mode == 2 ? std::string("-") : Menu::GetKeyName(cfg::misc::air_strafe_key), THIRD_PERSON_MODES[mode], air_strafe });
+    }
+
+    bool jump_bug = Subtick::IsJumpBugOn();
+    if (cfg::misc::jump_bug && Subtick::IsAvailable() && !kb::hide_jump_bug && (jump_bug || is_menu_open)) {
+        int mode = std::clamp(cfg::misc::jump_bug_mode, 0, 2);
+        rows.push_back({ "Jump Bug", mode == 2 ? std::string("-") : Menu::GetKeyName(cfg::misc::jump_bug_key), THIRD_PERSON_MODES[mode], jump_bug });
+    }
 
     // Fades in when a key turns something on & out after, showing the last rows meanwhile. Each row fades in
     // on its own too, sliding in from the left
@@ -1199,3 +1228,472 @@ void Overlays::RenderEspStatus() {
     d->AddText(this->font, this->font->LegacySize, pos, IM_COL32(255, 255, 255, 255), message, nullptr, max_width);
 }
 
+namespace {
+    // What a vote is about, by the index of its issue on the server (the order Counter-Strike registers them in)
+    const char* VoteIssueName(int issue) {
+        static const char* names[] = {
+            "Kick", "Change Map", "Next Map", "Swap Teams", "Scramble Teams", "Restart Match", "Surrender", "Rematch",
+            "Continue", "Pause Match", "Unpause Match", "Load Backup", "End Warmup", "Timeout", "End Timeout",
+            "Ready", "Not Ready",
+        };
+        return issue >= 0 && issue < IM_ARRAYSIZE(names) ? names[issue] : "Vote";
+    }
+
+    struct VoteState {
+        int issue = -1;     // -1 without a vote
+        int team = -1;      // Who votes: -1 everyone, else the team number
+        int yes = 0, no = 0, potential = 0;
+    };
+
+    // The vote controller entity, looked for by its designer name now & then
+    uintptr_t FindVoteController() {
+        static uintptr_t controller = 0;
+        static std::chrono::steady_clock::time_point next_search{};
+
+        auto p = Engine::GetProcess();
+        if (!p)
+            return 0;
+
+        auto now = std::chrono::steady_clock::now();
+        if (controller && now < next_search)
+            return controller;
+        next_search = now + std::chrono::seconds(5);
+        controller = 0;
+
+        auto entity_list = p->read<uintptr_t>(Engine::GetClient().base + offsets::entityList);
+        static bool logged_list = false;
+        if (!logged_list) {
+            logged_list = true;
+            LOGF(VERBOSE, "Vote list: client {:#x}, entity list {:#x}", Engine::GetClient().base, entity_list);
+        }
+        if (!entity_list)
+            return 0;
+
+        // Identities of 0x70 in chunks of 512, the controller is made early
+        constexpr size_t IDENTITY_SIZE = 0x70;
+        std::vector<uint8_t> buffer(IDENTITY_SIZE * 512);
+
+        int seen = 0;
+        for (int chunk = 0; chunk < 64 && !controller; chunk++) {
+            auto chunk_address = p->read<uintptr_t>(entity_list + 0x10 + 0x8 * chunk);
+            if (!chunk_address || !p->read_raw(chunk_address, buffer.data(), buffer.size()))
+                continue;
+
+            for (int i = 0; i < 512; i++) {
+                auto identity = buffer.data() + IDENTITY_SIZE * i;
+                auto entity = *reinterpret_cast<uintptr_t*>(identity);
+                auto class_info = *reinterpret_cast<uintptr_t*>(identity + 0x08);
+                auto name_address = *reinterpret_cast<uintptr_t*>(identity + offsets::grenade::m_designerName);
+                if (!entity || (!class_info && !name_address))
+                    continue;
+
+                seen++;
+                char name[32]{};
+                if (name_address)
+                    p->read_raw(name_address, name, sizeof(name) - 1);
+
+                // Class info -> binding -> class name, for when the designer name is something else
+                char class_name[32]{};
+                if (class_info) {
+                    auto binding = p->read<uintptr_t>(class_info + 0x08);
+                    auto class_name_address = binding ? p->read<uintptr_t>(binding + 0x08) : 0;
+                    if (class_name_address)
+                        p->read_raw(class_name_address, class_name, sizeof(class_name) - 1);
+                }
+
+                std::string_view designer(name), klass(class_name);
+
+                if (designer == "vote_controller" || klass == "C_VoteController") {
+                    controller = entity;
+                    break;
+                }
+            }
+        }
+
+        // Once per change, found or not
+        static int logged = -1;
+        int state = controller ? 1 : 0;
+        if (state != logged) {
+            logged = state;
+            if (controller)
+                LOGF(VERBOSE, "Vote controller at {:#x}", controller);
+            else
+                LOGF(VERBOSE, "Vote controller not found among {} entities", seen);
+        }
+
+        return controller;
+    }
+
+    VoteState ReadVote() {
+        VoteState state;
+        auto p = Engine::GetProcess();
+        auto controller = FindVoteController();
+        if (!p || !controller)
+            return state;
+
+        state.issue = p->read<int32_t>(controller + offsets::votes::m_iActiveIssueIndex);
+        state.team = p->read<int32_t>(controller + offsets::votes::m_iOnlyTeamToVote);
+        state.yes = p->read<int32_t>(controller + offsets::votes::m_nVoteOptionCount);
+        state.no = p->read<int32_t>(controller + offsets::votes::m_nVoteOptionCount + 4);
+        state.potential = p->read<int32_t>(controller + offsets::votes::m_nPotentialVotes);
+
+        static std::string last;
+        auto raw = std::format("issue {} team {} yes {} no {} of {}", state.issue, state.team, state.yes, state.no, state.potential);
+        if (raw != last) {
+            last = raw;
+            LOGF(VERBOSE, "Vote controller: {}", raw);
+        }
+
+        if (state.issue < 0 || state.issue > 64)
+            state = {};
+        return state;
+    }
+}
+
+void Overlays::RenderVotes() {
+    static int logged_enabled = -1;
+    if (logged_enabled != static_cast<int>(cfg::world::votes::enabled)) {
+        logged_enabled = cfg::world::votes::enabled;
+        LOGF(VERBOSE, "Vote list {}, process {}", logged_enabled ? "on" : "off", Engine::GetProcess() ? "attached" : "not attached");
+    }
+
+    if (!cfg::world::votes::enabled)
+        return;
+
+    struct Voter {
+        std::string name;
+        uint64_t steam_id = 0;
+        int option = -1;    // 0 yes, 1 no
+    };
+
+    struct Entry {
+        VoteState vote;
+        bool ended = false;
+        bool from_events = false;   // Only the events told of it, the controller did not
+        std::vector<Voter> voters;
+
+        // The game casts the first ballots itself: yes for who called the vote, no for who it kicks
+        std::chrono::steady_clock::time_point first_ballot{};
+        std::chrono::steady_clock::time_point started_at{};
+        int caller = -1, target = -1;   // Into voters
+    };
+
+    static std::optional<Entry> last;   // The vote going on or the last one
+    static std::chrono::steady_clock::time_point next_read{}, ended_at{}, last_event{};
+    static VoteState current{};
+
+    auto start_entry = [&](const VoteState& vote, bool from_events) {
+        last.emplace();
+        last->started_at = std::chrono::steady_clock::now();
+        last->vote = vote;
+        last->from_events = from_events;
+    };
+
+    auto end_entry = [&](std::chrono::steady_clock::time_point at) {
+        last->ended = true;
+        ended_at = at;
+        LOGF(VERBOSE, "Vote ended: {} yes, {} no of {}, {} ballots seen", last->vote.yes, last->vote.no, last->vote.potential, last->voters.size());
+    };
+
+    // A few times a second is plenty for votes
+    auto now = std::chrono::steady_clock::now();
+    if (now >= next_read) {
+        next_read = now + std::chrono::milliseconds(150);
+        auto vote = ReadVote();
+
+        bool started = vote.issue >= 0 && (current.issue < 0 || vote.issue != current.issue || vote.team != current.team);
+        bool ended = current.issue >= 0 && vote.issue < 0;
+
+        if (started) {
+            // The ballots might have come in just before the controller told of the vote
+            if (last && last->from_events && !last->ended) {
+                last->vote.issue = vote.issue;
+                last->vote.team = vote.team;
+                last->from_events = false;
+            }
+            else
+                start_entry(vote, false);
+            LOGF(VERBOSE, "Vote started: issue {} ({}), team {}, {} can vote", vote.issue, VoteIssueName(vote.issue), vote.team, vote.potential);
+        }
+
+        if (vote.issue >= 0 && last) {
+            last->vote.yes = vote.yes;     // Counts as they come in
+            last->vote.no = vote.no;
+            last->vote.potential = vote.potential;
+        }
+
+        if (ended && last && !last->ended)
+            end_entry(now);
+
+        // The game keeps showing the result a while longer, the card goes as soon as it is decided: everyone voted,
+        // or more than half said yes
+        if (last && !last->ended && last->vote.issue >= 0 && last->vote.potential > 0) {
+            const auto& counts = last->vote;
+            if (counts.yes + counts.no >= counts.potential || counts.yes * 2 > counts.potential)
+                end_entry(now);
+        }
+
+        // The vote runs 15 seconds (sv_vote_timer_duration), the game hides it then & clears the controller ~5 s later
+        constexpr auto VOTE_DURATION = std::chrono::seconds(15);
+        if (last && !last->ended && now - last->started_at >= VOTE_DURATION)
+            end_entry(now);
+
+        current = vote;
+
+        // Who voted what, from our listener in the game
+        for (auto& event : VoteEvents::Take()) {
+            last_event = now;
+
+            // Ballots late to a vote we already called decided still belong to it, while the game shows it
+            if (!last || (last->ended && current.issue < 0)) {
+                VoteState unknown;
+                unknown.issue = -2;     // Some vote, the controller did not say which
+                start_entry(unknown, true);
+            }
+
+            auto& entry = *last;
+            if (event.cast) {
+                auto name = event.player.empty() ? std::format("Player {}", event.slot + 1) : event.player;
+                auto voter = std::find_if(entry.voters.begin(), entry.voters.end(), [&](const Voter& v) { return v.name == name; });
+                int index = static_cast<int>(voter - entry.voters.begin());
+                if (voter != entry.voters.end())
+                    voter->option = event.option;
+                else
+                    entry.voters.push_back({ name, event.steam_id, event.option });
+
+                // The ballots the game casts come together, right as the vote starts
+                if (entry.voters.size() == 1)
+                    entry.first_ballot = now;
+                if (now - entry.first_ballot < std::chrono::milliseconds(500)) {
+                    if (event.option == 0 && entry.caller < 0)
+                        entry.caller = index;
+                    else if (event.option == 1 && entry.target < 0)
+                        entry.target = index;
+                }
+
+                if (entry.from_events && entry.vote.team < 0)
+                    entry.vote.team = event.team;
+            }
+            else if (entry.from_events && event.yes >= 0) {
+                entry.vote.yes = event.yes;
+                entry.vote.no = event.no;
+                entry.vote.potential = event.potential;
+            }
+
+            // Without the controller, the ballots are the counts
+            if (entry.from_events) {
+                int yes = 0, no = 0;
+                for (const auto& v : entry.voters) {
+                    if (v.option == 0)
+                        yes++;
+                    else if (v.option == 1)
+                        no++;
+                }
+                entry.vote.yes = std::max(entry.vote.yes, yes);
+                entry.vote.no = std::max(entry.vote.no, no);
+            }
+        }
+
+        // A vote only the events told of ends when they stop
+        if (last && last->from_events && !last->ended && now - last_event > std::chrono::seconds(20))
+            end_entry(now);
+    }
+
+    // Shown during a vote & a while after, or with the menu open to place it
+    const bool is_menu_open = Renderer::IsOpen();
+    bool voting = last && !last->ended;
+    bool recent = last && last->ended && now - ended_at < std::chrono::milliseconds(1500);
+    bool live = voting || recent;
+    bool shown = live || is_menu_open;
+
+    // In quick like the other cards, out slower: it slides up & fades with the vote still on it
+    constexpr float LEAVE_SPEED = 2.5f;
+    static float window_alpha = 0.f;
+    float dt = ImGui::GetIO().DeltaTime;
+    window_alpha = std::clamp(window_alpha + (shown ? dt * FADE_SPEED : -dt * LEAVE_SPEED), 0.f, 1.f);
+    if (window_alpha <= 0.f)
+        return;
+
+    // Our team, to tell the votes of the enemy
+    int local_team = 0;
+    bool deathmatch = false;
+    {
+        auto snapshot = Cache::Current();
+        deathmatch = snapshot->game.deathmatch;
+        for (const auto& player : snapshot->players)
+            if (player.localplayer)
+                local_team = player.team;
+    }
+
+    // In deathmatch everyone is an enemy, whatever team the game put them in
+    auto who = [&](int team) {
+        return team < 0 ? "Everyone" : !deathmatch && team == local_team ? "Your team" : "Enemy";
+    };
+
+    const float padding = 12.f;
+    const float title_font = 15.f;
+    const float text_font = 14.f;
+    const float small_font = 12.f;
+    const float width = 280.f;
+    const float bar_height = 8.f;
+    const float avatar = 16.f;
+    const float voter_height = avatar + 5.f;
+    constexpr size_t MAX_ROWS = 6;
+
+    const ImU32 yes_color = IM_COL32(96, 200, 120, 255);
+    const ImU32 no_color = IM_COL32(225, 90, 90, 255);
+    const ImU32 text_color = IM_COL32(232, 232, 238, 255);
+    const ImU32 muted_color = IM_COL32(150, 150, 160, 255);
+
+    auto measure = [&](float size, const char* str) { return this->font_alt->CalcTextSizeA(size, FLT_MAX, 0.f, str); };
+
+    // What the card holds: the vote, who called it on whom, the bar, the ballots in a yes & a no column
+    // Leaving keeps what was on it: the vote, or the empty card when the menu closes
+    static bool had_vote = false;
+    if (shown)
+        had_vote = live;
+    const Entry* entry = last && (live || (!shown && had_vote)) ? &*last : nullptr;
+    bool kick = entry && (entry->vote.issue == 0 || entry->vote.issue == -2);
+    const Voter* caller = entry && entry->caller >= 0 ? &entry->voters[entry->caller] : nullptr;
+    const Voter* target = entry && kick && entry->target >= 0 ? &entry->voters[entry->target] : nullptr;
+
+    std::vector<const Voter*> yes_voters, no_voters;
+    if (entry) {
+        for (const auto& voter : entry->voters) {
+            if (voter.option == 0)
+                yes_voters.push_back(&voter);
+            else if (voter.option == 1)
+                no_voters.push_back(&voter);
+        }
+    }
+    size_t rows = std::min(std::max(yes_voters.size(), no_voters.size()), MAX_ROWS);
+
+    float body = text_font;
+    if (entry) {
+        if (caller)
+            body += 6.f + text_font;
+        body += 10.f + bar_height + 6.f + small_font;
+        if (rows > 0)
+            body += 14.f + rows * voter_height;
+    }
+
+    ImVec2 size(width, CARD_STRIP + padding + body + padding);
+
+    auto& pos = cfg::world::votes::pos;
+    bool hovered = is_menu_open && CardHandle("##votes", pos, size);
+
+    auto d = ImGui::GetBackgroundDrawList();
+    int card_start = d->VtxBuffer.Size;
+    float card_ease = EaseOut(window_alpha);
+    float rise = shown ? 8.f : 16.f;
+    ImVec2 min(floorf(pos.x), floorf(pos.y - (1.f - card_ease) * rise));
+    ImVec2 max = min + size;
+
+    DrawCard(d, min, max, hovered);
+
+    float left = min.x + padding, right = max.x - padding;
+    float y = min.y + CARD_STRIP + padding;
+
+    if (!entry) {
+        d->AddText(this->font_alt, text_font, ImVec2(left, y), IM_COL32(120, 120, 128, 255), "No vote right now");
+        FadeSince(d, card_start, card_ease);
+        return;
+    }
+
+    const auto& vote = entry->vote;
+
+    // "KICK" in the accent, whose vote & whether it still runs on the right
+    std::string issue = VoteIssueName(vote.issue);
+    std::transform(issue.begin(), issue.end(), issue.begin(), [](unsigned char c) { return static_cast<char>(toupper(c)); });
+    d->AddText(this->font_alt, title_font, ImVec2(left, y - 1.f), Accent(), issue.c_str());
+
+    auto state = std::format("{} \xC2\xB7 {}", who(vote.team), entry->ended ? "ended" : "voting");
+    auto state_size = measure(small_font, state.c_str());
+    d->AddText(this->font_alt, small_font, ImVec2(right - state_size.x, y + 1.f), muted_color, state.c_str());
+    y += text_font;
+
+    // "m0nesy kicks Clear", or who called a vote of another kind
+    if (caller) {
+        y += 6.f;
+        float x = left;
+        auto put = [&](const char* text, ImU32 color) {
+            d->AddText(this->font_alt, text_font, ImVec2(x, y), color, text);
+            x += measure(text_font, text).x;
+        };
+
+        d->PushClipRect(ImVec2(left, y), ImVec2(right, y + text_font + 2.f), true);
+        put(caller->name.c_str(), text_color);
+        if (target) {
+            put("  kicks  ", muted_color);
+            put(target->name.c_str(), no_color);
+        }
+        else
+            put("  called it", muted_color);
+        d->PopClipRect();
+        y += text_font;
+    }
+
+    // Yes from the left, no from the right, of everyone who can vote
+    y += 10.f;
+    float total = static_cast<float>(std::max(vote.potential, vote.yes + vote.no));
+    float bar_w = right - left;
+    ImVec2 bar_min(left, y), bar_max(right, y + bar_height);
+    d->AddRectFilled(bar_min, bar_max, IM_COL32(255, 255, 255, 18), bar_height * 0.5f);
+    if (total > 0.f) {
+        if (vote.yes > 0)
+            d->AddRectFilled(bar_min, ImVec2(left + bar_w * vote.yes / total, bar_max.y), yes_color, bar_height * 0.5f);
+        if (vote.no > 0)
+            d->AddRectFilled(ImVec2(right - bar_w * vote.no / total, bar_min.y), bar_max, no_color, bar_height * 0.5f);
+    }
+    y += bar_height + 6.f;
+
+    auto yes_text = std::format("YES {}", vote.yes);
+    auto no_text = std::format("NO {}", vote.no);
+    auto of_text = std::format("{} of {} voted", vote.yes + vote.no, vote.potential);
+    d->AddText(this->font_alt, small_font, ImVec2(left, y), yes_color, yes_text.c_str());
+    auto of_size = measure(small_font, of_text.c_str());
+    d->AddText(this->font_alt, small_font, ImVec2((left + right - of_size.x) * 0.5f, y), muted_color, of_text.c_str());
+    auto no_size = measure(small_font, no_text.c_str());
+    d->AddText(this->font_alt, small_font, ImVec2(right - no_size.x, y), no_color, no_text.c_str());
+    y += small_font;
+
+    // The ballots: yes on the left, no on the right
+    if (rows > 0) {
+        y += 6.f;
+        float middle = (left + right) * 0.5f;
+        d->AddLine(ImVec2(left, y), ImVec2(right, y), IM_COL32(255, 255, 255, 14));
+        d->AddLine(ImVec2(middle, y + 4.f), ImVec2(middle, y + 4.f + rows * voter_height), IM_COL32(255, 255, 255, 14));
+        y += 4.f;
+
+        auto draw_voter = [&](const Voter& voter, float x, float column_right, float row_y, ImU32 color) {
+            float center_y = row_y + avatar * 0.5f;
+            ImVec2 center(x + avatar * 0.5f, center_y);
+            if (auto texture = Avatars::Get(voter.steam_id)) {
+                d->AddImageRounded(texture, center - ImVec2(avatar, avatar) * 0.5f, center + ImVec2(avatar, avatar) * 0.5f,
+                    ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE, avatar * 0.5f);
+            }
+            else {
+                d->AddCircleFilled(center, avatar * 0.5f, Accent(0.22f), 20);
+                char letter[2] = { voter.name.empty() ? '?' : static_cast<char>(toupper(static_cast<unsigned char>(voter.name[0]))), 0 };
+                auto letter_size = measure(10.f, letter);
+                d->AddText(this->font_alt, 10.f, center - letter_size * 0.5f, Accent(), letter);
+            }
+            d->AddCircle(center, avatar * 0.5f + 1.f, color, 20, 1.5f);
+
+            auto name_size = measure(small_font, voter.name.c_str());
+            d->PushClipRect(ImVec2(x + avatar + 6.f, row_y), ImVec2(column_right, row_y + avatar), true);
+            d->AddText(this->font_alt, small_font, ImVec2(x + avatar + 6.f, center_y - name_size.y * 0.5f), text_color, voter.name.c_str());
+            d->PopClipRect();
+        };
+
+        for (size_t i = 0; i < rows; i++) {
+            float row_y = y + 4.f + i * voter_height;
+            if (i < yes_voters.size())
+                draw_voter(*yes_voters[i], left, middle - 6.f, row_y, yes_color);
+            if (i < no_voters.size())
+                draw_voter(*no_voters[i], middle + 8.f, right, row_y, no_color);
+        }
+    }
+
+    FadeSince(d, card_start, card_ease);
+}

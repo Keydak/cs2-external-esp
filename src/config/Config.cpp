@@ -226,9 +226,23 @@ void Config::ApplySettings(json data) {
 	// New, missing in configs made before it: value() of the null that [] makes throws & stops the whole load
 	cfg::world::keybinds::enabled = true;
 	cfg::world::keybinds::pos = { 10.f, 250.f };
+	cfg::world::keybinds::hide_bhop = false;
+	cfg::world::keybinds::hide_air_strafe = false;
+	cfg::world::keybinds::hide_jump_bug = false;
 	if (data["world"].contains("keybinds") && data["world"]["keybinds"].is_object()) {
 		cfg::world::keybinds::enabled = data["world"]["keybinds"].value("enabled", true);
 		cfg::world::keybinds::pos = JsonToVec2(data["world"]["keybinds"], "pos", { 10.f, 250.f });
+		cfg::world::keybinds::hide_bhop = data["world"]["keybinds"].value("hide_bhop", false);
+		cfg::world::keybinds::hide_air_strafe = data["world"]["keybinds"].value("hide_air_strafe", false);
+		cfg::world::keybinds::hide_jump_bug = data["world"]["keybinds"].value("hide_jump_bug", false);
+	}
+
+	cfg::world::votes::enabled = true;
+	cfg::world::votes::names = false;
+	cfg::world::votes::pos = { 10.f, 400.f };
+	if (data["world"].contains("votes") && data["world"]["votes"].is_object()) {
+		cfg::world::votes::enabled = data["world"]["votes"].value("enabled", true);
+		cfg::world::votes::pos = JsonToVec2(data["world"]["votes"], "pos", { 10.f, 400.f });
 	}
 
 	// bomb
@@ -261,8 +275,13 @@ void Config::ApplySettings(json data) {
 		cfg::misc::quick_stop = data["misc"].value("quick_stop", false);
 		cfg::misc::null_binds = data["misc"].value("null_binds", false);
 		cfg::misc::auto_strafe = data["misc"].value("auto_strafe", false);
-		cfg::misc::auto_strafe_space = data["misc"].value("auto_strafe_space", true);
-		cfg::misc::auto_strafe_mode = std::clamp(data["misc"].value("auto_strafe_mode", 0), 0, 1);
+		// Configs from before the key: "only with space" was holding SPACE, without it always
+		bool strafe_only_space = data["misc"].value("auto_strafe_space", true);
+		cfg::misc::air_strafe_mode = std::clamp(data["misc"].value("air_strafe_mode", strafe_only_space ? 1 : 2), 0, 2);
+		cfg::misc::air_strafe_key = data["misc"].value("air_strafe_key", VK_SPACE);
+		cfg::misc::jump_bug = data["misc"].value("jump_bug", false);
+		cfg::misc::jump_bug_mode = std::clamp(data["misc"].value("jump_bug_mode", 1), 0, 2);
+		cfg::misc::jump_bug_key = data["misc"].value("jump_bug_key", VK_XBUTTON1);
 		cfg::misc::auto_accept = data["misc"].value("auto_accept", false);
 		cfg::misc::clantag = data["misc"].value("clantag", false);
 		cfg::misc::clantag_mode = std::clamp(data["misc"].value("clantag_mode", 0), 0, 11);
@@ -435,6 +454,12 @@ json Config::SettingsJson() {
 
 	data["world"]["keybinds"]["enabled"] = cfg::world::keybinds::enabled;
 	Vec2ToJson(data["world"]["keybinds"], "pos", cfg::world::keybinds::pos);
+	data["world"]["keybinds"]["hide_bhop"] = cfg::world::keybinds::hide_bhop;
+	data["world"]["keybinds"]["hide_air_strafe"] = cfg::world::keybinds::hide_air_strafe;
+	data["world"]["keybinds"]["hide_jump_bug"] = cfg::world::keybinds::hide_jump_bug;
+
+	data["world"]["votes"]["enabled"] = cfg::world::votes::enabled;
+	Vec2ToJson(data["world"]["votes"], "pos", cfg::world::votes::pos);
 
 	// bomb
 	data["world"]["bomb"]["location"] = cfg::world::bomb::location;
@@ -478,8 +503,11 @@ json Config::SettingsJson() {
 	data["misc"]["quick_stop"] = cfg::misc::quick_stop;
 	data["misc"]["null_binds"] = cfg::misc::null_binds;
 	data["misc"]["auto_strafe"] = cfg::misc::auto_strafe;
-	data["misc"]["auto_strafe_space"] = cfg::misc::auto_strafe_space;
-	data["misc"]["auto_strafe_mode"] = cfg::misc::auto_strafe_mode;
+	data["misc"]["air_strafe_mode"] = cfg::misc::air_strafe_mode;
+	data["misc"]["air_strafe_key"] = cfg::misc::air_strafe_key;
+	data["misc"]["jump_bug"] = cfg::misc::jump_bug;
+	data["misc"]["jump_bug_mode"] = cfg::misc::jump_bug_mode;
+	data["misc"]["jump_bug_key"] = cfg::misc::jump_bug_key;
 	data["misc"]["auto_accept"] = cfg::misc::auto_accept;
 	data["misc"]["clantag"] = cfg::misc::clantag;
 	data["misc"]["clantag_mode"] = cfg::misc::clantag_mode;

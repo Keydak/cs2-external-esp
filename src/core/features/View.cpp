@@ -329,14 +329,18 @@ bool View::FindViewmodelClamps() {
             continue;
 
         for (size_t i = LOOK_BACK + 4; i + 16 <= size && i < CHUNK + LOOK_BACK + 4; i++) {
-            if (*reinterpret_cast<uint32_t*>(&buffer[i]) != FOV_MAX || !is_mov_imm(&buffer[i]))
+            // Our values when an earlier run was closed before it could put the game's back
+            auto fov_max = *reinterpret_cast<uint32_t*>(&buffer[i]);
+            if ((fov_max != FOV_MAX && fov_max != as_bits(VIEWMODEL_FOV_MAX)) || !is_mov_imm(&buffer[i]))
                 continue;
 
             // The min a few bytes later, in a mov to the stack as well
             size_t min_at = 0;
-            for (size_t j = i + 4; j < i + 16 && j + 4 <= size && !min_at; j++)
-                if (*reinterpret_cast<uint32_t*>(&buffer[j]) == FOV_MIN && is_mov_imm(&buffer[j]))
+            for (size_t j = i + 4; j < i + 16 && j + 4 <= size && !min_at; j++) {
+                auto fov_min = *reinterpret_cast<uint32_t*>(&buffer[j]);
+                if ((fov_min == FOV_MIN || fov_min == as_bits(VIEWMODEL_FOV_MIN)) && is_mov_imm(&buffer[j]))
                     min_at = j;
+            }
 
             if (!min_at)
                 continue;
@@ -346,16 +350,21 @@ bool View::FindViewmodelClamps() {
                 { client.base + offset + min_at, FOV_MIN, as_bits(VIEWMODEL_FOV_MIN) },
             };
 
-            // The offset limits before it, each an imm32 of a mov to the stack
+            // The offset limits before it, each an imm32 of a mov to the stack. Always x (2.5) first, then y & z (2):
+            // the order tells what a max of ours was
+            bool first_max = true;
             for (size_t k = i - LOOK_BACK; k < i; k++) {
                 auto value = *reinterpret_cast<uint32_t*>(&buffer[k]);
                 if (!is_mov_imm(&buffer[k]))
                     continue;
 
-                if (value == OFFSET_X_MAX || value == OFFSET_MAX)
-                    block.push_back({ client.base + offset + k, value, as_bits(VIEWMODEL_OFFSET_LIMIT) });
-                else if (value == OFFSET_MIN)
-                    block.push_back({ client.base + offset + k, value, as_bits(-VIEWMODEL_OFFSET_LIMIT) });
+                if (value == OFFSET_X_MAX || value == OFFSET_MAX || value == as_bits(VIEWMODEL_OFFSET_LIMIT)) {
+                    auto original = value == as_bits(VIEWMODEL_OFFSET_LIMIT) ? (first_max ? OFFSET_X_MAX : OFFSET_MAX) : value;
+                    block.push_back({ client.base + offset + k, original, as_bits(VIEWMODEL_OFFSET_LIMIT) });
+                    first_max = false;
+                }
+                else if (value == OFFSET_MIN || value == as_bits(-VIEWMODEL_OFFSET_LIMIT))
+                    block.push_back({ client.base + offset + k, OFFSET_MIN, as_bits(-VIEWMODEL_OFFSET_LIMIT) });
             }
 
             // x, y & z: a max & a min each
@@ -365,12 +374,17 @@ bool View::FindViewmodelClamps() {
     }
 
     if (found.empty()) {
-        LOGF(WARNING, "Could not find the viewmodel limits of the game, the viewmodel stays within them");
+        Engine::ReportOutdated("the viewmodel limits were not found in the game code");
         return false;
     }
 
+    // Still widened by an earlier run: known as patched, so turning the viewmodel off puts the game's limits back
+    auto current = p->read<uint32_t>(found.front().address);
+    bool leftover = current == found.front().widened;
+
     this->clamp_patches = std::move(found);
-    LOGF(INFO, "Found {} viewmodel limits in the game code", this->clamp_patches.size());
+    this->clamps_patched = leftover;
+    LOGF(INFO, "Found {} viewmodel limits in the game code{}", this->clamp_patches.size(), leftover ? ", still widened by an earlier run" : "");
     return true;
 }
 

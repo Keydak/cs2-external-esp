@@ -47,4 +47,5 @@ private:
     void RenderDebugWindow();
     void RenderSpectatorList();
     void RenderKeybinds();
+    void RenderVotes();
 };

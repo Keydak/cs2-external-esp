@@ -173,10 +173,20 @@ namespace cfg {
 			inline Vec2_t pos{ 10.f, 100.f };
 		}
 
+		// Window with the votes of the match: the one going on & the last ones, counts only
+		namespace votes {
+			inline bool enabled = true;
+			inline bool names = false;	// Who voted what, from a listener of ours in the game (memory writing). Not saved, off at every start
+			inline Vec2_t pos{ 10.f, 400.f };
+		}
+
 		// Window with the keys of the features on right now (third person, free cam)
 		namespace keybinds {
 			inline bool enabled = true;
 			inline Vec2_t pos{ 10.f, 250.f };
+			inline bool hide_bhop = false;          // Movement rows left out of the window
+			inline bool hide_air_strafe = false;
+			inline bool hide_jump_bug = false;
 		}
 
 		namespace bomb {
@@ -269,8 +279,11 @@ namespace cfg {
 		inline bool quick_stop = false;
 		inline bool null_binds = false;
 		inline bool auto_strafe = false;
-		inline bool auto_strafe_space = true;   // Only while SPACE is held
-		inline int auto_strafe_mode = 0;        // Legit (keys following the mouse), subtick (steps inside each tick)
+		inline int air_strafe_mode = 1;         // Toggle, hold, always
+		inline int air_strafe_key = VK_SPACE;
+		inline bool jump_bug = false;
+		inline int jump_bug_mode = 1;           // Toggle, hold, always
+		inline int jump_bug_key = VK_XBUTTON1;
 		inline bool auto_accept = false;
 
 		// Clan tag in front of our name, in the scoreboard & kill feed (what the game shows us, offline)

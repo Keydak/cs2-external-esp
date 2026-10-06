@@ -3,6 +3,7 @@
 #include "core/engine/Engine.hpp"
 #include "core/offsets/Dumper.hpp"
 #include "core/features/Freecam.hpp"
+#include "core/features/Subtick.hpp"
 #include "gui/renderer/Renderer.hpp" // Circular dependency
 
 #include <cmath>
@@ -32,21 +33,6 @@ namespace {
     constexpr float QUICK_STOP_DECEL_MAX = 4000.f;
 
     constexpr int MOVE_KEYS[] = { 'W', 'S', 'A', 'D' }; // Same order as Movement::Direction
-
-    // Auto strafe: slower turns are a shaking hand, the side is kept a moment between frames without a turn
-    constexpr float STRAFE_MIN_RATE = 8.f;          // Degrees per second
-    constexpr auto STRAFE_HOLD = 25ms;
-
-    // Air movement of the game: sv_air_max_wishspeed, sv_airaccelerate 12 * 250 wish speed per 64 tick
-    constexpr float AIR_MAX_WISHSPEED = 30.f;
-    constexpr float AIR_ACCEL_PER_TICK = 12.f * 250.f / 64.f;
-    constexpr float TICK_MS = 1000.f / 64.f;
-
-    // Not turning: flying more than this beside the crosshair gets bent back, above this speed
-    constexpr float STRAFE_ALIGN_MIN = 0.75f;       // Degrees
-    constexpr float STRAFE_ALIGN_SPEED = 100.f;
-    // Between letting go of one side & pressing the other: one tick, never both changed at the same moment like snap tap
-    constexpr auto STRAFE_GAP = 16ms;
 
     bool IsKeyDown(int key) {
         return GetAsyncKeyState(key) & 0x8000;
@@ -145,7 +131,6 @@ void Movement::Shutdown() {
 
     // Keys we hold back to what the keyboard says
     movement.ReleaseCounterStrafe();
-    movement.SetStrafe(-1);
     for (size_t key = 0; key < std::size(MOVE_KEYS); key++) {
         if (movement.nulled[key] && movement.held[key]) {
             movement.nulled[key] = false;
@@ -410,14 +395,12 @@ void Movement::Thread() {
             if (this->jump_pressed)
                 SetJump(false);
             ReleaseCounterStrafe();
-            SetStrafe(-1);
             std::this_thread::sleep_for(1ms);
             continue;
         }
 
         QuickStop();
         Bhop();
-        AutoStrafe();
         std::this_thread::sleep_for(1ms);
     }
 }
@@ -425,9 +408,12 @@ void Movement::Thread() {
 void Movement::Bhop() {
     auto p = Engine::GetProcess();
 
+    // With -insecure the jump is a subtick press of Subtick, right at the landing. Holding the key from here would be
+    // a press at the start of the tick, while still in the air
     bool should_run = cfg::misc::bhop
         && p && IsPlaying()
-        && IsSpaceHeld();
+        && IsSpaceHeld()
+        && !Subtick::HandlesBhop();
 
     auto pawn = should_run ? Engine::GetLocalPawn() : 0;
 
@@ -450,133 +436,6 @@ void Movement::SetJump(bool pressed) {
     auto client = Engine::GetClient();
 
     p->write<int>(client.base + offsets::buttons::jump, pressed ? BUTTON_PRESSED : BUTTON_RELEASED);
-}
-
-bool Movement::ReadYaw(float& yaw) {
-    auto p = Engine::GetProcess();
-
-    // The view angles of the input, moved by the mouse every frame
-    if (offsets::input::dwCSGOInput) {
-        if (auto input = p->read<uintptr_t>(Engine::GetClient().base + offsets::input::dwCSGOInput)) {
-            yaw = p->read<float>(input + offsets::input::m_angViewAngles + sizeof(float));
-            return std::isfinite(yaw);
-        }
-    }
-
-    // The ones of the pawn, only once per tick
-    auto pawn = Engine::GetLocalPawn();
-    if (!pawn)
-        return false;
-
-    yaw = p->read<Vec3_t>(pawn + offsets::grenade::m_angEyeAngles).y;
-    return std::isfinite(yaw);
-}
-
-void Movement::AutoStrafe() {
-    auto p = Engine::GetProcess();
-
-    bool should_run = cfg::misc::auto_strafe && cfg::misc::auto_strafe_mode == 0
-        && p && IsPlaying()
-        && (!cfg::misc::auto_strafe_space || IsSpaceHeld())
-        && !IsHeld(static_cast<size_t>(Direction::Left)) && !IsHeld(static_cast<size_t>(Direction::Right));
-
-    auto pawn = should_run ? Engine::GetLocalPawn() : 0;
-    float yaw = 0.f;
-
-    if (!pawn || p->read<int>(pawn + offsets::pawn::m_iHealth) <= 0 ||
-        (p->read<uint32_t>(pawn + offsets::pawn::m_fFlags) & FL_ONGROUND) || !ReadYaw(yaw)) {
-        SetStrafe(-1);
-        this->strafe_turn = -1;
-        this->pulse_until = {};
-        this->has_yaw = false;
-        return;
-    }
-
-    constexpr float DEGREES = 180.f / std::numbers::pi_v<float>;
-    auto now = std::chrono::steady_clock::now();
-
-    auto normalize = [](float angle) {
-        while (angle > 180.f) angle -= 360.f;
-        while (angle < -180.f) angle += 360.f;
-        return angle;
-    };
-
-    // Which way the mouse turns: from how fast the view turns, a little shake of the hand is no turn
-    if (!this->has_yaw) {
-        this->last_yaw = yaw;
-        this->yaw_changed = now;
-        this->has_yaw = true;
-    } else if (float turn = normalize(yaw - this->last_yaw); fabsf(turn) > 0.0001f) {
-        float seconds = std::clamp(std::chrono::duration<float>(now - this->yaw_changed).count(), 0.001f, 0.05f);
-
-        if (fabsf(turn) / seconds > STRAFE_MIN_RATE) {
-            this->strafe_turn = turn > 0.f ? 0 : 1;   // Yaw grows turning left
-            this->last_turn = now;
-        }
-
-        this->last_yaw = yaw;
-        this->yaw_changed = now;
-    }
-
-    if (this->strafe_turn >= 0 && now - this->last_turn > STRAFE_HOLD)
-        this->strafe_turn = -1;
-
-    // Where we fly compared to where we look, positive: to the left of the crosshair
-    auto velocity = p->read<Vec3_t>(pawn + offsets::pawn::m_vecAbsVelocity);
-    float speed = std::hypot(velocity.x, velocity.y);
-    float drift = speed > 1.f ? normalize(atan2f(velocity.y, velocity.x) * DEGREES - yaw) : 0.f;
-
-    // Air acceleration only adds speed while the velocity is less than ~90 degrees from the key's direction:
-    // a side key gains nothing once the flight leads the view by more than this towards that side
-    float lead = speed > AIR_MAX_WISHSPEED ? 90.f - acosf(AIR_MAX_WISHSPEED / speed) * DEGREES : 90.f;
-
-    int want = -1;
-
-    if (this->strafe_turn >= 0) {
-        // Turning: the key of that side, while it still adds speed
-        this->pulse_until = {};
-        float towards = this->strafe_turn == 0 ? drift : -drift;
-        want = towards < lead ? this->strafe_turn : -1;
-    } else if (now < this->pulse_until) {
-        want = this->pulse_side;
-    } else if (speed > STRAFE_ALIGN_SPEED && fabsf(drift) > STRAFE_ALIGN_MIN && now >= this->next_pulse &&
-               this->strafe_side < 0 && now - this->strafe_released >= STRAFE_GAP) {
-        // Not turning but flying beside the crosshair: a short press of the other side bends the flight back.
-        // As long as the share of a tick that turns it by the drift, more would bend it past
-        float accel = std::min(AIR_ACCEL_PER_TICK, AIR_MAX_WISHSPEED + speed * sinf(fabsf(drift) / DEGREES));
-        float per_tick = atan2f(accel, speed) * DEGREES;
-        float ms = std::clamp(TICK_MS * fabsf(drift) / per_tick, 1.f, TICK_MS);
-
-        this->pulse_side = drift > 0.f ? 1 : 0;
-        this->pulse_until = now + std::chrono::microseconds(static_cast<int64_t>(ms * 1000.f));
-        this->next_pulse = this->pulse_until + std::chrono::microseconds(static_cast<int64_t>(TICK_MS * 2000.f)); // Its result first
-        want = this->pulse_side;
-    }
-
-    SetStrafe(want);
-}
-
-void Movement::SetStrafe(int side) {
-    if (side == this->strafe_side)
-        return;
-
-    auto now = std::chrono::steady_clock::now();
-
-    // Ours let go, unless the player holds that key now: it would cancel their press
-    if (this->strafe_side >= 0) {
-        auto key = static_cast<size_t>(this->strafe_side == 0 ? Direction::Left : Direction::Right);
-        if (!IsHeld(key))
-            Press(key, false);
-
-        this->strafe_side = -1;
-        this->strafe_released = now;
-    }
-
-    // The other side a tick later, called again every loop until then
-    if (side >= 0 && now - this->strafe_released >= STRAFE_GAP) {
-        Press(static_cast<size_t>(side == 0 ? Direction::Left : Direction::Right), true);
-        this->strafe_side = side;
-    }
 }
 
 void Movement::QuickStop() {

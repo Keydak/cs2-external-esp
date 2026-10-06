@@ -101,7 +101,7 @@ private:
     void Apply();
     void ApplyGloves(uintptr_t pawn, uint32_t account_id, int glove, const std::map<int, cfg::skins::item_t>& items);
     void TrackSpawn(uintptr_t pawn, bool alive);
-    void ApplyAgent(uintptr_t pawn, int agent);
+    void ApplyAgent(uintptr_t pawn, const std::string& model); // Empty puts the model of the game back
     bool ApplyKnife(uintptr_t pawn, uintptr_t weapon, uintptr_t item, int& index, int knife, bool& model_changed);
     uintptr_t GetHudModel(uintptr_t pawn, uintptr_t weapon);
     bool SetModel(uintptr_t entity, const std::string& model);
@@ -134,6 +134,7 @@ private:
     std::vector<ItemInfo> items;
     std::vector<AgentInfo> agents;
     std::vector<MusicKitInfo> music_kits;
+
     std::atomic<bool> loaded = false;
     std::atomic<bool> failed = false;
 
@@ -179,7 +180,7 @@ private:
     // Agent
     std::string model_original; // What the game gave us, put back when the agent is removed
     std::string model_applied;  // Name the game reports after our change
-    int agent_applied = 0;
+    std::string agent_applied;  // Model we asked for, empty when the game model is on
     std::chrono::steady_clock::time_point agent_next_try{};
     uintptr_t agent_pawn = 0;   // The pawn & when it spawned: the model only changes right after
     bool agent_alive = false;

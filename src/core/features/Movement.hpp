@@ -57,12 +57,6 @@ private:
     void Bhop();
     void SetJump(bool pressed);
 
-    // Air strafe following the mouse: turning left holds A, turning right D
-    void AutoStrafe();
-    void SetStrafe(int side);   // -1 none, 0 left, 1 right
-    bool ReadYaw(float& yaw);
-
-
     enum class Direction { Forward, Back, Left, Right };
 
     void QuickStop();
@@ -87,22 +81,6 @@ private:
     std::mutex input_mutex;         // Keys come from the keyboard hook & the movement thread
     std::atomic<bool> stopping = false;
     bool jump_pressed = false;  // Bunny hop, our state of the jump button
-
-    // Auto strafe: the side the mouse asks for, the key we hold (through the game input like quick stop: the game
-    // measures how long a move key is held within each tick, a button written into memory only counts as a jump),
-    // the last view yaw & when it last turned
-    int strafe_turn = -1;       // Side the mouse turns to
-    int strafe_side = -1;
-    std::chrono::steady_clock::time_point strafe_released{};
-    bool has_yaw = false;
-    float last_yaw = 0.f;
-    std::chrono::steady_clock::time_point yaw_changed{};
-    std::chrono::steady_clock::time_point last_turn{};
-
-    // Not turning: short presses that bend the flight back to the crosshair
-    int pulse_side = -1;
-    std::chrono::steady_clock::time_point pulse_until{};
-    std::chrono::steady_clock::time_point next_pulse{};
 
     // Keyboard hook, W S A D
     std::atomic<bool> hooked = false;

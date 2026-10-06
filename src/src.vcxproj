@@ -231,6 +231,7 @@
     <ClCompile Include="core\features\Movement.cpp" />
     <ClCompile Include="core\features\AutoAccept.cpp" />
     <ClCompile Include="core\features\ClanTag.cpp" />
+    <ClCompile Include="core\features\VoteEvents.cpp" />
     <ClCompile Include="core\features\Subtick.cpp" />
     <ClCompile Include="core\features\Visuals.cpp" />
     <ClCompile Include="core\features\Freecam.cpp" />
@@ -251,6 +252,7 @@
     <ClInclude Include="core\features\Movement.hpp" />
     <ClInclude Include="core\features\AutoAccept.hpp" />
     <ClInclude Include="core\features\ClanTag.hpp" />
+    <ClInclude Include="core\features\VoteEvents.hpp" />
     <ClInclude Include="core\features\Subtick.hpp" />
     <ClInclude Include="core\features\Visuals.hpp" />
     <ClInclude Include="core\features\Freecam.hpp" />

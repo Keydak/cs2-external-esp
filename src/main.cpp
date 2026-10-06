@@ -29,6 +29,7 @@
 #include "core/features/Movement.hpp"
 #include "core/features/AutoAccept.hpp"
 #include "core/features/ClanTag.hpp"
+#include "core/features/VoteEvents.hpp"
 #include "core/features/Subtick.hpp"
 #include "core/features/Visuals.hpp"
 #include "core/engine/GameThread.hpp"
@@ -47,14 +48,15 @@ int main()
     if (!SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS))
         LOGF(WARNING, "Could not set application process priority to HIGH");
 
-    if (!Updater::Init() || !Updater::Process()) {
-        LOGF(FATAL, "Updater failed to run, the application has not verified its status, execution its not recommended");
-        LOGF(INFO, "Press any key to ignore and continue execution...");
-        std::cin.get();
-    }
+    // Our version file only tells: it never stops the program, unless a warning of it was answered with "no"
+    Updater::Init();
+    if (!Updater::Process())
+        goto exit;
 
     if (!Engine::Init()) {
+#ifdef _DEBUG
         LOGF(FATAL, "Engine failed to initialize, cannot continue execution");
+#endif
         goto exit;
     }
 
@@ -71,6 +73,12 @@ int main()
     // The game is gone, nothing in it to put back: straight out. Our threads still run, ExitProcess stops them
     // before anything they use is torn down
     if (Renderer::IsGameClosed()) {
+#ifdef _DEBUG
+        // Debug keeps the console open, its log is what is read after a crash of the game
+        LOGF(INFO, "The game closed, press any key to exit...");
+        Logger::FlushQueue();
+        std::cin.get();
+#endif
         LogHelper::Destroy();
         ExitProcess(0);
     }
@@ -81,9 +89,21 @@ int main()
     Movement::Shutdown();
     AutoAccept::Shutdown();
     ClanTag::Shutdown();
+    VoteEvents::Shutdown();
     Subtick::Shutdown();
     Visuals::Shutdown();
     GameThread::Shutdown();
+
+    // Everything is put back, now say why it stopped. Debug tells what was wrong, release only that it needs an update
+    if (Engine::IsOutdated()) {
+        LogHelper::Show();
+#ifdef _DEBUG
+        LOGF(FATAL, "Stopped, outdated for the running CS2: {}. Everything changed in the game was put back, "
+            "run update-project/check.bat to see the rest", Engine::GetOutdated());
+#else
+        LOGF(FATAL, "CS2 was updated, this program has to be updated too before it can be used again");
+#endif
+    }
 
 exit:
     LOGF(INFO, "Thats it, im done, hope you had a great time!");

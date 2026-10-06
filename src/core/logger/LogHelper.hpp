@@ -31,6 +31,8 @@ public:
     LogHelper& operator=(LogHelper&&)      = delete;
 
     static void Free();
+    // The console again after Free(), to say why the program stopped & wait for a key
+    static void Show();
     static void Destroy();
     static bool Init();
 

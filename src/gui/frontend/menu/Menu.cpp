@@ -794,6 +794,115 @@ namespace {
 		return changed;
 	}
 
+	// Like DropdownRow, any number of items picked: a click flips one & the list stays open
+	bool MultiDropdownRow(const char* label, const std::vector<const char*>& items, const std::vector<bool*>& values,
+		const char* tooltip = nullptr, float width = S(150.f)) {
+		ImGui::PushID(label);
+
+		auto row = BeginRow(label, tooltip);
+		auto d = ImGui::GetWindowDrawList();
+
+		const float height = S(26.f);
+		const float item_height = S(28.f);
+		const float padding = S(6.f);
+		const float box = S(12.f);
+
+		auto pos = RowSlot(row, ImVec2(width, height));
+		ImGui::SetCursorScreenPos(pos);
+
+		if (ImGui::InvisibleButton("##field", ImVec2(width, height)))
+			ImGui::OpenPopup("##list");
+
+		bool open = ImGui::IsPopupOpen("##list");
+		float h = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() || open ? 1.f : 0.f, 16.f);
+
+		d->AddRectFilled(pos, pos + ImVec2(width, height), LerpColor(col::track, col::track_hover, h), S(7.f));
+		if (open)
+			d->AddRect(pos, pos + ImVec2(width, height), C(col::accent, 0.8f), S(7.f), 0, 1.f);
+
+		// The picked ones by name, a count when they do not fit
+		std::string preview;
+		int picked = 0;
+		for (size_t i = 0; i < items.size(); i++) {
+			if (!*values[i])
+				continue;
+			preview += (picked++ ? ", " : "") + std::string(items[i]);
+		}
+		if (picked == 0)
+			preview = "None";
+		else if (ImGui::CalcTextSize(preview.c_str()).x > width - S(34.f))
+			preview = std::to_string(picked) + " selected";
+
+		auto text_size = ImGui::CalcTextSize(preview.c_str());
+		d->PushClipRect(pos, pos + ImVec2(width - S(24.f), height), true);
+		d->AddText(pos + ImVec2(S(10.f), (height - text_size.y) * 0.5f), C(picked ? col::text : col::text_dim), preview.c_str());
+		d->PopClipRect();
+
+		// Chevron, points up while open
+		auto center = pos + ImVec2(width - S(13.f), height * 0.5f);
+		float s = S(3.5f), flip = open ? -1.f : 1.f;
+		d->AddTriangleFilled(center + ImVec2(-s, -s * 0.5f * flip), center + ImVec2(s, -s * 0.5f * flip), center + ImVec2(0.f, s * 0.6f * flip),
+			LerpColor(col::text_dim, open ? col::accent : col::text, h));
+
+		float list_height = items.size() * item_height + padding * 2.f;
+		float below = ImGui::GetIO().DisplaySize.y - (pos.y + height + S(4.f)) - S(8.f);
+		bool up = list_height > below && pos.y - S(12.f) > below;
+
+		ImGui::SetNextWindowPos(up ? ImVec2(pos.x, pos.y - S(4.f) - list_height) : ImVec2(pos.x, pos.y + height + S(4.f)));
+		ImGui::SetNextWindowSize(ImVec2(width, list_height));
+
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(padding, padding));
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, 0.f));
+		ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, S(8.f));
+
+		bool changed = false;
+		if (ImGui::BeginPopup("##list", ImGuiWindowFlags_NoMove)) {
+			auto list = ImGui::GetWindowDrawList();
+			float inner = ImGui::GetContentRegionAvail().x;
+
+			for (int i = 0; i < static_cast<int>(items.size()); i++) {
+				ImGui::PushID(i);
+				auto min = ImGui::GetCursorScreenPos();
+
+				if (ImGui::InvisibleButton("##item", ImVec2(inner, item_height))) {
+					*values[i] = !*values[i];
+					changed = true;
+				}
+
+				bool selected = *values[i];
+				float hover = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() ? 1.f : 0.f, 18.f);
+				float check = Animate(ImGui::GetItemID() + 1, selected ? 1.f : 0.f, 18.f);
+
+				if (hover > 0.01f)
+					list->AddRectFilled(min, min + ImVec2(inner, item_height), C(col::hover, hover), S(6.f));
+
+				// Check box, filled with the accent when picked
+				auto box_min = min + ImVec2(S(8.f), (item_height - box) * 0.5f);
+				list->AddRectFilled(box_min, box_min + ImVec2(box, box), LerpColor(col::track_hover, col::accent, check), S(3.f));
+				if (check > 0.01f) {
+					list->AddPolyline(std::array<ImVec2, 3>{
+						box_min + ImVec2(box * 0.22f, box * 0.52f),
+						box_min + ImVec2(box * 0.42f, box * 0.72f),
+						box_min + ImVec2(box * 0.78f, box * 0.30f) }.data(), 3, C(col::on_accent, check), 0, S(1.6f));
+				}
+
+				auto size = ImGui::CalcTextSize(items[i]);
+				list->AddText(min + ImVec2(S(10.f) + box + S(8.f), (item_height - size.y) * 0.5f),
+					selected ? C(col::text) : LerpColor(col::text_dim, col::text, hover), items[i]);
+
+				ImGui::PopID();
+			}
+
+			ImGui::EndPopup();
+		}
+
+		ImGui::PopStyleVar(3);
+
+		EndRow(row);
+		ImGui::PopID();
+		return changed;
+	}
+
 	// Text input over the whole width of a panel
 	void TextField(const char* id, const char* hint, char* buffer, size_t size, const char* tooltip = nullptr) {
 		ImGui::PushStyleColor(ImGuiCol_FrameBg, col::track);
@@ -3538,14 +3647,13 @@ void Menu::RenderSkinsTab() {
 				? "Could not download the skin list. Hold a weapon in game and set its paint kit id by hand"
 				: "Downloading skin list...");
 
-		// Agent & gloves first, like the loadout of the game
+		// Agent, gloves, knife & music kit in one row, like the loadout of the game
 		SectionTitle("CHARACTER");
 		{
 			auto grid = BeginGrid();
 			NextCard(grid);
 
 			auto agent = loadout.agent ? Skins::FindAgent(loadout.agent) : nullptr;
-
 			if (ItemCard("##agent", grid.card,
 				agent ? SmallImage(agent->image) : "", nullptr,
 				agent ? agent->name.c_str() : "Agent",
@@ -3555,10 +3663,8 @@ void Menu::RenderSkinsTab() {
 				go_to = SkinPage::AGENTS;
 
 			NextCard(grid);
-
 			auto glove = loadout.glove ? Skins::FindItem(loadout.glove) : nullptr;
 			auto glove_skin = glove ? assigned_skin(*glove) : nullptr;
-
 			if (ItemCard("##gloves", grid.card,
 				glove_skin ? SmallImage(glove_skin->image) : "", nullptr,
 				glove ? glove->name.c_str() : "Gloves",
@@ -3568,11 +3674,9 @@ void Menu::RenderSkinsTab() {
 				go_to = SkinPage::GLOVES;
 
 			NextCard(grid);
-
 			auto knife = loadout.knife ? Skins::FindItem(loadout.knife) : nullptr;
 			auto knife_skin = knife ? assigned_skin(*knife) : nullptr;
 			auto knife_image = knife_skin ? knife_skin->image : (knife ? knife->image : "");
-
 			if (ItemCard("##knife", grid.card,
 				knife_image.empty() ? "" : SmallImage(knife_image), knife ? nullptr : Weapon::IconFor(skin_team == cfg::skins::TERRORIST ? 59 : 42),
 				knife ? knife->name.c_str() : "Knife",
@@ -3582,9 +3686,7 @@ void Menu::RenderSkinsTab() {
 				go_to = SkinPage::KNIVES;
 
 			NextCard(grid);
-
 			auto kit = cfg::skins::music_kit ? Skins::FindMusicKit(cfg::skins::music_kit) : nullptr;
-
 			if (ItemCard("##music_kit", grid.card,
 				kit ? kit->image : "", nullptr,
 				"Music Kit",
@@ -3612,28 +3714,25 @@ void Menu::RenderSkinsTab() {
 			EndGrid(grid);
 		}
 
-		// Weapons of the team, by category
-		std::string category;
-		Grid grid{};
-		bool grid_open = false;
-
-		for (const auto& item : all_items) {
-			if (item.category == "Gloves" || item.category == "Knives")
-				continue;
-
-			if (!(skin_team == cfg::skins::TERRORIST ? item.terrorist : item.counter_terrorist))
-				continue;
-
-			if (item.category != category) {
-				if (grid_open)
-					EndGrid(grid);
-
-				category = item.category;
-				SectionTitle(ToUpper(category).c_str());
-
-				grid = BeginGrid();
-				grid_open = true;
+		// Weapons of the team, one category at a time so it barely scrolls
+		static int category = 0;
+		auto in_category = [&](const ItemInfo& item) {
+			switch (category) {
+			case 0:		return item.category == "Pistols";
+			case 1:		return item.category == "SMGs" || item.category == "Heavy";
+			default:	return item.category == "Rifles";
 			}
+		};
+
+		ImGui::Dummy(ImVec2(0.f, S(4.f)));
+		auto tabs = ImGui::GetCursorScreenPos();
+		TabSwitch("##category", &category, { "Pistols", "Mid-Tier", "Rifles" }, tabs);
+		ImGui::SetCursorScreenPos(tabs + ImVec2(0.f, S(32.f) + S(12.f)));
+
+		auto grid = BeginGrid();
+		for (const auto& item : all_items) {
+			if (!(skin_team == cfg::skins::TERRORIST ? item.terrorist : item.counter_terrorist) || !in_category(item))
+				continue;
 
 			NextCard(grid);
 
@@ -3650,9 +3749,7 @@ void Menu::RenderSkinsTab() {
 				selected_item = item.definition_index;
 			}
 		}
-
-		if (grid_open)
-			EndGrid(grid);
+		EndGrid(grid);
 
 		break;
 	}
@@ -3704,7 +3801,50 @@ void Menu::RenderSkinsTab() {
 			go_to = SkinPage::ITEMS;
 
 		ImGui::Dummy(ImVec2(0.f, S(4.f)));
+
+		// Big preview on top: the knife under the mouse, else the one equipped
+		static int knife_hovered = 0;
+		{
+			int shown_index = knife_hovered ? knife_hovered : loadout.knife;
+			auto shown = shown_index ? Skins::FindItem(shown_index) : nullptr;
+			auto shown_skin = shown && shown_index == loadout.knife ? assigned_skin(*shown) : nullptr;
+			auto image = shown_skin ? shown_skin->image : (shown ? shown->image : "");
+			auto rarity = shown_skin ? RarityColor(shown_skin->rarity_color) : col::border_hover;
+
+			auto d = ImGui::GetWindowDrawList();
+			auto pos = ImGui::GetCursorScreenPos();
+			auto size = ImVec2(ImGui::GetContentRegionAvail().x, S(190.f));
+			auto center = pos + size * 0.5f;
+
+			d->AddRectFilled(pos, pos + size, C(col::panel), S(10.f));
+			d->AddCircleFilled(center, size.y * 0.42f, C(rarity, 0.12f), 48);
+
+			auto texture = image.empty() ? ImTextureID{} : ImageCache::Get(image);
+			if (texture) {
+				float h = size.y - S(30.f);
+				auto fit = ImVec2(h * 4.f / 3.f, h);
+				d->AddImage(texture, center - fit * 0.5f, center + fit * 0.5f, ImVec2(0, 0), ImVec2(1, 1), C(IM_COL32_WHITE));
+			}
+			else {
+				auto icon = Weapon::IconFor(shown_index ? shown_index : (skin_team == cfg::skins::TERRORIST ? 59 : 42));
+				auto extent = font_regular->CalcTextSizeA(S(64.f), FLT_MAX, 0.f, icon);
+				d->AddText(font_regular, S(64.f), center - extent * 0.5f, C(col::text_faint), icon);
+			}
+
+			auto name = shown ? shown->name : std::string("Default knife");
+			if (shown_skin)
+				name += " | " + shown_skin->name;
+			d->AddText(font_bold, S(15.f), pos + ImVec2(S(14.f), S(12.f)), C(col::text), name.c_str());
+			d->AddText(font_regular, S(12.f), pos + ImVec2(S(14.f), S(32.f)), C(col::text_dim),
+				knife_hovered && knife_hovered != loadout.knife ? "Click to equip" : "Equipped");
+			d->AddRect(pos, pos + size, C(col::border), S(10.f));
+
+			ImGui::Dummy(size);
+		}
+
 		SectionTitle("KNIFE TYPE");
+
+		int hovered_now = 0;
 
 		auto grid = BeginGrid();
 		NextCard(grid);
@@ -3734,7 +3874,12 @@ void Menu::RenderSkinsTab() {
 				go_to = SkinPage::SKINS;
 				selected_item = item.definition_index;
 			}
+
+			if (ImGui::IsItemHovered())
+				hovered_now = item.definition_index;
 		}
+
+		knife_hovered = hovered_now;
 
 		EndGrid(grid);
 		break;
@@ -3976,26 +4121,32 @@ void Menu::RenderMovementTab() {
 	{
 		BeginPanel("JUMP");
 		ImGui::BeginDisabled(!available);
-		Toggle("Bunny Hop", &cfg::misc::bhop, available ? "Hold SPACE to jump automatically when landing" : unavailable);
-		Toggle("Auto Strafe", &cfg::misc::auto_strafe, available
-			? "In the air, moving the mouse left holds A, right holds D.\nTurn smoothly from side to side to gain speed"
-			: unavailable);
+		Toggle("Bunny Hop", &cfg::misc::bhop, available ? "Hold SPACE to jump automatically when landing.\nWith -insecure the jump goes in right at the landing (subtick), so it keeps the speed" : unavailable);
+		// Subtick needs the input layout of this game build
+		ImGui::BeginDisabled(!Subtick::IsAvailable());
+		Toggle("Air Strafe", &cfg::misc::auto_strafe, Subtick::IsAvailable()
+			? "Strafes for you in the air: more speed on every jump & free to steer where you fly"
+			: "Only with -insecure, on the game build it was made for");
 		if (cfg::misc::auto_strafe) {
-			// Subtick needs the input layout of this game build
-			if (!Subtick::IsAvailable())
-				cfg::misc::auto_strafe_mode = 0;
-
-			ImGui::BeginDisabled(!Subtick::IsAvailable());
-			SegmentRow("Mode", &cfg::misc::auto_strafe_mode, { "Legit", "Subtick" }, Subtick::IsAvailable()
-				? "Legit: A & D follow your mouse, like doing it yourself\n"
-				  "Subtick: every tick is split into steps of A & D with the view turned for each, speed without turning.\n"
-				  "Flies where you look, or hold W A S D in the air to go that way from the view.\n"
-				  "Writes input events the game turns into commands: experimental, may be rejected or get you kicked"
-				: "Subtick: only with -insecure, on the game build it was made for");
-			ImGui::EndDisabled();
-
-			Toggle("Only With Space", &cfg::misc::auto_strafe_space, "Only while SPACE is held, so a normal jump stays untouched");
+			SegmentRow("Activation", &cfg::misc::air_strafe_mode, { "Toggle", "Hold", "Always" });
+			if (cfg::misc::air_strafe_mode != 2)
+				KeybindRow("Key", &cfg::misc::air_strafe_key);
 		}
+
+		Toggle("Jump Bug", &cfg::misc::jump_bug, Subtick::IsAvailable()
+			? "Jumps right before touching the ground: no fall damage & a higher jump. Hold SPACE with it while falling"
+			: "Only with -insecure, on the game build it was made for");
+		if (cfg::misc::jump_bug) {
+			SegmentRow("Activation##jump_bug", &cfg::misc::jump_bug_mode, { "Toggle", "Hold", "Always" });
+			if (cfg::misc::jump_bug_mode != 2)
+				KeybindRow("Key##jump_bug", &cfg::misc::jump_bug_key);
+		}
+		ImGui::EndDisabled();
+
+		// Rows the keybind list leaves out
+		MultiDropdownRow("Hide In Keybinds", { "Bunny Hop", "Air Strafe", "Jump Bug" },
+			{ &cfg::world::keybinds::hide_bhop, &cfg::world::keybinds::hide_air_strafe, &cfg::world::keybinds::hide_jump_bug },
+			"Left out of the keybind list, they keep working", S(120.f));
 		ImGui::EndDisabled();
 		EndPanel();
 	}
@@ -4214,9 +4365,19 @@ void Menu::RenderMiscTab() {
 			}
 			EndPanel();
 
+			BeginPanel("VOTES");
+			Toggle("Vote List", &cfg::world::votes::enabled,
+				"Shows the vote going on (kick, surrender, timeout...) of your team or the enemy with its yes & no.\n"
+				"Only you see it. Who called it, on whom & who voted what needs Voter Names");
+			if (cfg::world::votes::enabled)
+				Toggle("Voter Names", &cfg::world::votes::names,
+					"Experimental: who voted yes or no with their profile picture, heard from inside the game.\n"
+					"Needs -insecure. Turn it off if the game crashes");
+			EndPanel();
+
 			BeginPanel("KEYBINDS");
 			Toggle("Keybind List", &cfg::world::keybinds::enabled,
-				"Shows the features turned on by a key while they are on: third person, free cam.\n"
+				"Shows the features turned on by a key while they are on: third person, free cam, bunny hop, air strafe, jump bug.\n"
 				"With the menu open it shows them all & can be dragged");
 			EndPanel();
 		}

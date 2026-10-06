@@ -8,6 +8,7 @@
 #include "core/features/GameRadar.hpp"
 #include "core/features/AutoAccept.hpp"
 #include "core/features/ClanTag.hpp"
+#include "core/features/VoteEvents.hpp"
 #include "core/features/Subtick.hpp"
 #include "core/features/Visuals.hpp"
 #include "core/features/Freecam.hpp"
@@ -33,7 +34,83 @@ std::shared_ptr<pProcess> Engine::GetProcess() {
 }
 
 bool Engine::IsInsecure() {
-    return GetInstance().insecure;
+    auto& i = GetInstance();
+    return i.insecure && !i.outdated;
+}
+
+void Engine::ReportOutdated(const std::string& what) {
+    auto& i = GetInstance();
+    {
+        std::lock_guard<std::mutex> lock(i.outdated_mtx);
+        if (i.outdated)
+            return;
+        i.outdated_reason = what;
+    }
+    i.outdated = true;
+    LOGF(VERBOSE, "Outdated for this CS2 build ({}), stopping everything", what);
+}
+
+bool Engine::IsOutdated() {
+    return GetInstance().outdated;
+}
+
+std::string Engine::GetOutdated() {
+    auto& i = GetInstance();
+    std::lock_guard<std::mutex> lock(i.outdated_mtx);
+    return i.outdated_reason;
+}
+
+void Engine::CheckSanity() {
+    // Reading wrong is as outdated as writing wrong: checked with or without -insecure
+    if (this->outdated || !this->process)
+        return;
+
+    auto p = this->process;
+
+    // Only in a match, with our controller there
+    auto controller = p->read<uintptr_t>(this->client.base + offsets::localPlayerController);
+    if (!controller) {
+        this->failed_checks = 0;
+        return;
+    }
+
+    std::string problem;
+
+    // Our pawn, when alive: health & team in their ranges
+    if (auto pawn = GetEntityFromHandle(p->read<uint32_t>(controller + offsets::controller::m_hPawn))) {
+        auto health = p->read<int32_t>(pawn + offsets::pawn::m_iHealth);
+        auto team = p->read<uint8_t>(pawn + offsets::pawn::m_iTeamNum);
+        if (health < 0 || health > 1000)
+            problem = std::format("health reads {}", health);
+        else if (team > 3)
+            problem = std::format("team reads {}", team);
+    }
+
+    // The game rules, by the class name in their RTTI
+    if (problem.empty()) {
+        auto rules = p->read<uintptr_t>(this->client.base + offsets::rules::dwGameRules);
+        auto vtable = rules ? p->read<uintptr_t>(rules) : 0;
+        auto locator = vtable ? p->read<uintptr_t>(vtable - 8) : 0;
+
+        char name[64]{};
+        if (locator) {
+            auto module = locator - p->read<uint32_t>(locator + 0x14);
+            p->read_raw(module + p->read<uint32_t>(locator + 0xC) + 0x10, name, sizeof(name) - 1);
+        }
+        if (!strstr(name, "GameRules"))
+            problem = "the game rules are not where they should be";
+    }
+
+    if (problem.empty()) {
+        this->failed_checks = 0;
+        return;
+    }
+
+    // Loading screens can read odd for a moment, wrong for 5 seconds in a row is an update
+    if (++this->failed_checks == 1)
+        LOGF(VERBOSE, "Offset check failed: {}", problem);
+    if (this->failed_checks >= 5)
+        ReportOutdated(problem);
 }
 
 uintptr_t Engine::GetLocalPawn() {
@@ -112,8 +189,16 @@ bool Engine::InitImpl() {
     if (!Dumper::FetchRemote())
         LOGF(WARNING, "Could not fetch latest offsets, using built-in offsets (they might be outdated)");
 
-    if (!Dumper::Init()) {
-        LOGF(FATAL, "Failed to dump game offsets");
+    // Everything has to be found in this build: nothing runs on offsets of the one before
+    if (!Dumper::Init() || !Dumper::Unverified().empty()) {
+#ifdef _DEBUG
+        std::string list;
+        for (const auto& what : Dumper::Unverified())
+            list += "\n    - " + what;
+        LOGF(FATAL, "Outdated for the running CS2, nothing was started. Not found in this build:{}", list);
+#else
+        LOGF(FATAL, "CS2 was updated, this program has to be updated too before it can be used again");
+#endif
         return false;
     }
 
@@ -137,6 +222,7 @@ bool Engine::InitImpl() {
     GameRadar::Init();
     AutoAccept::Init();
     ClanTag::Init();
+    VoteEvents::Init();
     Subtick::Init();
     Visuals::Init();
     Freecam::Init();
@@ -149,10 +235,17 @@ void Engine::Thread() {
     // TODO: Check build number 
     // uintptr_t number = process->read<uintptr_t>(base_engine.base + offsets::buildNumber);
 
+    auto next_check = steady_clock::now();
+
     while (true) {
         auto start = steady_clock::now();
 
         Cache::Refresh();
+
+        if (start >= next_check) {
+            next_check = start + 1s;
+            CheckSanity();
+        }
 
         if (cfg::settings::free_cpu)
             std::this_thread::sleep_until(start + 1ms);

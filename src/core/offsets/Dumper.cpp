@@ -7,6 +7,8 @@
 #include <format>
 #include <set>
 #include <optional>
+#include <functional>
+#include <unordered_map>
 
 namespace {
     const std::string client_dll_url = "https://raw.githubusercontent.com/a2x/cs2-dumper/main/output/client_dll.json";
@@ -19,6 +21,147 @@ namespace {
         const char* klass;
         const char* field;
     };
+
+    // The schema fields we use, looked up in cs2-dumper & then in the game itself. Same mapping as scripts/update_offsets.py
+    const std::vector<SchemaField>& SchemaFields() {
+        static const std::vector<SchemaField> fields = {
+            { offsets::controller::m_iPing,                     "CCSPlayerController",                      "m_iPing" },
+            { offsets::controller::m_hPawn,                     "CCSPlayerController",                      "m_hPawn" },
+            { offsets::controller::m_steamID,                   "CCSPlayerController",                      "m_steamID" },
+            { offsets::controller::m_iszPlayerName,             "CCSPlayerController",                      "m_iszPlayerName" },
+            { offsets::controller::m_sSanitizedClanTag,         "CCSPlayerController",                      "m_sSanitizedClanTag" },
+            { offsets::controller::m_szClan,                    "CCSPlayerController",                      "m_szClan" },
+            { offsets::controller::m_bIsLocalPlayerController,  "CCSPlayerController",                      "m_bIsLocalPlayerController" },
+            { offsets::controller::m_pInGameMoneyServices,      "CCSPlayerController",                      "m_pInGameMoneyServices" },
+            { offsets::controller::m_iAccount,                  "CCSPlayerController_InGameMoneyServices",  "m_iAccount" },
+
+            { offsets::pawn::m_vOldOrigin,                      "C_BasePlayerPawn",                         "m_vOldOrigin" },
+            { offsets::pawn::m_vecViewOffset,                   "C_BaseModelEntity",                        "m_vecViewOffset" },
+            { offsets::pawn::m_bSpotted,                        "EntitySpottedState_t",                     "m_bSpotted" },
+            { offsets::pawn::m_iHealth,                         "C_BaseEntity",                             "m_iHealth" },
+            { offsets::pawn::m_fFlags,                          "C_BaseEntity",                             "m_fFlags" },
+            { offsets::pawn::m_iTeamNum,                        "C_BaseEntity",                             "m_iTeamNum" },
+            { offsets::pawn::m_bIsScoped,                       "C_CSPlayerPawn",                           "m_bIsScoped" },
+            { offsets::pawn::m_ArmorValue,                      "C_CSPlayerPawn",                           "m_ArmorValue" },
+            { offsets::pawn::m_bIsDefusing,                     "C_CSPlayerPawn",                           "m_bIsDefusing" },
+            { offsets::pawn::m_pItemServices,                   "C_BasePlayerPawn",                         "m_pItemServices" },
+            { offsets::pawn::m_bHasDefuser,                     "CCSPlayer_ItemServices",                   "m_bHasDefuser" },
+            { offsets::pawn::m_vecAbsVelocity,                  "C_BaseEntity",                             "m_vecAbsVelocity" },
+            { offsets::pawn::m_flSimulationTime,                "C_BaseEntity",                             "m_flSimulationTime" },
+            { offsets::pawn::m_pGameSceneNode,                  "C_BaseEntity",                             "m_pGameSceneNode" },
+            { offsets::pawn::m_entitySpottedState,              "C_CSPlayerPawn",                           "m_entitySpottedState" },
+            { offsets::pawn::m_bSpottedByMask,                  "EntitySpottedState_t",                     "m_bSpottedByMask" },
+            { offsets::pawn::m_flFlashOverlayAlpha,             "C_CSPlayerPawn",                           "m_flFlashOverlayAlpha" },
+            { offsets::pawn::m_pWeaponServices,                 "C_BasePlayerPawn",                         "m_pWeaponServices" },
+            { offsets::pawn::m_hActiveWeapon,                   "CPlayer_WeaponServices",                   "m_hActiveWeapon" },
+            { offsets::pawn::m_AttributeManager,                "C_EconEntity",                             "m_AttributeManager" },
+            { offsets::pawn::m_Item,                            "C_AttributeContainer",                     "m_Item" },
+            { offsets::pawn::m_iItemDefinitionIndex,            "C_EconItemView",                           "m_iItemDefinitionIndex" },
+            { offsets::pawn::m_iClip1,                          "C_BasePlayerWeapon",                       "m_iClip1" },
+            { offsets::pawn::m_bInReload,                       "C_CSWeaponBase",                           "m_bInReload" },
+            { offsets::pawn::m_pObserverServices,               "C_BasePlayerPawn",                         "m_pObserverServices" },
+
+            { offsets::bomb::m_bC4Activated,                    "C_PlantedC4",                              "m_bC4Activated" },
+            { offsets::bomb::m_nBombSite,                       "C_PlantedC4",                              "m_nBombSite" },
+            { offsets::bomb::m_flC4Blow,                        "C_PlantedC4",                              "m_flC4Blow" },
+            { offsets::bomb::m_flTimerLength,                   "C_PlantedC4",                              "m_flTimerLength" },
+            { offsets::bomb::m_bBeingDefused,                   "C_PlantedC4",                              "m_bBeingDefused" },
+            { offsets::bomb::m_flDefuseLength,                  "C_PlantedC4",                              "m_flDefuseLength" },
+            { offsets::bomb::m_flDefuseCountDown,               "C_PlantedC4",                              "m_flDefuseCountDown" },
+            { offsets::bomb::m_bBombDefused,                    "C_PlantedC4",                              "m_bBombDefused" },
+            { offsets::bomb::m_bHasExploded,                    "C_PlantedC4",                              "m_bHasExploded" },
+            { offsets::bomb::m_vecAbsOrigin,                    "CGameSceneNode",                           "m_vecAbsOrigin" },
+
+            { offsets::view::m_pCameraServices,                 "C_BasePlayerPawn",                         "m_pCameraServices" },
+            { offsets::view::m_iFOV,                            "CCSPlayerBase_CameraServices",             "m_iFOV" },
+            { offsets::view::m_iFOVStart,                       "CCSPlayerBase_CameraServices",             "m_iFOVStart" },
+
+            { offsets::econ::m_iMusicKitID,                    "CCSPlayerController",                      "m_iMusicKitID" },
+            { offsets::grenade::m_designerName,                 "CEntityIdentity",                          "m_designerName" },
+            { offsets::votes::m_iActiveIssueIndex,              "C_VoteController",                         "m_iActiveIssueIndex" },
+            { offsets::votes::m_iOnlyTeamToVote,                "C_VoteController",                         "m_iOnlyTeamToVote" },
+            { offsets::votes::m_nVoteOptionCount,               "C_VoteController",                         "m_nVoteOptionCount" },
+            { offsets::votes::m_nPotentialVotes,                "C_VoteController",                         "m_nPotentialVotes" },
+            { offsets::grenade::m_pCollision,                   "C_BaseEntity",                             "m_pCollision" },
+            { offsets::grenade::m_vecMins,                      "CCollisionProperty",                       "m_vecMins" },
+            { offsets::grenade::m_vecMaxs,                      "CCollisionProperty",                       "m_vecMaxs" },
+            { offsets::grenade::m_usSolidFlags,                 "CCollisionProperty",                       "m_usSolidFlags" },
+            { offsets::grenade::m_nSolidType,                   "CCollisionProperty",                       "m_nSolidType" },
+            { offsets::grenade::m_angAbsRotation,               "CGameSceneNode",                           "m_angAbsRotation" },
+            { offsets::grenade::m_bDidSmokeEffect,              "C_SmokeGrenadeProjectile",                 "m_bDidSmokeEffect" },
+            { offsets::grenade::m_vSmokeDetonationPos,          "C_SmokeGrenadeProjectile",                 "m_vSmokeDetonationPos" },
+            { offsets::grenade::m_firePositions,                "C_Inferno",                                "m_firePositions" },
+            { offsets::grenade::m_bFireIsBurning,               "C_Inferno",                                "m_bFireIsBurning" },
+            { offsets::grenade::m_fireCount,                    "C_Inferno",                                "m_fireCount" },
+            { offsets::grenade::m_nFireLifetime,                "C_Inferno",                                "m_nFireLifetime" },
+            { offsets::grenade::m_maxFireHalfWidth,             "C_Inferno",                                "m_maxFireHalfWidth" },
+            { offsets::grenade::m_bExplodeEffectBegan,          "C_BaseCSGrenadeProjectile",                "m_bExplodeEffectBegan" },
+
+            { offsets::visuals::m_flFlashMaxAlpha,              "C_CSPlayerPawnBase",                       "m_flFlashMaxAlpha" },
+            { offsets::visuals::m_bSmokeEffectSpawned,          "C_SmokeGrenadeProjectile",                 "m_bSmokeEffectSpawned" },
+            { offsets::visuals::m_zoomLevel,                    "C_CSWeaponBaseGun",                        "m_zoomLevel" },
+            { offsets::visuals::m_clrRender,                    "C_BaseModelEntity",                        "m_clrRender" },
+            { offsets::visuals::m_Glow,                         "C_BaseModelEntity",                        "m_Glow" },
+            { offsets::visuals::m_iGlowType,                    "CGlowProperty",                            "m_iGlowType" },
+            { offsets::visuals::m_glowColorOverride,            "CGlowProperty",                            "m_glowColorOverride" },
+            { offsets::visuals::m_bGlowing,                     "CGlowProperty",                            "m_bGlowing" },
+            { offsets::grenade::m_nExplodeEffectTickBegin,      "C_BaseCSGrenadeProjectile",                "m_nExplodeEffectTickBegin" },
+            { offsets::grenade::m_bPinPulled,                   "C_BaseCSGrenade",                          "m_bPinPulled" },
+            { offsets::grenade::m_flThrowStrength,              "C_BaseCSGrenade",                          "m_flThrowStrength" },
+            { offsets::grenade::m_angEyeAngles,                 "C_CSPlayerPawn",                           "m_angEyeAngles" },
+            { offsets::grenade::m_vInitialPosition,             "C_BaseCSGrenadeProjectile",                "m_vInitialPosition" },
+            { offsets::grenade::m_vInitialVelocity,             "C_BaseCSGrenadeProjectile",                "m_vInitialVelocity" },
+
+            { offsets::econ::m_hMyWeapons,                      "CPlayer_WeaponServices",                   "m_hMyWeapons" },
+            { offsets::econ::m_AttributeList,                   "C_EconItemView",                           "m_AttributeList" },
+            { offsets::econ::m_Attributes,                      "CAttributeList",                           "m_Attributes" },
+            { offsets::econ::m_iItemIDHigh,                     "C_EconItemView",                           "m_iItemIDHigh" },
+            { offsets::econ::m_iAccountID,                      "C_EconItemView",                           "m_iAccountID" },
+            { offsets::econ::m_iEntityQuality,                  "C_EconItemView",                           "m_iEntityQuality" },
+            { offsets::econ::m_bInitialized,                    "C_EconItemView",                           "m_bInitialized" },
+            { offsets::econ::m_nFallbackPaintKit,               "C_EconEntity",                             "m_nFallbackPaintKit" },
+            { offsets::econ::m_nFallbackSeed,                   "C_EconEntity",                             "m_nFallbackSeed" },
+            { offsets::econ::m_flFallbackWear,                  "C_EconEntity",                             "m_flFallbackWear" },
+            { offsets::econ::m_nFallbackStatTrak,               "C_EconEntity",                             "m_nFallbackStatTrak" },
+            { offsets::econ::m_OriginalOwnerXuidLow,            "C_EconEntity",                             "m_OriginalOwnerXuidLow" },
+            { offsets::econ::m_EconGloves,                      "C_CSPlayerPawn",                           "m_EconGloves" },
+            { offsets::econ::m_bNeedToReApplyGloves,            "C_CSPlayerPawn",                           "m_bNeedToReApplyGloves" },
+            { offsets::econ::m_hHudModelArms,                   "C_CSPlayerPawn",                           "m_hHudModelArms" },
+            { offsets::econ::m_MeshGroupMask,                   "CModelState",                              "m_MeshGroupMask" },
+            { offsets::econ::m_pChild,                          "CGameSceneNode",                           "m_pChild" },
+            { offsets::econ::m_pNextSibling,                    "CGameSceneNode",                           "m_pNextSibling" },
+            { offsets::econ::m_pOwner,                          "CGameSceneNode",                           "m_pOwner" },
+            { offsets::econ::m_hOwnerEntity,                    "C_BaseEntity",                             "m_hOwnerEntity" },
+            { offsets::econ::m_pInventoryServices,              "CCSPlayerController",                      "m_pInventoryServices" },
+            { offsets::econ::m_fEffects,                        "C_BaseEntity",                             "m_fEffects" },
+            { offsets::econ::m_ModelName,                       "CModelState",                              "m_ModelName" },
+            { offsets::econ::m_nSubclassID,                     "C_BaseEntity",                             "m_nSubclassID" },
+            { offsets::econ::m_unMusicID,                       "CCSPlayerController_InventoryServices",    "m_unMusicID" },
+
+            { offsets::rules::m_pGameModeRules,                "C_CSGameRules",                            "m_pGameModeRules" },
+            { offsets::rules::m_gamePhase,                     "C_CSGameRules",                            "m_gamePhase" },
+
+            { offsets::bone::m_modelState,                      "CSkeletonInstance",                        "m_modelState" },
+
+            { offsets::observerServices::m_iObserverMode,       "CPlayer_ObserverServices",                 "m_iObserverMode" },
+            { offsets::observerServices::m_hObserverTarget,     "CPlayer_ObserverServices",                 "m_hObserverTarget" },
+
+            { offsets::jump::m_pMovementServices,               "C_BasePlayerPawn",                         "m_pMovementServices" },
+            { offsets::jump::m_nTickBase,                       "CBasePlayerController",                    "m_nTickBase" },
+            { offsets::jump::m_ModernJump,                      "CCSPlayer_MovementServices",               "m_ModernJump" },
+            { offsets::jump::m_nLastLandedTick,                 "CCSPlayerModernJump",                      "m_nLastLandedTick" },
+            { offsets::jump::m_flLastLandedFrac,                "CCSPlayerModernJump",                      "m_flLastLandedFrac" },
+            { offsets::jump::m_nLastJumpTick,                   "CCSPlayer_MovementServices",               "m_nLastJumpTick" },
+            { offsets::jump::m_flLastJumpFrac,                 "CCSPlayer_MovementServices",               "m_flLastJumpFrac" },
+            { offsets::jump::m_flLastJumpVelocityZ,             "CCSPlayer_MovementServices",               "m_flLastJumpVelocityZ" },
+            { offsets::jump::m_flHeightAtJumpStart,             "CCSPlayer_MovementServices",               "m_flHeightAtJumpStart" },
+            { offsets::jump::m_flFallVelocity,                  "CPlayer_MovementServices_Humanoid",        "m_flFallVelocity" },
+            { offsets::jump::m_flDuckSpeed,                    "CCSPlayer_MovementServices",               "m_flDuckSpeed" },
+            { offsets::jump::m_flLastDuckTime,                  "CCSPlayer_MovementServices",               "m_flLastDuckTime" },
+            { offsets::jump::m_flGravityScale,                  "C_BaseEntity",                             "m_flGravityScale" },
+        };
+        return fields;
+    }
 
     // Looks for the field in the class, walking up the parent chain if needed
     std::optional<std::ptrdiff_t> ResolveField(const json& classes, std::string klass, const std::string& field) {
@@ -43,6 +186,14 @@ namespace {
 
         return std::nullopt;
     }
+}
+
+// Something of the game we need was not found in this build: logged, & the program stops before it runs on it
+template<typename... Args>
+void Dumper::Missing(std::format_string<Args...> format, Args&&... args) {
+    auto text = std::format(format, std::forward<Args>(args)...);
+    LOGF(WARNING, "{}", text);
+    this->unverified.push_back(std::move(text));
 }
 
 bool Dumper::Init() {
@@ -70,128 +221,9 @@ bool Dumper::FetchRemoteImpl() {
 
     const auto& classes = response["client.dll"]["classes"];
 
-    // Same mapping as scripts/update_offsets.py
-    const SchemaField fields[] = {
-        { offsets::controller::m_iPing,                     "CCSPlayerController",                      "m_iPing" },
-        { offsets::controller::m_hPawn,                     "CCSPlayerController",                      "m_hPawn" },
-        { offsets::controller::m_steamID,                   "CCSPlayerController",                      "m_steamID" },
-        { offsets::controller::m_iszPlayerName,             "CCSPlayerController",                      "m_iszPlayerName" },
-        { offsets::controller::m_sSanitizedClanTag,         "CCSPlayerController",                      "m_sSanitizedClanTag" },
-        { offsets::controller::m_szClan,                    "CCSPlayerController",                      "m_szClan" },
-        { offsets::controller::m_bIsLocalPlayerController,  "CCSPlayerController",                      "m_bIsLocalPlayerController" },
-        { offsets::controller::m_pInGameMoneyServices,      "CCSPlayerController",                      "m_pInGameMoneyServices" },
-        { offsets::controller::m_iAccount,                  "CCSPlayerController_InGameMoneyServices",  "m_iAccount" },
-
-        { offsets::pawn::m_vOldOrigin,                      "C_BasePlayerPawn",                         "m_vOldOrigin" },
-        { offsets::pawn::m_vecViewOffset,                   "C_BaseModelEntity",                        "m_vecViewOffset" },
-        { offsets::pawn::m_bSpotted,                        "EntitySpottedState_t",                     "m_bSpotted" },
-        { offsets::pawn::m_iHealth,                         "C_BaseEntity",                             "m_iHealth" },
-        { offsets::pawn::m_fFlags,                          "C_BaseEntity",                             "m_fFlags" },
-        { offsets::pawn::m_iTeamNum,                        "C_BaseEntity",                             "m_iTeamNum" },
-        { offsets::pawn::m_bIsScoped,                       "C_CSPlayerPawn",                           "m_bIsScoped" },
-        { offsets::pawn::m_ArmorValue,                      "C_CSPlayerPawn",                           "m_ArmorValue" },
-        { offsets::pawn::m_bIsDefusing,                     "C_CSPlayerPawn",                           "m_bIsDefusing" },
-        { offsets::pawn::m_pItemServices,                   "C_BasePlayerPawn",                         "m_pItemServices" },
-        { offsets::pawn::m_bHasDefuser,                     "CCSPlayer_ItemServices",                   "m_bHasDefuser" },
-        { offsets::pawn::m_vecAbsVelocity,                  "C_BaseEntity",                             "m_vecAbsVelocity" },
-        { offsets::pawn::m_flSimulationTime,                "C_BaseEntity",                             "m_flSimulationTime" },
-        { offsets::pawn::m_pGameSceneNode,                  "C_BaseEntity",                             "m_pGameSceneNode" },
-        { offsets::pawn::m_entitySpottedState,              "C_CSPlayerPawn",                           "m_entitySpottedState" },
-        { offsets::pawn::m_bSpottedByMask,                  "EntitySpottedState_t",                     "m_bSpottedByMask" },
-        { offsets::pawn::m_flFlashOverlayAlpha,             "C_CSPlayerPawn",                           "m_flFlashOverlayAlpha" },
-        { offsets::pawn::m_pWeaponServices,                 "C_BasePlayerPawn",                         "m_pWeaponServices" },
-        { offsets::pawn::m_hActiveWeapon,                   "CPlayer_WeaponServices",                   "m_hActiveWeapon" },
-        { offsets::pawn::m_AttributeManager,                "C_EconEntity",                             "m_AttributeManager" },
-        { offsets::pawn::m_Item,                            "C_AttributeContainer",                     "m_Item" },
-        { offsets::pawn::m_iItemDefinitionIndex,            "C_EconItemView",                           "m_iItemDefinitionIndex" },
-        { offsets::pawn::m_iClip1,                          "C_BasePlayerWeapon",                       "m_iClip1" },
-        { offsets::pawn::m_bInReload,                       "C_CSWeaponBase",                           "m_bInReload" },
-        { offsets::pawn::m_pObserverServices,               "C_BasePlayerPawn",                         "m_pObserverServices" },
-
-        { offsets::bomb::m_bC4Activated,                    "C_PlantedC4",                              "m_bC4Activated" },
-        { offsets::bomb::m_nBombSite,                       "C_PlantedC4",                              "m_nBombSite" },
-        { offsets::bomb::m_flC4Blow,                        "C_PlantedC4",                              "m_flC4Blow" },
-        { offsets::bomb::m_flTimerLength,                   "C_PlantedC4",                              "m_flTimerLength" },
-        { offsets::bomb::m_bBeingDefused,                   "C_PlantedC4",                              "m_bBeingDefused" },
-        { offsets::bomb::m_flDefuseLength,                  "C_PlantedC4",                              "m_flDefuseLength" },
-        { offsets::bomb::m_flDefuseCountDown,               "C_PlantedC4",                              "m_flDefuseCountDown" },
-        { offsets::bomb::m_bBombDefused,                    "C_PlantedC4",                              "m_bBombDefused" },
-        { offsets::bomb::m_bHasExploded,                    "C_PlantedC4",                              "m_bHasExploded" },
-        { offsets::bomb::m_vecAbsOrigin,                    "CGameSceneNode",                           "m_vecAbsOrigin" },
-
-        { offsets::view::m_pCameraServices,                 "C_BasePlayerPawn",                         "m_pCameraServices" },
-        { offsets::view::m_iFOV,                            "CCSPlayerBase_CameraServices",             "m_iFOV" },
-        { offsets::view::m_iFOVStart,                       "CCSPlayerBase_CameraServices",             "m_iFOVStart" },
-
-        { offsets::econ::m_iMusicKitID,                    "CCSPlayerController",                      "m_iMusicKitID" },
-        { offsets::grenade::m_designerName,                 "CEntityIdentity",                          "m_designerName" },
-        { offsets::grenade::m_pCollision,                   "C_BaseEntity",                             "m_pCollision" },
-        { offsets::grenade::m_vecMins,                      "CCollisionProperty",                       "m_vecMins" },
-        { offsets::grenade::m_vecMaxs,                      "CCollisionProperty",                       "m_vecMaxs" },
-        { offsets::grenade::m_usSolidFlags,                 "CCollisionProperty",                       "m_usSolidFlags" },
-        { offsets::grenade::m_nSolidType,                   "CCollisionProperty",                       "m_nSolidType" },
-        { offsets::grenade::m_angAbsRotation,               "CGameSceneNode",                           "m_angAbsRotation" },
-        { offsets::grenade::m_bDidSmokeEffect,              "C_SmokeGrenadeProjectile",                 "m_bDidSmokeEffect" },
-        { offsets::grenade::m_vSmokeDetonationPos,          "C_SmokeGrenadeProjectile",                 "m_vSmokeDetonationPos" },
-        { offsets::grenade::m_firePositions,                "C_Inferno",                                "m_firePositions" },
-        { offsets::grenade::m_bFireIsBurning,               "C_Inferno",                                "m_bFireIsBurning" },
-        { offsets::grenade::m_fireCount,                    "C_Inferno",                                "m_fireCount" },
-        { offsets::grenade::m_nFireLifetime,                "C_Inferno",                                "m_nFireLifetime" },
-        { offsets::grenade::m_maxFireHalfWidth,             "C_Inferno",                                "m_maxFireHalfWidth" },
-        { offsets::grenade::m_bExplodeEffectBegan,          "C_BaseCSGrenadeProjectile",                "m_bExplodeEffectBegan" },
-
-        { offsets::visuals::m_flFlashMaxAlpha,              "C_CSPlayerPawnBase",                       "m_flFlashMaxAlpha" },
-        { offsets::visuals::m_bSmokeEffectSpawned,          "C_SmokeGrenadeProjectile",                 "m_bSmokeEffectSpawned" },
-        { offsets::visuals::m_zoomLevel,                    "C_CSWeaponBaseGun",                        "m_zoomLevel" },
-        { offsets::visuals::m_clrRender,                    "C_BaseModelEntity",                        "m_clrRender" },
-        { offsets::visuals::m_Glow,                         "C_BaseModelEntity",                        "m_Glow" },
-        { offsets::visuals::m_iGlowType,                    "CGlowProperty",                            "m_iGlowType" },
-        { offsets::visuals::m_glowColorOverride,            "CGlowProperty",                            "m_glowColorOverride" },
-        { offsets::visuals::m_bGlowing,                     "CGlowProperty",                            "m_bGlowing" },
-        { offsets::grenade::m_nExplodeEffectTickBegin,      "C_BaseCSGrenadeProjectile",                "m_nExplodeEffectTickBegin" },
-        { offsets::grenade::m_bPinPulled,                   "C_BaseCSGrenade",                          "m_bPinPulled" },
-        { offsets::grenade::m_flThrowStrength,              "C_BaseCSGrenade",                          "m_flThrowStrength" },
-        { offsets::grenade::m_angEyeAngles,                 "C_CSPlayerPawn",                           "m_angEyeAngles" },
-        { offsets::grenade::m_vInitialPosition,             "C_BaseCSGrenadeProjectile",                "m_vInitialPosition" },
-        { offsets::grenade::m_vInitialVelocity,             "C_BaseCSGrenadeProjectile",                "m_vInitialVelocity" },
-
-        { offsets::econ::m_hMyWeapons,                      "CPlayer_WeaponServices",                   "m_hMyWeapons" },
-        { offsets::econ::m_AttributeList,                   "C_EconItemView",                           "m_AttributeList" },
-        { offsets::econ::m_Attributes,                      "CAttributeList",                           "m_Attributes" },
-        { offsets::econ::m_iItemIDHigh,                     "C_EconItemView",                           "m_iItemIDHigh" },
-        { offsets::econ::m_iAccountID,                      "C_EconItemView",                           "m_iAccountID" },
-        { offsets::econ::m_iEntityQuality,                  "C_EconItemView",                           "m_iEntityQuality" },
-        { offsets::econ::m_bInitialized,                    "C_EconItemView",                           "m_bInitialized" },
-        { offsets::econ::m_nFallbackPaintKit,               "C_EconEntity",                             "m_nFallbackPaintKit" },
-        { offsets::econ::m_nFallbackSeed,                   "C_EconEntity",                             "m_nFallbackSeed" },
-        { offsets::econ::m_flFallbackWear,                  "C_EconEntity",                             "m_flFallbackWear" },
-        { offsets::econ::m_nFallbackStatTrak,               "C_EconEntity",                             "m_nFallbackStatTrak" },
-        { offsets::econ::m_OriginalOwnerXuidLow,            "C_EconEntity",                             "m_OriginalOwnerXuidLow" },
-        { offsets::econ::m_EconGloves,                      "C_CSPlayerPawn",                           "m_EconGloves" },
-        { offsets::econ::m_bNeedToReApplyGloves,            "C_CSPlayerPawn",                           "m_bNeedToReApplyGloves" },
-        { offsets::econ::m_hHudModelArms,                   "C_CSPlayerPawn",                           "m_hHudModelArms" },
-        { offsets::econ::m_MeshGroupMask,                   "CModelState",                              "m_MeshGroupMask" },
-        { offsets::econ::m_pChild,                          "CGameSceneNode",                           "m_pChild" },
-        { offsets::econ::m_pNextSibling,                    "CGameSceneNode",                           "m_pNextSibling" },
-        { offsets::econ::m_pOwner,                          "CGameSceneNode",                           "m_pOwner" },
-        { offsets::econ::m_hOwnerEntity,                    "C_BaseEntity",                             "m_hOwnerEntity" },
-        { offsets::econ::m_pInventoryServices,              "CCSPlayerController",                      "m_pInventoryServices" },
-        { offsets::econ::m_fEffects,                        "C_BaseEntity",                             "m_fEffects" },
-        { offsets::econ::m_ModelName,                       "CModelState",                              "m_ModelName" },
-        { offsets::econ::m_nSubclassID,                     "C_BaseEntity",                             "m_nSubclassID" },
-        { offsets::econ::m_unMusicID,                       "CCSPlayerController_InventoryServices",    "m_unMusicID" },
-
-        { offsets::rules::m_pGameModeRules,                "C_CSGameRules",                            "m_pGameModeRules" },
-        { offsets::rules::m_gamePhase,                     "C_CSGameRules",                            "m_gamePhase" },
-
-        { offsets::bone::m_modelState,                      "CSkeletonInstance",                        "m_modelState" },
-
-        { offsets::observerServices::m_iObserverMode,       "CPlayer_ObserverServices",                 "m_iObserverMode" },
-        { offsets::observerServices::m_hObserverTarget,     "CPlayer_ObserverServices",                 "m_hObserverTarget" },
-    };
 
     int updated = 0, unresolved = 0;
-    for (const auto& f : fields) {
+    for (const auto& f : SchemaFields()) {
         auto value = ResolveField(classes, f.klass, f.field);
 
         if (!value) {
@@ -297,7 +329,7 @@ bool Dumper::InitImpl() {
 
     // View Matrix
     if (!(temp = Scan(offsets::signatures::viewMatrix, client))) {
-        LOGF(FATAL, "Could not find offset for 'viewMatrix'");
+        Missing("Could not find offset for 'viewMatrix'");
         return false;
     }
 
@@ -306,7 +338,7 @@ bool Dumper::InitImpl() {
 
     // Global Variables
     if (!(temp = Scan(offsets::signatures::globalVars, client))) {
-        LOGF(FATAL, "Could not find offset for 'globalVars'");
+        Missing("Could not find offset for 'globalVars'");
         return false;
     }
 
@@ -315,16 +347,33 @@ bool Dumper::InitImpl() {
 
     // Entity List
     if (!(temp = Scan(offsets::signatures::entityList, client))) {
-        LOGF(FATAL, "Could not find offset for 'entityList'");
+        Missing("Could not find offset for 'entityList'");
         return false;
     }
 
     offsets::entityList = temp - client.base;
     LOGF(VERBOSE, "Found 'entityList' offset at 0x{:X}", offsets::entityList);
 
+    // Game rules, from the game itself: cs2-dumper can still be on the build before an update. Without it, the
+    // remote or built-in value
+    if ((temp = Scan(offsets::signatures::gameRules, client))) {
+        offsets::rules::dwGameRules = temp - client.base;
+        LOGF(VERBOSE, "Found 'dwGameRules' offset at 0x{:X}", offsets::rules::dwGameRules);
+    } else {
+        Missing("Could not find 'dwGameRules', using 0x{:X}: deathmatch might not be detected", offsets::rules::dwGameRules);
+    }
+
+    // Field offsets from the game itself: cs2-dumper can be on the build before an update
+    ResolveSchema(client);
+
+    // Input buttons, written by the movement features: from the game, the remote ones can be of the build before
+    if (!ResolveButtons(client)) {
+        Missing("Could not find every input button, using the remote values: movement might press the wrong thing");
+    }
+
     // Local Player Controller
     if (!(temp = Scan(offsets::signatures::localPlayerController, client))) {
-        LOGF(FATAL, "Could not find offset for 'localPlayerController'");
+        Missing("Could not find offset for 'localPlayerController'");
         return false;
     }
 
@@ -333,7 +382,7 @@ bool Dumper::InitImpl() {
 
     // C4
     if (!(temp = Scan(offsets::signatures::plantedC4, client))) {
-        LOGF(FATAL, "Could not find offset for 'weaponC4'");
+        Missing("Could not find offset for 'weaponC4'");
         return false;
     }
 
@@ -342,7 +391,7 @@ bool Dumper::InitImpl() {
 
     // C4 carrier pointer
     if (!(temp = Scan(offsets::signatures::weaponC4, client))) {
-        LOGF(FATAL, "Could not find offset for 'weaponC4 carrier'");
+        Missing("Could not find offset for 'weaponC4 carrier'");
         return false;
     }
 
@@ -352,7 +401,7 @@ bool Dumper::InitImpl() {
 #if 0
     // Local Player Pawn (tbh idk how to read it :1)
     if (temp = Scan(offsets::signatures::localPlayerPawn, client); !temp) {
-        LOGF(FATAL, "Could not find offset for 'localPlayerPawn'");
+        Missing("Could not find offset for 'localPlayerPawn'");
         return false;
     }
 
@@ -362,7 +411,7 @@ bool Dumper::InitImpl() {
 
     // Input
     if (temp = Scan(offsets::signatures::csgoInput, client); !temp) {
-        LOGF(FATAL, "Could not find offset for 'csgoInput'");
+        Missing("Could not find offset for 'csgoInput'");
         return false;
     }
 
@@ -372,11 +421,11 @@ bool Dumper::InitImpl() {
 
     // CSGOInput & its third person fields, optional
     if (!ResolveThirdPerson(client))
-        LOGF(WARNING, "Could not find the third person code, third person is disabled");
+        Missing("Could not find the third person code, third person is disabled");
 
     // The view of each frame, optional
     if (!ResolveCamera(client))
-        LOGF(WARNING, "Could not find the camera code, free cam & spectating are disabled");
+        Missing("Could not find the camera code, free cam & spectating are disabled");
 
     // Accepting a match from memory, optional: without it the button is clicked
     {
@@ -388,24 +437,24 @@ bool Dumper::InitImpl() {
             LOGF(VERBOSE, "Found the match accept at 0x{:X} (matchmaking 0x{:X})", offsets::lobby::accept, offsets::lobby::matchmaking);
         }
         else {
-            LOGF(WARNING, "Could not find the match accept code, auto accept clicks the button");
+            Missing("Could not find the match accept code, auto accept clicks the button");
         }
     }
 
     // Skin regeneration, optional
     if (!ResolveSkins(client))
-        LOGF(WARNING, "Could not find the skin regeneration code, skin changer is disabled");
+        Missing("Could not find the skin regeneration code, skin changer is disabled");
 
     // Music of the main menu, optional
     if (!ResolveMenuMusic(client))
-        LOGF(WARNING, "Could not find the music of the main menu, it keeps the kit of the inventory");
+        Missing("Could not find the music of the main menu, it keeps the kit of the inventory");
 
     // Clan tag, optional
     if (auto found = ScanMemory(offsets::signatures::updateClanTag, client.base, client.base + client.size); !found.empty()) {
         offsets::controller::fnUpdateClanTag = found.at(0) - client.base;
         LOGF(VERBOSE, "Found the clan tag update at 0x{:X}", offsets::controller::fnUpdateClanTag);
     } else
-        LOGF(WARNING, "Could not find the clan tag update, the clan tag is disabled");
+        Missing("Could not find the clan tag update, the clan tag is disabled");
 
     // User commands, optional: only read for the subtick strafe
     {
@@ -418,22 +467,30 @@ bool Dumper::InitImpl() {
             offsets::usercmd::m_nSequence = Engine::GetProcess()->read<int32_t>(sequence.at(0) + 3);
             LOGF(VERBOSE, "Found the user commands at 0x{:X}, sequence 0x{:X}", offsets::usercmd::dwManagers, offsets::usercmd::m_nSequence);
         } else
-            LOGF(WARNING, "Could not find the user commands");
+            Missing("Could not find the user commands");
     }
+
+    // Game event manager, optional: only to hear who voted what
+    if (auto found = ScanMemory(offsets::signatures::gameEventManager, client.base, client.base + client.size); !found.empty()) {
+        auto at = found.at(0) + 12; // mov rcx, [rip + manager]
+        offsets::votes::dwGameEventManager = at + 7 + Engine::GetProcess()->read<int32_t>(at + 3) - client.base;
+        LOGF(VERBOSE, "Found the game event manager at 0x{:X}", offsets::votes::dwGameEventManager);
+    } else
+        Missing("Could not find the game event manager, the vote list shows no names");
 
     // Name, optional
     if (auto found = ScanMemory(offsets::signatures::updateName, client.base, client.base + client.size); !found.empty()) {
         offsets::controller::fnUpdateName = found.at(0) - client.base;
         LOGF(VERBOSE, "Found the name update at 0x{:X}", offsets::controller::fnUpdateName);
     } else
-        LOGF(WARNING, "Could not find the name update, the name change is disabled");
+        Missing("Could not find the name update, the name change is disabled");
 
     // Render color, optional: only for chams
     if (auto found = ScanMemory(offsets::signatures::setRenderColor, client.base, client.base + client.size); !found.empty()) {
         offsets::visuals::fnSetRenderColor = found.at(0) - client.base;
         LOGF(VERBOSE, "Found 'SetRenderColor' at 0x{:X}", offsets::visuals::fnSetRenderColor);
     } else
-        LOGF(WARNING, "Could not find 'SetRenderColor', chams are disabled");
+        Missing("Could not find 'SetRenderColor', chams are disabled");
 
     // Glow chams, optional
     {
@@ -464,7 +521,7 @@ bool Dumper::InitImpl() {
                 vis::m_pSceneObjectUpdater, vis::m_pSceneNode, vis::sceneNodeCount, vis::sceneNodeList, vis::sceneHandleObject,
                 vis::sceneObjectAttributes, vis::fnSetAttributeFloat4);
         } else
-            LOGF(WARNING, "Could not find the code for the glow chams, only textured chams");
+            Missing("Could not find the code for the glow chams, only textured chams");
     }
 
     // Smoke clouds, optional: only for no smoke
@@ -496,7 +553,7 @@ bool Dumper::InitImpl() {
                 offsets::visuals::smokeRenderObject, offsets::visuals::smokeRenderStart);
         else {
             offsets::visuals::smokeVolume = 0;
-            LOGF(WARNING, "Could not find the smoke cloud, no smoke is disabled");
+            Missing("Could not find the smoke cloud, no smoke is disabled");
         }
     }
 
@@ -507,16 +564,186 @@ bool Dumper::InitImpl() {
 
     // Build Number
     if (!(temp = Scan(offsets::signatures::buildNumber, engine))) {
-        LOGF(FATAL, "Could not find offset for 'buildNumber'");
+        Missing("Could not find offset for 'buildNumber'");
         return false;
     }
 
     offsets::buildNumber = temp - engine.base;
     LOGF(VERBOSE, "Found 'buildNumber' offset at 0x{:X}", offsets::buildNumber);
 
+    // Network client, its delta tick is written to ask for a full update: from the game too
+    if ((temp = Scan(offsets::signatures::networkGameClient, engine))) {
+        offsets::network::dwNetworkGameClient = temp - engine.base;
+        LOGF(VERBOSE, "Found 'dwNetworkGameClient' offset at 0x{:X}", offsets::network::dwNetworkGameClient);
+    } else {
+        Missing("Could not find 'dwNetworkGameClient', using 0x{:X}", offsets::network::dwNetworkGameClient);
+    }
+
+    if (auto found = ScanMemory(offsets::signatures::networkDeltaTick, engine.base, engine.base + engine.size); !found.empty()) {
+        offsets::network::deltaTick = process->read<int32_t>(found.at(0) + 3);
+        LOGF(VERBOSE, "Found the network delta tick at 0x{:X}", offsets::network::deltaTick);
+    } else {
+        Missing("Could not find the network delta tick, using 0x{:X}", offsets::network::deltaTick);
+    }
+
     LOGF(INFO, "Successfully dumped offsets...");
 
     return true;
+}
+
+const std::vector<std::string>& Dumper::Unverified() {
+    return GetInstance().unverified;
+}
+
+bool Dumper::ResolveSchema(ProcessModule client) {
+    auto process = Engine::GetProcess();
+    if (!process || !client.base || !client.size)
+        return false;
+
+    // The class infos are data of client.dll itself: one read of the whole image, then everything is looked up in it
+    std::vector<uint8_t> image(client.size);
+    constexpr size_t CHUNK = 1 << 20;
+    for (size_t at = 0; at < client.size; at += CHUNK)
+        process->read_raw(client.base + at, image.data() + at, std::min(CHUNK, client.size - at));
+
+    auto u8 = [&](size_t rva) -> uint8_t { return rva < image.size() ? image[rva] : 0; };
+    auto u16 = [&](size_t rva) -> uint16_t { return rva + 2 <= image.size() ? *reinterpret_cast<uint16_t*>(&image[rva]) : 0; };
+    auto i32 = [&](size_t rva) -> int32_t { return rva + 4 <= image.size() ? *reinterpret_cast<int32_t*>(&image[rva]) : 0; };
+    auto u64 = [&](size_t rva) -> uint64_t { return rva + 8 <= image.size() ? *reinterpret_cast<uint64_t*>(&image[rva]) : 0; };
+
+    // Pointers in the image are addresses in the game, into the image when they point into client.dll
+    auto to_rva = [&](uint64_t address) -> std::optional<size_t> {
+        if (address < client.base || address >= client.base + client.size)
+            return std::nullopt;
+        return static_cast<size_t>(address - client.base);
+    };
+
+    auto text = [&](size_t rva) {
+        size_t end = rva;
+        while (end < image.size() && end - rva < 128 && image[end])
+            end++;
+        return std::string_view(reinterpret_cast<const char*>(image.data() + rva), end - rva);
+    };
+
+    // SchemaClassInfoData_t: name +0x08, size +0x20, field count +0x24, base count +0x29, fields +0x30, bases +0x38
+    constexpr size_t CLASS_NAME = 0x08, CLASS_SIZE = 0x20, CLASS_FIELD_COUNT = 0x24, CLASS_BASE_COUNT = 0x29;
+    constexpr size_t CLASS_FIELDS = 0x30, CLASS_BASES = 0x38;
+    // SchemaClassFieldData_t, 0x20 each: name +0x00, offset +0x10. A base class: offset +0x00, class +0x08, 0x10 each
+    constexpr size_t FIELD_SIZE = 0x20, FIELD_OFFSET = 0x10, BASE_SIZE = 0x10, BASE_CLASS = 0x08;
+
+    std::set<std::string_view> wanted;
+    for (const auto& f : SchemaFields())
+        wanted.insert(f.klass);
+
+    // Every 8 byte value pointing into the image may be the name of a class info, the rest of it has to fit
+    std::unordered_map<std::string_view, size_t> classes;
+    for (size_t at = CLASS_NAME; at + CLASS_BASES + 8 <= image.size(); at += 8) {
+        auto name = to_rva(u64(at));
+        if (!name)
+            continue;
+
+        size_t info = at - CLASS_NAME;
+        auto fields = to_rva(u64(info + CLASS_FIELDS));
+        auto count = u16(info + CLASS_FIELD_COUNT);
+        auto size = i32(info + CLASS_SIZE);
+        if (!fields || *fields % 8 || count == 0 || count > 4096 || size <= 0 || size > 0x100000)
+            continue;
+
+        auto class_name = text(*name);
+        if (wanted.contains(class_name))
+            classes.try_emplace(class_name, info);
+    }
+
+    if (classes.empty()) {
+        Missing("Could not read the schema of the game, the class layout might have changed: using cs2-dumper offsets");
+        return false;
+    }
+
+    // The field in the class or one it derives from, with the offset of that base added
+    std::function<std::optional<std::ptrdiff_t>(size_t, std::string_view, int)> find = [&](size_t info, std::string_view field, int depth) -> std::optional<std::ptrdiff_t> {
+        if (depth > 16)
+            return std::nullopt;
+
+        auto fields = to_rva(u64(info + CLASS_FIELDS));
+        for (uint16_t i = 0, count = u16(info + CLASS_FIELD_COUNT); fields && i < count; i++) {
+            auto entry = *fields + i * FIELD_SIZE;
+            auto name = to_rva(u64(entry));
+            if (name && text(*name) == field)
+                return i32(entry + FIELD_OFFSET);
+        }
+
+        auto bases = to_rva(u64(info + CLASS_BASES));
+        for (uint8_t i = 0, count = u8(info + CLASS_BASE_COUNT); bases && i < count; i++) {
+            auto entry = *bases + i * BASE_SIZE;
+            if (auto base = to_rva(u64(entry + BASE_CLASS))) {
+                if (auto value = find(*base, field, depth + 1))
+                    return static_cast<std::ptrdiff_t>(static_cast<uint32_t>(i32(entry))) + *value;
+            }
+        }
+
+        return std::nullopt;
+    };
+
+    int found = 0, differ = 0;
+    std::string missing;
+    for (const auto& f : SchemaFields()) {
+        auto info = classes.find(f.klass);
+        auto value = info != classes.end() ? find(info->second, f.field, 0) : std::nullopt;
+
+        if (!value) {
+            missing += std::format("{}{}::{}", missing.empty() ? "" : ", ", f.klass, f.field);
+            continue;
+        }
+
+        found++;
+        if (*value != f.value) {
+            LOGF(VERBOSE, "Schema '{}::{}' at 0x{:X} (cs2-dumper 0x{:X})", f.klass, f.field, *value, f.value);
+            f.value = *value;
+            differ++;
+        }
+    }
+
+    if (!missing.empty())
+        Missing("Not in the schema of the game, kept from cs2-dumper: {}", missing);
+
+    LOGF(INFO, "Read {} of {} field offsets from the game itself ({} classes), {} differ from cs2-dumper", found, SchemaFields().size(), classes.size(), differ);
+    return missing.empty();
+}
+
+bool Dumper::ResolveButtons(ProcessModule client) {
+    auto process = Engine::GetProcess();
+
+    const std::pair<std::ptrdiff_t&, const char*> buttons[] = {
+        { offsets::buttons::jump, "jump" },
+        { offsets::buttons::forward, "forward" },
+        { offsets::buttons::back, "back" },
+        { offsets::buttons::left, "left" },
+        { offsets::buttons::right, "right" },
+    };
+
+    // Each registration names its button: the lea rdx points at the name
+    constexpr size_t STATE = 0x28; // Pressed state, from the start of the button
+    size_t found = 0;
+    for (auto at : ScanMemory(offsets::signatures::buttonRegister, client.base, client.base + client.size, 1024)) {
+        auto name_address = at + 10 + process->read<int32_t>(at + 6);
+        auto button = at + 17 + process->read<int32_t>(at + 13);
+
+        char name[16]{};
+        process->read_raw(name_address, name, sizeof(name) - 1);
+
+        for (auto& [offset, wanted] : buttons) {
+            if (std::string_view(name) != wanted)
+                continue;
+
+            auto value = static_cast<std::ptrdiff_t>(button + STATE - client.base);
+            if (value != offset)
+                LOGF(VERBOSE, "Button '{}' at 0x{:X} (was 0x{:X})", wanted, value, offset);
+            offset = value;
+            found++;
+        }
+    }
+
+    return found == std::size(buttons);
 }
 
 bool Dumper::ResolveMenuMusic(ProcessModule client) {
@@ -610,7 +837,7 @@ bool Dumper::ResolveThirdPerson(ProcessModule client) {
         LOGF(VERBOSE, "Found the third person sv_cheats check at 0x{:X}", offsets::input::cheatsCheckJump);
     }
     else {
-        LOGF(WARNING, "Could not find the third person sv_cheats check, third person needs sv_cheats 1");
+        Missing("Could not find the third person sv_cheats check, third person needs sv_cheats 1");
     }
     return true;
 }
@@ -715,7 +942,7 @@ bool Dumper::ResolveCamera(ProcessModule client) {
         LOGF(VERBOSE, "Found the spectator camera at 0x{:X}", offsets::camera::observerViewJump);
     }
     else {
-        LOGF(WARNING, "Could not find the spectator camera, free cam & spectating are only available while alive");
+        Missing("Could not find the spectator camera, free cam & spectating are only available while alive");
     }
     return true;
 }
@@ -780,7 +1007,7 @@ bool Dumper::ResolveSkins(ProcessModule client) {
             offsets::skins::updateViewmodelSkin, offsets::skins::viewmodelSkinBuilt);
     }
     else {
-        LOGF(WARNING, "Could not find the first person skin update, skins show after switching weapons");
+        Missing("Could not find the first person skin update, skins show after switching weapons");
     }
 
     // Mesh switch for skins made for the old models, optional
@@ -790,7 +1017,7 @@ bool Dumper::ResolveSkins(ProcessModule client) {
         LOGF(VERBOSE, "Found 'SetMeshGroupMask' at 0x{:X}", offsets::skins::setMeshGroupMask);
     }
     else {
-        LOGF(WARNING, "Could not find 'SetMeshGroupMask', skins for the old models might look wrong");
+        Missing("Could not find 'SetMeshGroupMask', skins for the old models might look wrong");
     }
 
     // Agents, optional
@@ -800,7 +1027,7 @@ bool Dumper::ResolveSkins(ProcessModule client) {
         LOGF(VERBOSE, "Found 'SetModel' at 0x{:X}", offsets::skins::setModel);
     }
     else {
-        LOGF(WARNING, "Could not find 'SetModel', agents are disabled");
+        Missing("Could not find 'SetModel', agents are disabled");
     }
 
     // Knives, optional
@@ -810,7 +1037,7 @@ bool Dumper::ResolveSkins(ProcessModule client) {
         LOGF(VERBOSE, "Found 'OnSubclassIDChanged' at 0x{:X}", offsets::skins::subclassChanged);
     }
     else {
-        LOGF(WARNING, "Could not find 'OnSubclassIDChanged', knives are disabled");
+        Missing("Could not find 'OnSubclassIDChanged', knives are disabled");
     }
 
     // Glove model loading, optional: without it gloves only show when their model was already loaded
@@ -860,7 +1087,7 @@ bool Dumper::ResolveSkins(ProcessModule client) {
     }
 
     if (!offsets::skins::precacheGloves)
-        LOGF(WARNING, "Could not find the glove model loading, custom gloves might not show");
+        Missing("Could not find the glove model loading, custom gloves might not show");
 
     LOGF(VERBOSE, "Found 'RegenerateWeaponSkins' at 0x{:X}, clear 0x{:X}, update 0x{:X}, composite owner 0x{:X}, materials 0x{:X}",
         offsets::skins::regenerateWeaponSkins, offsets::skins::clearMaterials, offsets::skins::updateWeaponSkin, composite_owner, composite_materials);

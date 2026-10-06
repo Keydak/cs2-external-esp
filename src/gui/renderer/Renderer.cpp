@@ -146,7 +146,7 @@ void Renderer::Render() {
 }
 
 bool Renderer::HandleState() {
-    isRunning = Window::shouldRun; // From the window event handler
+    isRunning = Window::shouldRun && !Engine::IsOutdated(); // From the window event handler, or outdated for the game
 
     static bool was_holding = false;
 

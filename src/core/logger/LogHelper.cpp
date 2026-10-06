@@ -37,6 +37,30 @@ void LogHelper::Free() {
     }
 }
 
+void LogHelper::Show() {
+    if (GetConsoleWindow())
+        return;
+
+    AllocConsole();
+    SetConsoleTitleA("CS2-EXTERNAL");
+    SetConsoleOutputCP(CP_UTF8);
+
+    if (auto handle = GetStdHandle(STD_OUTPUT_HANDLE)) {
+        DWORD mode = 0;
+        GetConsoleMode(handle, &mode);
+        SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN);
+    }
+
+    FILE* input = nullptr;
+    freopen_s(&input, "CONIN$", "r", stdin);
+    std::cin.clear();
+
+    auto& out = GetInstance().m_ConsoleOut;
+    out.close();
+    out.clear();
+    out.open("CONOUT$", std::ios_base::out | std::ios_base::app);
+}
+
 bool LogHelper::InitImpl() {
     Logger::Init();
 

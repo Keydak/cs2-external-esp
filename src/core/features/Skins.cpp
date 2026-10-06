@@ -682,7 +682,7 @@ void Skins::Apply() {
 
     // Turned off, everything goes back to default
     if (!enabled) {
-        if (this->weapons.empty() && !this->gloves.block && !this->agent_applied && this->knives.empty())
+        if (this->weapons.empty() && !this->gloves.block && this->agent_applied.empty() && this->knives.empty())
             return;
 
         glove = 0;
@@ -848,7 +848,8 @@ void Skins::Apply() {
 
     ApplyGloves(pawn, account_id, glove, wanted);
     HideThirdPersonGloves(pawn, this->gloves.block && hide_third_person);
-    ApplyAgent(pawn, agent);
+    auto info = agent ? FindAgent(agent) : nullptr;
+    ApplyAgent(pawn, info ? info->model : "");
 
 }
 
@@ -1187,7 +1188,7 @@ void Skins::TrackSpawn(uintptr_t pawn, bool alive) {
     this->agent_alive = alive;
 }
 
-void Skins::ApplyAgent(uintptr_t pawn, int agent) {
+void Skins::ApplyAgent(uintptr_t pawn, const std::string& model) {
     if (!offsets::skins::setModel)
         return;
 
@@ -1197,25 +1198,25 @@ void Skins::ApplyAgent(uintptr_t pawn, int agent) {
     if (current.empty())
         return;
 
-    auto info = agent ? FindAgent(agent) : nullptr;
     std::string wanted;
 
-    if (info) {
-        bool on = current == info->model || (this->agent_applied == agent && current == this->model_applied);
+    if (!model.empty()) {
+        bool on = current == model || (this->agent_applied == model && current == this->model_applied);
         if (on)
             return;
 
-        // Anything else is the model of the game
-        this->model_original = current;
-        wanted = info->model;
+        // Anything else is the model of the game. Not ours from before, going from one agent to another keeps it
+        if (this->agent_applied.empty() || current != this->model_applied)
+            this->model_original = current;
+        wanted = model;
     }
     else {
         // Back to the model of the game, if we changed it
-        if (!this->agent_applied)
+        if (this->agent_applied.empty())
             return;
 
         if (current != this->model_applied || this->model_original.empty()) {
-            this->agent_applied = 0;
+            this->agent_applied.clear();
             return;
         }
 
@@ -1240,13 +1241,13 @@ void Skins::ApplyAgent(uintptr_t pawn, int agent) {
     if (!SetModel(pawn, wanted))
         return;
 
-    if (info) {
-        this->agent_applied = agent;
+    if (!model.empty()) {
+        this->agent_applied = model;
         this->model_applied = GetModelName(pawn);
-        LOGF(VERBOSE, "Agent {} set, model {} -> {}", agent, this->model_original, this->model_applied);
+        LOGF(VERBOSE, "Agent {} set, model {} -> {}", model, this->model_original, this->model_applied);
     }
     else {
-        this->agent_applied = 0;
+        this->agent_applied.clear();
         LOGF(VERBOSE, "Agent removed, model back to {}", wanted);
     }
 }

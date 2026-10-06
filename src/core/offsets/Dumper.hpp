@@ -2,6 +2,10 @@
 #include "core/memory/Memory.hpp"
 #include "Offsets.hpp"
 
+#include <format>
+#include <string>
+#include <vector>
+
 inline const DWORD MAX_BLOCK_SIZE = 409600;
 
 class Dumper {
@@ -17,6 +21,9 @@ public:
 
    // Offsets in server.dll, which is there once a map was loaded. True when known
    static bool ResolveServer();
+
+   // What was not found in this build of the game: anything here & the program is outdated for it
+   static const std::vector<std::string>& Unverified();
 private:
     Dumper() {};
 
@@ -28,6 +35,11 @@ private:
 
     bool InitImpl();
     bool FetchRemoteImpl();
+
+    std::vector<std::string> unverified;
+
+    template<typename... Args>
+    void Missing(std::format_string<Args...> format, Args&&... args);
 private:
     std::vector<WORD> StrSigToArray(const std::string& sig);
     DWORD64 Scan(const std::string sig, ProcessModule module);
@@ -38,6 +50,9 @@ private:
     bool RestoreJump(uintptr_t address, uint8_t opcode);
     bool ResolveSkins(ProcessModule client);
     bool ResolveMenuMusic(ProcessModule client);
+    bool ResolveButtons(ProcessModule client);
+    // Field offsets from the class infos in client.dll, over the cs2-dumper ones
+    bool ResolveSchema(ProcessModule client);
     void GetNextArray(std::vector<short>& next, const std::vector<WORD>& signature);
     std::vector<DWORD64> ScanMemory(const std::string& sig, DWORD64 start, DWORD64 end, int number = 1);
     void ScanBlock(byte* buffer, const std::vector<short>& next, const std::vector<WORD>& signature, DWORD64 start, DWORD size, std::vector<DWORD64>& result);

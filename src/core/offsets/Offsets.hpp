@@ -102,6 +102,15 @@ namespace offsets
 		inline std::ptrdiff_t m_iFOVStart = 0x29C; // uint32 - CCSPlayerBase_CameraServices
 	}
 
+	// What the server sends of a vote: the counts in the vote controller, who voted what in the vote_cast event
+	namespace votes {
+		inline std::ptrdiff_t dwGameEventManager = 0; // CGameEventManager* - client.dll, found by signature
+		inline std::ptrdiff_t m_iActiveIssueIndex = 0x610; // int32 - C_VoteController, -1 without a vote
+		inline std::ptrdiff_t m_iOnlyTeamToVote = 0x614; // int32 - C_VoteController, -1 everyone
+		inline std::ptrdiff_t m_nVoteOptionCount = 0x618; // int32[5] - C_VoteController, yes & no first
+		inline std::ptrdiff_t m_nPotentialVotes = 0x62C; // int32 - C_VoteController
+	}
+
 	namespace grenade {
 		inline std::ptrdiff_t m_designerName = 0x20; // CUtlSymbolLarge - CEntityIdentity
 		inline std::ptrdiff_t m_bDidSmokeEffect = 0x1364; // bool - C_SmokeGrenadeProjectile
@@ -243,6 +252,23 @@ namespace offsets
 		inline std::ptrdiff_t m_nSequence = 0x5910;    // int32 in the manager, the newest command
 	}
 
+	// The jump of the game (sv_legacy_jump 0): when we landed & which press may still jump, in ticks of the tickbase
+	namespace jump {
+		inline std::ptrdiff_t m_pMovementServices = 0x1330; // CPlayer_MovementServices* - C_BasePlayerPawn
+		inline std::ptrdiff_t m_nTickBase = 0x6B8; // uint32 - CBasePlayerController, raised by prediction for each command it runs
+		inline std::ptrdiff_t m_ModernJump = 0x6C8; // CCSPlayerModernJump - CCSPlayer_MovementServices
+		inline std::ptrdiff_t m_nLastLandedTick = 0x20; // int32 - CCSPlayerModernJump
+		inline std::ptrdiff_t m_flLastLandedFrac = 0x24; // float32 - CCSPlayerModernJump, part of the tick already gone, on a 1/64 grid
+		inline std::ptrdiff_t m_nLastJumpTick = 0x700; // int32 - CCSPlayer_MovementServices
+		inline std::ptrdiff_t m_flLastJumpFrac = 0x704; // float32 - CCSPlayer_MovementServices, part of the tick of the last jump
+		inline std::ptrdiff_t m_flLastJumpVelocityZ = 0x708; // float32 - CCSPlayer_MovementServices, up speed the last jump left with
+		inline std::ptrdiff_t m_flHeightAtJumpStart = 0x698; // float32 - CCSPlayer_MovementServices, origin z the last jump left from
+		inline std::ptrdiff_t m_flFallVelocity = 0x25C; // float32 - CPlayer_MovementServices_Humanoid, down speed
+		inline std::ptrdiff_t m_flDuckSpeed = 0x410; // float32 - CCSPlayer_MovementServices
+		inline std::ptrdiff_t m_flLastDuckTime = 0x420; // float32 - CCSPlayer_MovementServices, game time
+		inline std::ptrdiff_t m_flGravityScale = 0x540; // float32 - C_BaseEntity
+	}
+
 	// CCSGOInput, found at startup from the code of the "thirdperson" command
 	namespace input {
 		inline std::ptrdiff_t dwCSGOInput = 0; // 0 when not found
@@ -325,6 +351,9 @@ namespace offsets
 		const std::string smokeVolume = "66 C7 81 ?? ?? 00 00 00 01 48 81 C1 ?? ?? 00 00 E8";
 		// The cloud starts: mov rax, [rsi + render object]; mov edx, -1; movss [rax + start], xmm6; ... movss [rsi + start], xmm6
 		const std::string smokeStart = "48 8B 86 ?? ?? 00 00 BA FF FF FF FF F3 0F 11 B0 ?? ?? 00 00 48 8B 86 ?? ?? 00 00 C6 80";
+		// Some hud element listens for the vote events: mov byte [r14 + 28], 1; lea r8, name; mov rcx, [rip + manager];
+		// lea rdx, [r14 + 20]; xor r9d, r9d; mov rax, [rcx]; call [rax + 18] (AddListener)
+		const std::string gameEventManager = "41 C6 46 28 01 4C 8D 05 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? 49 8D 56 20 45 33 C9 48 8B 01 FF 50 18";
 		const std::string updateClanTag ="48 89 5C 24 10 48 89 74 24 18 55 57 41 56 48 8D AC 24 ?? ?? ?? ?? 48 81 EC ?? ?? ?? ?? 48 8B 81 ?? ?? ?? ?? 48 8D 3D ?? ?? ?? ?? 48 85 C0 C7 44 24 ?? 80 00 00 C0";
 
 		// Callback of the "thirdperson" command: mov r8, [CSGOInput] ... cmp byte ptr [r8 + m_bInThirdPerson], 0
@@ -371,6 +400,11 @@ namespace offsets
 		// OnSubclassIDChanged: "call UpdateSubclass; cmp [rbx + vdata], 0; je; mov rax, [rbx]; mov edx, 1" then the vdata changed vfunc
 		const std::string subclassChanged = "40 53 48 83 EC 20 48 8B D9 E8 ?? ?? ?? ?? 48 83 BB ?? ?? ?? ?? 00 74 ?? 48 8B 03 BA 01 00 00 00";
 		const std::string entityList = "48 8B 0D ?? ?? ?? ?? 48 89 7C 24 ?? 8B FA C1 EB";
+		const std::string gameRules = "48 89 1D ?? ?? ?? ?? FF 15 ?? ?? ?? ?? 84 C0"; // mov [rip + rules], rbx
+		// Every input button is made by: xor r8d, r8d; lea rdx, "name"; lea rcx, button; call
+		const std::string buttonRegister = "45 33 C0 48 8D 15 ?? ?? ?? ?? 48 8D 0D ?? ?? ?? ?? E8";
+		const std::string networkGameClient = "48 89 3D ?? ?? ?? ?? FF 87"; // engine2.dll, mov [rip + client], rdi
+		const std::string networkDeltaTick = "4C 8D B7 ?? ?? ?? ?? 4C 89 7C 24"; // engine2.dll, lea r14, [rdi + deltaTick]
 		const std::string localPlayerController = "48 8B 05 ?? ?? ?? ?? 41 89 BE";
 		const std::string plantedC4 = "48 8B 1D ?? ?? ?? ?? 45 32 F6";
 		const std::string weaponC4 =
