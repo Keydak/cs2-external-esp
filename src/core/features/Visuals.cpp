@@ -185,6 +185,7 @@ void Visuals::RefreshTargets() {
 
     auto snapshot = Cache::CopySnapshot();
     const auto& local = snapshot.local;
+    auto p = Engine::GetProcess();
 
     this->glow_targets.clear();
     this->chams_targets.clear();
@@ -210,10 +211,12 @@ void Visuals::RefreshTargets() {
         else if (!enemy && glow::team && cfg::esp::team.enabled)
             add(pawn, glow::team_color);
 
-        // Chams: always opaque, a see through render color needs a render mode the pawn does not have
+        // Chams: always opaque, a see through render color needs a render mode the pawn does not have. Off while
+        // spawn protected: ours would cover the shimmer of the game that tells it, it comes back once they can be hurt
         namespace chams = cfg::visuals::chams;
         const auto& group = enemy ? cfg::esp::enemy : cfg::esp::team;
-        if (pawn && group.enabled && (enemy ? chams::enemies : chams::team)) {
+        bool immune = pawn && p && p->read<bool>(pawn + vis::m_bGunGameImmunity);
+        if (pawn && !immune && group.enabled && (enemy ? chams::enemies : chams::team)) {
             int type = enemy ? chams::enemy_type : chams::team_type;
             if (!HasModelGlow())
                 type = chams::TYPE_TEXTURED;

@@ -7,8 +7,9 @@
 #include <unordered_set>
 
 namespace {
-    // The game clears the flag again once the server says nobody sees the player, so it is written often
-    constexpr auto UPDATE_INTERVAL = 30ms;
+    // The game clears the flag again once the server says nobody sees the player (after a team mate saw them),
+    // so it is written often: a frame of the radar with it cleared can drop the player from it
+    constexpr auto UPDATE_INTERVAL = 5ms;
 }
 
 bool GameRadar::Init() {
@@ -50,7 +51,9 @@ void GameRadar::Thread() {
             continue;
         }
 
-        auto snapshot = Cache::CopySnapshot();
+        // The shared snapshot, no copy of everything this often
+        auto current = Cache::Current();
+        const auto& snapshot = *current;
 
         // Our bit in the spotted by masks, the player slot is the controller entity index minus one
         int slot = snapshot.local.index;

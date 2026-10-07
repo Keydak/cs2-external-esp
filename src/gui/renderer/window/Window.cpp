@@ -5,7 +5,6 @@ ID3D11DeviceContext* Window::device_context = nullptr;
 IDXGISwapChain* Window::swap_chain = nullptr;
 ID3D11RenderTargetView* Window::render_targetview = nullptr;
 
-bool Window::vsync = false;
 float Window::present_ms = 0.f;
 HWND Window::hwnd = nullptr;
 HWND Window::viewport = nullptr;
@@ -262,10 +261,8 @@ void Window::EndRender()
 	
 	auto present_start = std::chrono::steady_clock::now();
 
-	if (vsync) // Present rendered frame with V-Sync
-		swap_chain->Present(1U, 0U);
-	else // Present rendered frame without V-Sync
-		swap_chain->Present(0U, 0U);
+	// Without V-Sync, Renderer holds it to the refresh rate of the screen
+	swap_chain->Present(0U, 0U);
 
 	present_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - present_start).count();
 }
@@ -341,10 +338,6 @@ void Window::SetForeground(HWND window) {
 		BringToForeground(window);
 }
 
-void Window::SetVSync(bool enable) {
-	vsync = enable;
-	LOGF(VERBOSE, "VSync is now {}", (enable ? "Enabled" : "Disabled"));
-}
 
 
 // declaration of the ImGui_ImplWin32_WndProcHandler function

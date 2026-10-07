@@ -28,7 +28,6 @@ public:
 	static void StartRender();
 	static void EndRender();
 
-	static bool vsync;
 	static float present_ms; // How long the last Present() took
 	static HWND hwnd;
 	static HWND viewport;
@@ -42,7 +41,6 @@ public:
 	static void SetBounds(HWND window, RECT bounds);
 	static bool SetAffinity(HWND window, WindowAffinity afi);
 	static void SetForeground(HWND window);
-	static void SetVSync(bool enable = false);
 	static void SetParent(HWND window, HWND parent);
 
 	static ID3D11Device* device;

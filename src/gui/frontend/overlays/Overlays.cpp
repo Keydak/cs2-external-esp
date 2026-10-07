@@ -14,6 +14,7 @@
 #include "core/engine/Engine.hpp"
 #include "core/offsets/Dumper.hpp"
 #include "core/features/VoteEvents.hpp"
+#include "core/features/HitEffects.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -72,6 +73,7 @@ void Overlays::RenderImpl() {
 
     ImGui::PushFont(this->font_alt);
     {
+        RenderHitmarkers();
         RenderSpectatorList();
         RenderKeybinds();
         RenderVotes();
@@ -1109,34 +1111,57 @@ void Overlays::RenderBomb() {
 
     bool hovered = is_menu_open && CardHandle("##bomb", cfg::world::bomb::pos, size);
 
-    if (!bomb.is_planted && !is_menu_open)
+    // Fades & drops in like the other cards, out with the last bomb still on it (defused, exploded, we died)
+    bool shown = is_menu_open || (bomb.is_planted && bomb.pos.length() && local.alive);
+
+    static float window_alpha = 0.f;
+    static Bomb last_bomb;
+    static ImVec2 last_render;
+    static bool has_last = false;
+
+    float step = io.DeltaTime * FADE_SPEED;
+    window_alpha = std::clamp(window_alpha + (shown ? step : -step), 0.f, 1.f);
+    if (window_alpha <= 0.f || (!shown && !has_last)) {
+        has_last = false;
         return;
+    }
 
-    if (bomb.is_planted && !bomb.pos.length() && !is_menu_open)
-        return;
+    ImVec2 render = last_render;
 
-    if (!local.alive && !is_menu_open)
-        return;
+    if (shown) {
+        Vec2_t screen_pos;
+        bool on_top = bomb.is_planted ? matrix.wts(bomb.pos, io.DisplaySize, screen_pos) : false;
 
-    Vec2_t screen_pos;
-    bool on_top = bomb.is_planted ? matrix.wts(bomb.pos, io.DisplaySize, screen_pos) : false;
+        auto dist = local.pos.dist_to(bomb.pos);
 
-    auto dist = local.pos.dist_to(bomb.pos);
+        if (is_menu_open) on_top = false;
+        if (dist > 1500.f) on_top = false;
 
-    if (is_menu_open) on_top = false;
-    if (dist > 1500.f) on_top = false;
+        render = ImVec2(cfg::world::bomb::pos.x, cfg::world::bomb::pos.y);
 
-    ImVec2 render(cfg::world::bomb::pos.x, cfg::world::bomb::pos.y);
+        // If we use bomb esp the overlay will be sticky
+        if (on_top && bomb.is_planted && !cfg::esp::bomb)
+            render = ImVec2(screen_pos.x - (size.x * 0.5f), screen_pos.y + margin);
 
-    // If we use bomb esp the overlay will be sticky
-    if (on_top && bomb.is_planted && !cfg::esp::bomb)
-        render = ImVec2(screen_pos.x - (size.x * 0.5f), screen_pos.y + margin);
+        last_bomb = bomb;
+        last_render = render;
+        has_last = true;
+    }
+    else {
+        bomb = last_bomb;
+    }
 
     auto d = ImGui::GetBackgroundDrawList();
+    int card_start = d->VtxBuffer.Size;
+    float card_ease = EaseOut(window_alpha);
+    render.y = floorf(render.y - (1.f - card_ease) * 8.f);
+
     DrawBombCardImpl(d, render, bomb);
 
     if (hovered)
         d->AddRect(render, render + size, Accent(0.6f), CARD_ROUNDING);
+
+    FadeSince(d, card_start, card_ease);
 }
 
 // Loading bar while a map is built from the game files, gone once it is done
@@ -1347,6 +1372,135 @@ namespace {
         if (state.issue < 0 || state.issue > 64)
             state = {};
         return state;
+    }
+}
+
+// An X of four short lines around a point, darker lines under them so they show on anything
+static void DrawHitmarker(ImDrawList* d, ImVec2 center, float gap, float length, ImU32 color, float alpha) {
+    const ImVec2 dirs[] = { { -1.f, -1.f }, { 1.f, -1.f }, { -1.f, 1.f }, { 1.f, 1.f } };
+    const float k = 0.7071f;
+
+    for (const auto& dir : dirs) {
+        auto from = ImVec2(center.x + dir.x * gap * k, center.y + dir.y * gap * k);
+        auto to = ImVec2(center.x + dir.x * (gap + length) * k, center.y + dir.y * (gap + length) * k);
+        d->AddLine(from, to, IM_COL32(0, 0, 0, static_cast<int>(150 * alpha)), 3.5f);
+    }
+
+    for (const auto& dir : dirs) {
+        auto from = ImVec2(center.x + dir.x * gap * k, center.y + dir.y * gap * k);
+        auto to = ImVec2(center.x + dir.x * (gap + length) * k, center.y + dir.y * (gap + length) * k);
+        d->AddLine(from, to, color, 1.6f);
+    }
+}
+
+// Our hits, at the crosshair & where on the player they landed. Where exactly the server does not tell, so the
+// bone of the player hit that was nearest to the crosshair at that moment
+void Overlays::RenderHitmarkers() {
+    namespace hm = cfg::world::hitmarker;
+
+    struct Mark {
+        HitEvent event;
+        bool placed = false;
+        Vec3_t pos{};
+    };
+
+    static std::deque<Mark> marks;
+
+    auto events = HitEffects::Drain();
+    if (!hm::crosshair && !hm::world) {
+        marks.clear();
+        return;
+    }
+
+    auto& io = ImGui::GetIO();
+    auto current = Cache::Current();
+    const auto& snapshot = *current;
+    const auto& matrix = snapshot.game.view_matrix;
+    auto center = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+
+    for (const auto& event : events) {
+        Mark mark{ event };
+
+        for (const auto& player : snapshot.players) {
+            if (player.index != event.victim || player.bone_list.empty())
+                continue;
+
+            static const int bones[] = {
+                head, neck, chest, spine_2, spine_1, pelvis,
+                shoulder_L, elbow_L, hand_L, shoulder_R, elbow_R, hand_R,
+                hip_L, knee_L, foot_heel_L, hip_R, knee_R, foot_heel_R,
+            };
+
+            float best = FLT_MAX;
+            for (int bone : bones) {
+                if (bone >= static_cast<int>(player.bone_list.size()))
+                    continue;
+
+                const auto& pos = player.bone_list[bone].pos;
+                Vec2_t screen;
+                if (!matrix.wts(pos, io.DisplaySize, screen, false))
+                    continue;
+
+                float dx = screen.x - center.x, dy = screen.y - center.y;
+                float distance = dx * dx + dy * dy;
+                if (distance < best) {
+                    best = distance;
+                    mark.pos = pos;
+                    mark.placed = true;
+                }
+            }
+            break;
+        }
+
+        marks.push_back(mark);
+        if (marks.size() > 24)
+            marks.pop_front();
+    }
+
+    auto d = ImGui::GetBackgroundDrawList();
+    auto now = std::chrono::steady_clock::now();
+    float duration = std::max(0.1f, hm::duration);
+
+    while (!marks.empty() && std::chrono::duration<float>(now - marks.front().event.time).count() > duration)
+        marks.pop_front();
+
+    bool crosshair_drawn = false;
+
+    // Newest first, the crosshair one only for the newest
+    for (auto it = marks.rbegin(); it != marks.rend(); ++it) {
+        const auto& mark = *it;
+        float t = std::clamp(std::chrono::duration<float>(now - mark.event.time).count() / duration, 0.f, 1.f);
+        float alpha = 1.f - t * t;
+
+        const auto& base = mark.event.kill ? hm::kill_color : hm::color;
+        auto color = ImGui::GetColorU32(ImVec4(base.r, base.g, base.b, base.a * alpha));
+
+        // Pops out a little at first
+        float pop = 1.f + 0.35f * std::max(0.f, 1.f - t * 6.f);
+        float length = hm::size * pop * (mark.event.kill ? 1.25f : 1.f);
+
+        if (hm::crosshair && !crosshair_drawn) {
+            crosshair_drawn = true;
+            DrawHitmarker(d, center, 4.f, length, color, alpha);
+        }
+
+        if (hm::world && mark.placed) {
+            Vec2_t screen;
+            if (!matrix.wts(mark.pos, io.DisplaySize, screen))
+                continue;
+
+            auto at = ImVec2(screen.x, screen.y);
+            DrawHitmarker(d, at, 2.f, length * 0.8f, color, alpha);
+
+            if (hm::damage && mark.event.damage > 0) {
+                auto text = std::to_string(mark.event.damage);
+                auto size = ImGui::CalcTextSize(text.c_str());
+                auto pos = ImVec2(at.x - size.x * 0.5f, at.y - length - size.y - 4.f - t * 18.f);
+
+                d->AddText(ImVec2(pos.x + 1.f, pos.y + 1.f), IM_COL32(0, 0, 0, static_cast<int>(200 * alpha)), text.c_str());
+                d->AddText(pos, color, text.c_str());
+            }
+        }
     }
 }
 

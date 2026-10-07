@@ -30,6 +30,8 @@
 #include "core/features/AutoAccept.hpp"
 #include "core/features/ClanTag.hpp"
 #include "core/features/VoteEvents.hpp"
+#include "core/features/HitEffects.hpp"
+#include "core/features/Sounds.hpp"
 #include "core/features/Subtick.hpp"
 #include "core/features/Visuals.hpp"
 #include "core/engine/GameThread.hpp"
@@ -44,9 +46,7 @@ int main()
 
     LOGF(INFO, "Compiled {}, welcome to CS2-EXTERNAL!", __TIMESTAMP__);
 
-    // Needs to be ran as ADMINISTRATOR
-    if (!SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS))
-        LOGF(WARNING, "Could not set application process priority to HIGH");
+    // Normal priority: above it our threads take the CPU from the game, which lost a lot of its frame rate
 
     // Our version file only tells: it never stops the program, unless a warning of it was answered with "no"
     Updater::Init();
@@ -90,6 +90,8 @@ int main()
     AutoAccept::Shutdown();
     ClanTag::Shutdown();
     VoteEvents::Shutdown();
+    HitEffects::Shutdown();
+    Sounds::Shutdown();
     Subtick::Shutdown();
     Visuals::Shutdown();
     GameThread::Shutdown();

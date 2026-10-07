@@ -1,33 +1,51 @@
-# 🕹️ CS2 External ESP | Recode
+# CS2 External ESP
 
-Simple external ESP for Counter-Strike 2. After years of development the codebase has been modernized for clarity and ease of use, featuring a redesigned interface, noticeable performance improvements, several quality-of-life additions, and automatic offset scanning to help maintain compatibility through game updates.
+External ESP for Counter-Strike 2, a fork of [IMXNOOBX/cs2-external-esp](https://github.com/IMXNOOBX/cs2-external-esp). This fork adds a reworked menu, more ESP & overlays, hit effects, a skin changer and more, and reads its offsets from the game itself so it keeps working through silent CS2 updates.
 
 ## Showcase
 
-> Click the picture below to go to the showcase video
-
-[![cs2esp](.github/showcase.png)](https://youtu.be/3WHHLUyHyzA)
+<!-- Replace .github/showcase.png with your own picture. To link a video, wrap it: [![cs2esp](.github/showcase.png)](https://youtu.be/...) -->
+![cs2esp_keydak](.github/new_showcase.png)
 
 ## ✨ Added Features
 
-> This fork builds on top of the original project. Everything below is new.
+> This fork builds on top of the original project. Everything below is new or reworked.
+
+**Menu**
+* **New interface**: a dark, minimal menu with one accent color (white by default), a see through background with an opacity slider, animated tabs & controls.
+* **Quick settings**: the corner of the sidebar opens the credits, a few accent colors & the background opacity.
+* **Startup toast**: shows the menu keys for a few seconds when the program starts.
+* **Keys & activation behind a button**: features with a key show it in a small menu next to their toggle (the three dots), with the activation (toggle, hold, always).
+* **Long lists**: dropdowns show a few rows at a time, scroll, and have a search box when the list is long.
+* **Configs tab**: export / import configs & skin loadouts as separate files in `export/`, rename, delete & set one as **Default** (loaded on start).
 
 **Read only (ESP & overlays)**
+* **Player ESP**: box, skeleton, head tracker & flags placed by dragging them around a live preview of the player.
 * **Grenade ESP**: smoke & molotov areas that follow the map collision (blocked by walls, doors & props), trails, timers, landing spots & a prediction for the grenade in hand.
 * **Item ESP**: dropped weapons & other items in the world.
 * **Visibility check**: players behind walls or inside smokes are drawn differently.
-* **Game crosshair**: the crosshair overlay now follows your own CS2 crosshair settings (style, color, size, dot).
-* **Configs tab**: export / import configs & skin loadouts as separate files in `export/`, rename, delete & set one as **Default** (loaded on start).
-* **Auto accept**: clicks ACCEPT when a match is found, brings the game to the front if needed. It only looks at the game window, nothing in the game is read or written for it.
-* **Performance**: frame time breakdown in the watermark, lighter ESP & cache for low-end PCs.
+* **Hitmarker**: a mark at the crosshair and on the player you hit, with the damage, in its own color for a kill. Kills come from your own kill counter, so someone killed by another player near your hit is not counted.
+* **Hit & kill sounds**: your own sounds with a volume each, `.vsnd_c`, `.wav` or `.mp3` from the `sound` folder, or downloaded from the [sound repository](https://github.com/Keydak/Killsound-Hitsound-custom-cs2) with one click. One sound per hit, so the pellets of a shotgun stack up. A sound is heard when it is picked or its volume changed. Without `-insecure` Windows plays them, nothing is written into the game.
+* **Vote list**: the vote going on (kick, surrender, timeout…) with who called it on whom & its yes / no.
+* **Overlays**: spectator list, keybind list, bomb site & timer, radar & velocity graph, all draggable and animated.
+* **Game crosshair**: the crosshair overlay follows your own CS2 crosshair settings (style, color, size, dot).
+* **Auto accept**: accepts when a match is found. Without `-insecure` it only looks at the game window & clicks the button.
+* **Performance**: the overlay is held to the refresh rate of your monitor (no V-Sync delay), ESP positions are read again for every frame so fast players do not shake, frame time breakdown in the watermark.
 
 **Memory writing (only with `-insecure`, see the warning below)**
 * **Skin changer**: weapon skins, knives, gloves, agents & music kits (round music & MVP anthem), with player model previews.
-* **View**: custom FOV, viewmodel override (FOV 40 – 120, offsets ±20) & third person.
+* **View**: custom FOV, viewmodel override (FOV 40 – 120, offsets ±20), third person, free cam & casual spectating after death.
 * **Game radar**: enemies shown on the radar of the game.
-* **Visuals**: no flash (with a strength slider), no smoke. Chams (players colored by the game itself) & the outline glow of the game for players, the bomb, dropped items, dropped grenades & thrown grenades (a color per type), in their ESP tabs.
-* **Movement**: bunny hop, auto strafe (follows the mouse), quick stop & null binds.
-* **Clan tag & name**: custom tag with 12 animations (blink, scroll, typing, bruteforce, wave, fade, decrypt, glitch, expand, pulse, slide…), several texts taking turns, shown in the clan slot, before / after the name or as the whole name, and a custom name. Set by the game itself on its main thread, only you see them.
+* **Visuals**: no flash (with a strength slider), no smoke. Chams (players colored by the game itself, off while a player is spawn protected) & the outline glow of the game for players, the bomb, dropped items, dropped grenades & thrown grenades, in their ESP tabs.
+* **Movement**: bunny hop, auto strafe, jump bug, quick stop & null binds, each with its own key & activation (toggle, hold, always).
+* **Clan tag & name**: custom tag with 12 animations, several texts taking turns, shown in the clan slot, before / after the name or as the whole name, and a custom name. Only you see them.
+* **Voter names**: who voted yes or no in a vote, with their profile picture (experimental).
+* **Hit & kill sounds in the game**: the sounds are played by the sound system of CS2 itself, so they mix with the game & follow its volume. Our sound folder is added to the files of the game and its `playvol` is called directly (nothing is typed into the console). While the game is not the window in front (menu open, alt tab), Windows plays them.
+
+**Keeping up with CS2 updates**
+* **Offsets from the game itself**: every field the program uses is read from the game files at startup, [cs2-dumper](https://github.com/a2x/cs2-dumper) is only a fallback.
+* **Stops instead of breaking**: when something can't be found after an update, the program puts everything back and stops. A debug build says what was not found, a release build says it needs an update.
+* **Update check**: tells when a newer version of this fork is out.
 
 > [!WARNING]
 > **The features under "Memory writing" are dangerous.** They write into the memory of the game (and patch some of its code), which is far easier for an anti-cheat to notice than only reading it.
@@ -38,15 +56,14 @@ Simple external ESP for Counter-Strike 2. After years of development the codebas
 
 ## 🌳 Simple Use
 
-- You can download it from [**Releases**](https://github.com/IMXNOOBX/cs2-external-esp/releases) tab or **build it yourself** by following [developers instructions](#-developer-instructions).
-- Open the game & the `cs2-external-esp.exe`, and thats it!
-- **Star** the repository **if** you **like the project**! ⭐⭐⭐
+- **Build it yourself** by following the [developer instructions](#-developer-instructions), or download it from [**Releases**](https://github.com/Keydak/cs2-external-esp/releases) when there is one.
+- Open the game & `cs2-external-esp.exe`. Press **INSERT** or **RIGHT SHIFT** to open the menu.
+- **Star** the repository **if** you **like the project**! ⭐
 
 > If the app crashes on startup, you may be missing the latest [Windows Visual C++ redistributables](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170#latest-supported-redistributable-version). Install the appropriate package for your system:
 >
 > - [64-bit Windows](https://aka.ms/vc14/vc_redist.x64.exe) *for most modern systems*
 > - [32-bit](https://aka.ms/vc14/vc_redist.x86.exe) *for older devices*
-
 
 > [!IMPORTANT]
 > Make sure your game is in full screen windowed❗
@@ -55,47 +72,43 @@ Simple external ESP for Counter-Strike 2. After years of development the codebas
 
 > This project is provided *'as is'* for learning purposes with no warranties or responsibility from the developers/contributors. Use it at your own risk; you are the only one accountable for your actions
 
-* **Detection Status:** This project is intended solely for single-player use. That said, no ban reports have been raised for other modes.
-* **Anti-Virus Alerts:** This software may resemble malware in behavior because it accesses other processes memory, so it is commonly flagged by anti‑virus programs. I strongly encourage you to read the source code and build it yourself by following the [developers instructions](#-developer-instructions). All provided binaries are compiled via the [GitHub workflow](.github/workflows/auto_build.yml) from the repository source.
-
-## 🕹️ Previous Versions
-
-> This project has been reworked **3 times**, the current one been the third!
-
-* [Discord Overlay (2023)](https://github.com/IMXNOOBX/cs2-external-esp/tree/discord-overlay) is the first and the **simplest** version of all, great to start learning.
-* [Gdi Overlay (2023-2025)](https://github.com/IMXNOOBX/cs2-external-esp/tree/gdi-overlay) is an **improved version**, featuring automatic offset updating & configurations
-* [Modern Version (Today)](https://github.com/IMXNOOBX/cs2-external-esp/tree/main) is the current and the **latest version**, with a click ui, automatic offset scanning and more!
+* **Detection Status:** This project is intended solely for single-player use.
+* **Anti-Virus Alerts:** This software may resemble malware in behavior because it accesses other processes memory, so it is commonly flagged by anti‑virus programs. I strongly encourage you to read the source code and build it yourself by following the [developer instructions](#-developer-instructions).
 
 ## 📘 Developer Instructions
 
-> - This project is mirrored in the following locations.
->	 - **GitHub**: [*github.com/IMXNOOBX/cs2-external-esp*](https://github.com/IMXNOOBX/cs2-external-esp) (main)
-> 	 - **GitLab**: [*gitlab.com/IMXNOOBX/cs2-external-esp*](https://gitlab.com/IMXNOOBX/cs2-external-esp) (mirror)
->	 - **CodeBerg**: [*codeberg.org/IMXNOOBX/cs2-external-esp*](https://codeberg.org/IMXNOOBX/cs2-external-esp) (mirror)
-
-1. Clone repository. Make sure you copy the command below to clone dependencies too
+1. Clone the repository. Copy the command below so the dependencies are cloned too
 
 ```sh
-git clone --recursive https://github.com/IMXNOOBX/cs2-external-esp
+git clone --recursive https://github.com/Keydak/cs2-external-esp
 ```
 
-* If you cloned the repository before submodules were added, run this command `git submodule update --init --recursive`
+* If you cloned the repository before submodules were added, run `git submodule update --init --recursive`
 
 2. Build the app using **Visual Studio 2022** (or later)
 	- Build: **`x64 - Release`**
 
 3. Locate your binary file in the folder `<arch>/<configuration>`, e.g., `x64/Release`.
 
+* After a CS2 update, `update-project/check.bat` tells what changed in the game & what has to be updated.
+
+## 🕹️ Original Project
+
+This fork is based on the third version of [IMXNOOBX/cs2-external-esp](https://github.com/IMXNOOBX/cs2-external-esp). Its earlier versions:
+
+* [Discord Overlay (2023)](https://github.com/IMXNOOBX/cs2-external-esp/tree/discord-overlay), the first and **simplest** version, great to start learning.
+* [Gdi Overlay (2023-2025)](https://github.com/IMXNOOBX/cs2-external-esp/tree/gdi-overlay), with automatic offset updating & configurations.
+
 ## 💫 Credits
 
 * [**IMXNOOBX**](https://github.com/IMXNOOBX) for the original [cs2-external-esp](https://github.com/IMXNOOBX/cs2-external-esp), which this fork is built on.
-* [**keydak**](https://github.com/keydak) for this fork and the features added to it.
-* All [contributors](https://github.com/IMXNOOBX/cs2-external-esp/graphs/contributors) who have helped improve the project!
+* [**Keydak**](https://github.com/Keydak) for this fork and the features added to it.
+* All [contributors](https://github.com/IMXNOOBX/cs2-external-esp/graphs/contributors) of the original project!
 * [**a2x**](https://github.com/a2x) for his [offset dumper](https://github.com/a2x/cs2-dumper) and constant updates to it!
 
 ## 🔖 License & Copyright
 
-This project is licensed under [**CC BY-NC 4.0**](https://creativecommons.org/licenses/by-nc/4.0/).
+This project is licensed under [**CC BY-NC 4.0**](https://creativecommons.org/licenses/by-nc/4.0/), like the original.
 
 ```diff
 + You are free to:
@@ -110,4 +123,4 @@ This project is licensed under [**CC BY-NC 4.0**](https://creativecommons.org/li
 ```
 
 ### ©️ Copyright
-The content of this project is ©️ by [IMXNOOBX](https://github.com/IMXNOOBX) and the respective contributors. See the [LICENSE.md](LICENSE) file for details.
+The original project is ©️ by [IMXNOOBX](https://github.com/IMXNOOBX) and its contributors. The changes of this fork are ©️ by [Keydak](https://github.com/Keydak), under the same license. See the [LICENSE](LICENSE) file for details.

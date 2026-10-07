@@ -117,8 +117,9 @@ bool Cache::RefreshImpl() {
     if (now - last < (cfg::dev::cache_refresh_rate * 1ms)) 
         return true;
 #else
-    // Just refresh every 5ms good for most people
-    if (now - last < 5ms) 
+    // Every 10 ms: what moves fast (players, grenades in the air) is read again as it is drawn, the rest
+    // (health, weapons, flags) does not need more. Fewer reads leave more of the CPU to the game
+    if (now - last < 10ms) 
         return true; // All good
 #endif
 
@@ -152,11 +153,20 @@ bool Cache::RefreshImpl() {
     // Line of sight to everyone, traced here so the overlay does not wait on it. Not every refresh, the result
     // is kept for the ones in between
     if (now - last_visibility >= visibility_rate) {
+        auto trace_start = steady_clock::now();
         visibility.clear();
         for (const auto& player : scan)
             if (player.alive && !player.localplayer)
                 visibility[player.index] = VisibleBones(this->local, player, grenades);
         last_visibility = now;
+
+        // Slow traces make visible / behind a wall late by as much. Unoptimized (Debug) they can take most of a second
+        static auto next_slow_log = steady_clock::time_point{};
+        auto took = steady_clock::now() - trace_start;
+        if (took > 25ms && now >= next_slow_log) {
+            next_slow_log = now + 5s;
+            LOGF(WARNING, "Line of sight took {} ms, visible / behind a wall is late by that much", duration_cast<milliseconds>(took).count());
+        }
     }
 
     for (auto& player : scan)

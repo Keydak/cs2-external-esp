@@ -80,6 +80,7 @@ private:
     uint32_t input_head = 0;
     std::mutex input_mutex;         // Keys come from the keyboard hook & the movement thread
     std::atomic<bool> stopping = false;
+    HANDLE move_wake = nullptr;     // Set by the keyboard hook when a move key is let go, the movement thread runs at once
     bool jump_pressed = false;  // Bunny hop, our state of the jump button
 
     // Keyboard hook, W S A D

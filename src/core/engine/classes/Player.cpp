@@ -158,6 +158,35 @@ bool Player::UpdateSkeleton() {
 	for (const auto& bone : bones)
 		this->bone_list.push_back({ bone.pos });
 
+	this->bone_array = bone_array;
+	return true;
+}
+
+bool Player::RefreshPose() {
+	auto p = Engine::GetProcess();
+	if (!p || !this->pawn || !this->alive)
+		return false;
+
+	auto pos = p->read<Vec3_t>(this->pawn + offsets::pawn::m_vOldOrigin);
+	if (pos.zero())
+		return false;
+
+	if (this->bone_array) {
+		bone_transform bones[30];
+		if (!p->read_raw(this->bone_array, bones, sizeof(bones)))
+			return false;
+
+		// The bones moved with it, a pawn that was freed reads as nothing near it
+		if (bones[0].pos.dist_to_3d(pos) > 200.f)
+			return false;
+
+		this->bone_list.clear();
+		for (const auto& bone : bones)
+			this->bone_list.push_back({ bone.pos });
+	}
+
+	this->eye = this->eye + (pos - this->pos);
+	this->pos = pos;
 	return true;
 }
 

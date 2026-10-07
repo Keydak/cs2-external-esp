@@ -202,6 +202,17 @@ namespace cfg {
 			inline int style = STYLE_CLASSIC;	// Small white cross, or the crosshair set in the game
 		}
 
+		// Marks of our hits: at the crosshair & on the player that was hit
+		namespace hitmarker {
+			inline bool crosshair = false;
+			inline bool world = false;
+			inline bool damage = true;			// The damage rising from the world mark
+			inline float duration = 0.5f;		// Seconds
+			inline float size = 6.f;
+			inline color_t color{ 1.f, 1.f, 1.f, 1.f };
+			inline color_t kill_color{ 1.f, 0.27f, 0.27f, 1.f };
+		}
+
 		namespace radar {
 			enum mode_t { MODE_OVERLAY, MODE_GAME };
 
@@ -292,9 +303,18 @@ namespace cfg {
 		inline int clantag_mode = 0;            // ClanTag::GetModes()
 		inline float clantag_speed = 350.f;     // Milliseconds per step of the animation
 		inline int clantag_target = 0;          // Clan slot ([tag] name), before the name, after it, the whole name
+		inline int clantag_source = 0;          // The text above, or the names of the players in the match taking turns
 
 		inline bool name_change = false;
 		inline char name_text[33] = "";         // Empty keeps the real name
+
+		// Sounds of ours on a hit & a kill, files of the sound folder
+		inline bool hitsound = false;
+		inline std::string hitsound_file;
+		inline int hitsound_volume = 70;        // 0 - 100
+		inline bool killsound = false;
+		inline std::string killsound_file;
+		inline int killsound_volume = 70;
 	}
 
 	// Removals & glow written into the game
@@ -345,11 +365,11 @@ namespace cfg {
 	namespace settings {
 		inline bool watermark = true;
 		inline bool streamproof = false;
-		inline bool vsync = false;
 		inline bool free_cpu = true;
 		inline bool frame_times = false; // Not stored, where the time of a frame goes in the watermark (debug builds)
 		inline bool notifications = true; // Map building, notices of the program, the ESP off message
-		inline color_t accent = { 1.f, 0.44f, 0.26f, 1.f }; // Menu
+		inline color_t accent = { 1.f, 1.f, 1.f, 1.f }; // Menu, white by default
+		inline float menu_opacity = 0.86f;	// Of the menu background, the group boxes stay solid
 		inline float ui_scale = 1.15f; // Menu size
 
 		// Which debug lines of the console are shown, warnings, errors & info lines always are

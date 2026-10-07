@@ -23,6 +23,7 @@ int HttpHelper::GetImpl(std::string url, json& response) {
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_string);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, ""); // Accept every supported compression (gzip, deflate), json shrinks ~8x
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "cs2-external-esp"); // The GitHub API refuses requests without one
 
     CURLcode res = curl_easy_perform(curl);
 
@@ -57,6 +58,7 @@ int HttpHelper::GetRawImpl(std::string url, std::string& response) {
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "cs2-external-esp");
 
     CURLcode res = curl_easy_perform(curl);
 

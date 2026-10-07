@@ -41,6 +41,9 @@ namespace offsets
 		inline std::ptrdiff_t m_steamID = 0x788; // uint64
 		inline std::ptrdiff_t m_iszPlayerName = 0x6FC; // char[128]
 		inline std::ptrdiff_t m_bIsLocalPlayerController = 0x790; // bool
+		inline std::ptrdiff_t m_iCompetitiveRanking = 0x8A0; // int32, Premier rating or skill group (1 - 18)
+		inline std::ptrdiff_t m_iCompetitiveWins = 0x8A4; // int32
+		inline std::ptrdiff_t m_iCompetitiveRankType = 0x8A8; // int8, 11 Premier, 12 Competitive, 7 Wingman
 		inline std::ptrdiff_t m_pInGameMoneyServices = 0x818; // CCSPlayerController_InGameMoneyServices*
 		inline std::ptrdiff_t m_iAccount = 0x40; // int32 - CCSPlayerController_InGameMoneyServices
 		inline std::ptrdiff_t m_sSanitizedClanTag = 0x880; // CUtlString, the clan tag the scoreboard & kill feed show
@@ -81,6 +84,14 @@ namespace offsets
 		inline std::ptrdiff_t m_pObserverServices = 0x1308; // CPlayer_ObserverServices*
 	}
 
+	// Hits & kills of ours, for the hitmarker & the hit & kill sounds. Read from the schema of the game
+	namespace hits {
+		inline std::ptrdiff_t m_pBulletServices = 0; // CCSPlayer_BulletServices* - C_CSPlayerPawn
+		inline std::ptrdiff_t m_totalHitsOnServer = 0; // int32 - CCSPlayer_BulletServices, counts every hit the server gave us
+		inline std::ptrdiff_t m_pActionTrackingServices = 0; // CCSPlayerController_ActionTrackingServices* - CCSPlayerController
+		inline std::ptrdiff_t m_iNumRoundKills = 0; // int32 - CCSPlayerController_ActionTrackingServices, back to 0 every round
+	}
+
 	namespace bomb {
 		inline std::ptrdiff_t m_isPlanted = 0x8; // unk
 		inline std::ptrdiff_t m_bC4Activated = 0x12D0; // bool
@@ -100,6 +111,14 @@ namespace offsets
 		inline std::ptrdiff_t m_pCameraServices = 0x1328; // CPlayer_CameraServices* - C_BasePlayerPawn
 		inline std::ptrdiff_t m_iFOV = 0x298; // uint32 - CCSPlayerBase_CameraServices
 		inline std::ptrdiff_t m_iFOVStart = 0x29C; // uint32 - CCSPlayerBase_CameraServices
+	}
+
+	// Hit & kill sounds played by the game itself (-insecure)
+	namespace sounds {
+		inline std::ptrdiff_t fnPlayVol = 0; // soundsystem.dll, (context, const CCommand& { argc at +0x438, argv at +0x440 })
+		inline std::ptrdiff_t ccommandArgc = 0x438;
+		inline std::ptrdiff_t ccommandArgv = 0x440;
+		inline std::ptrdiff_t fileSystemAddSearchPath = 31; // vtable index, (path, path id, add type, priority, flags)
 	}
 
 	// What the server sends of a vote: the counts in the vote controller, who voted what in the vote_cast event
@@ -142,6 +161,7 @@ namespace offsets
 	// Removals & glow, all written into the game (-insecure)
 	namespace visuals {
 		inline std::ptrdiff_t m_flFlashMaxAlpha = 0x150C; // float32 - C_CSPlayerPawnBase, how white a flash gets (255)
+		inline std::ptrdiff_t m_bGunGameImmunity = 0x3508; // bool - C_CSPlayerPawn, spawn protection (deathmatch, casual)
 		inline std::ptrdiff_t m_bSmokeEffectSpawned = 0x13AA; // bool - C_SmokeGrenadeProjectile, the cloud was made
 
 		// The cloud of a smoke, from the code that makes it (not in the schema): an object in the projectile with the time
@@ -353,6 +373,9 @@ namespace offsets
 		const std::string smokeStart = "48 8B 86 ?? ?? 00 00 BA FF FF FF FF F3 0F 11 B0 ?? ?? 00 00 48 8B 86 ?? ?? 00 00 C6 80";
 		// Some hud element listens for the vote events: mov byte [r14 + 28], 1; lea r8, name; mov rcx, [rip + manager];
 		// lea rdx, [r14 + 20]; xor r9d, r9d; mov rax, [rcx]; call [rax + 18] (AddListener)
+		// soundsystem.dll, callback of the "playvol" command: lea r11...; xor r13d, r13d; mov r15, rdx (the arguments);
+		// mov edx, 1; mov [rbp - 60], r13d; mov ecx, 0xC00000C8 (a CBufferString)
+		const std::string playVol = "4C 8B DC 55 41 55 41 56 41 57 49 8D AB ?? ?? ?? ?? 48 81 EC ?? ?? ?? ?? 45 33 ED 4C 8B FA BA 01 00 00 00 44 89 6D ?? B9 C8 00 00 C0";
 		const std::string gameEventManager = "41 C6 46 28 01 4C 8D 05 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? 49 8D 56 20 45 33 C9 48 8B 01 FF 50 18";
 		const std::string updateClanTag ="48 89 5C 24 10 48 89 74 24 18 55 57 41 56 48 8D AC 24 ?? ?? ?? ?? 48 81 EC ?? ?? ?? ?? 48 8B 81 ?? ?? ?? ?? 48 8D 3D ?? ?? ?? ?? 48 85 C0 C7 44 24 ?? 80 00 00 C0";
 

@@ -21,8 +21,9 @@ namespace {
     // Counter strafing starts above this speed. It stops when the speed reaches zero, predicted from the last
     // simulated movement: the velocity we read is up to a tick old & the counter strafe keeps pushing in the meantime,
     // so stopping at a fixed speed went past zero into the other direction
-    constexpr float QUICK_STOP_START_SPEED = 60.f;
-    constexpr float QUICK_STOP_MIN_SPEED = 8.f;      // Friction handles the rest at once
+    // Low, so a short tap (rapid trigger keyboards) is stopped too & not left to slide on friction
+    constexpr float QUICK_STOP_START_SPEED = 15.f;
+    constexpr float QUICK_STOP_MIN_SPEED = 3.f;      // Friction handles the rest at once
     constexpr float QUICK_STOP_LEAD = 0.003f;        // Seconds before zero: our key reaches the game a bit later
 
     // Counter strafe slowdown before it was measured: sv_accelerate 5.5 * 250 wish speed, plus friction 5.2 * speed.
@@ -182,6 +183,7 @@ bool Movement::InitImpl() {
 
     // sleep_for rounds up to the system timer resolution (~15.6ms by default)
     timeBeginPeriod(1);
+    this->move_wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 
     if (SetupGameInput())
         LOGF(INFO, "Movement keys go straight into the game input");
@@ -335,6 +337,9 @@ bool Movement::OnMoveKey(size_t key, bool down) {
 
     this->held[key] = down;
 
+    if (!down && this->move_wake)
+        SetEvent(this->move_wake);
+
     // Order of presses, the last pressed direction of an axis wins
     if (down && !repeat)
         this->pressed_at[key] = ++this->press_count;
@@ -401,7 +406,12 @@ void Movement::Thread() {
 
         QuickStop();
         Bhop();
-        std::this_thread::sleep_for(1ms);
+
+        // A move key let go wakes it right away: the counter strafe starts with the release, not up to a ms later
+        if (this->move_wake)
+            WaitForSingleObject(this->move_wake, 1);
+        else
+            std::this_thread::sleep_for(1ms);
     }
 }
 

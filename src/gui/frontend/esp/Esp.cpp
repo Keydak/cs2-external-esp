@@ -82,6 +82,11 @@ void Esp::RenderImpl() {
 
 	std::vector<Drawn> drawn;
 
+	// Where they stand & their bones read again now, with the camera above: from the cache they are a few ms old
+	// & shook against the camera when someone runs. Copies, the snapshot is shared
+	std::vector<Player> posed;
+	posed.reserve(players.size());
+
 	for (auto& player : players) {
 		if (!player.alive)
 			continue;
@@ -111,8 +116,11 @@ void Esp::RenderImpl() {
 		if (group.visible_only && !visible)
 			continue;
 
-		auto delta = player.pos - local.pos;
-		drawn.push_back({ &player, &group, visible, delta.x * delta.x + delta.y * delta.y + delta.z * delta.z });
+		auto& fresh = posed.emplace_back(player);
+		fresh.RefreshPose();
+
+		auto delta = fresh.pos - local.pos;
+		drawn.push_back({ &fresh, &group, visible, delta.x * delta.x + delta.y * delta.y + delta.z * delta.z });
 	}
 
 	// The far ones first so close ones cover them
@@ -128,7 +136,29 @@ void Esp::RenderImpl() {
 		RenderCrosshair(local);
 	RenderItems(snapshot.items, local.pos);
 	RenderBombBox(bomb);
-	RenderGrenades(snapshot.grenades);
+
+	// Grenades in the air read again now too, they move fastest of all. The trail runs on to where they are
+	auto grenades = snapshot.grenades;
+	if (auto p = Engine::GetProcess()) {
+		for (auto& grenade : grenades) {
+			if (grenade.detonated || grenade.type == GrenadeType::Fire || !grenade.entity)
+				continue;
+
+			auto node = p->read<uintptr_t>(grenade.entity + offsets::pawn::m_pGameSceneNode);
+			if (!node)
+				continue;
+
+			auto pos = p->read<Vec3_t>(node + offsets::bomb::m_vecAbsOrigin);
+			if (pos.zero() || pos.dist_to_3d(grenade.pos) > 300.f)
+				continue;
+
+			grenade.pos = pos;
+			if (!grenade.trail.empty())
+				grenade.trail.push_back(pos);
+		}
+	}
+
+	RenderGrenades(grenades);
 	RenderGrenadePrediction(snapshot.grenade_path);
 	ImGui::PopFont();
 }

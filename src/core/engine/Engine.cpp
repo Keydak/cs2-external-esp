@@ -9,6 +9,8 @@
 #include "core/features/AutoAccept.hpp"
 #include "core/features/ClanTag.hpp"
 #include "core/features/VoteEvents.hpp"
+#include "core/features/HitEffects.hpp"
+#include "core/features/Sounds.hpp"
 #include "core/features/Subtick.hpp"
 #include "core/features/Visuals.hpp"
 #include "core/features/Freecam.hpp"
@@ -223,6 +225,8 @@ bool Engine::InitImpl() {
     AutoAccept::Init();
     ClanTag::Init();
     VoteEvents::Init();
+    Sounds::Init();
+    HitEffects::Init();
     Subtick::Init();
     Visuals::Init();
     Freecam::Init();

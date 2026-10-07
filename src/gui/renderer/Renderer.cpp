@@ -35,6 +35,61 @@ const Renderer::FrameTimes& Renderer::GetFrameTimes() {
 }
 
 namespace {
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+
+    // The overlay is held to the refresh rate of the screen: frames past it are never seen & only take the GPU from
+    // the game. Not V-Sync, which waits for the screen & leaves the ESP up to a frame late (the overlay is composed
+    // by Windows, it does not tear anyway)
+    class FrameLimiter {
+    public:
+        FrameLimiter() {
+            timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+            if (!timer)
+                timer = CreateWaitableTimerW(nullptr, TRUE, nullptr);
+
+            DEVMODEW mode{};
+            mode.dmSize = sizeof(mode);
+            if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode) && mode.dmDisplayFrequency > 1)
+                hz = static_cast<double>(mode.dmDisplayFrequency);
+        }
+
+        ~FrameLimiter() {
+            if (timer)
+                CloseHandle(timer);
+        }
+
+        void Wait() {
+            using namespace std::chrono;
+            auto frame = duration_cast<steady_clock::duration>(duration<double>(1.0 / hz));
+            auto now = steady_clock::now();
+
+            next += frame;
+            if (next < now - frame)  // Fell behind, no catching up
+                next = now;
+
+            auto left = next - now;
+            if (left <= steady_clock::duration::zero())
+                return;
+
+            if (timer) {
+                LARGE_INTEGER due{};
+                due.QuadPart = -duration_cast<duration<long long, std::ratio<1, 10000000>>>(left).count();
+                if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
+                    WaitForSingleObject(timer, INFINITE);
+                    return;
+                }
+            }
+            std::this_thread::sleep_for(left);
+        }
+
+    private:
+        HANDLE timer = nullptr;
+        double hz = 144.0;
+        std::chrono::steady_clock::time_point next = std::chrono::steady_clock::now();
+    };
+
     // Milliseconds since the last call, averaged into the value
     struct Stopwatch {
         std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
@@ -74,9 +129,6 @@ bool Renderer::InitImpl() {
     if (cfg::settings::streamproof)
         Window::SetAffinity(Window::hwnd, WindowAffinity::Invisible);
 
-    if (cfg::settings::vsync)
-        Window::vsync = true;
-
     // We want the main thread to call render
     // And lock it
     // std::thread(Thread).detach();
@@ -92,8 +144,11 @@ void Renderer::DestroyImpl() {
 
 void Renderer::ThreadImpl() {
     auto next_check = std::chrono::steady_clock::now();
+    FrameLimiter limiter;
 
     while (isRunning) {
+        limiter.Wait();
+
         // Closing the game closes us too, a few times a second is enough
         if (auto now = std::chrono::steady_clock::now(); now >= next_check) {
             next_check = now + std::chrono::milliseconds(500);

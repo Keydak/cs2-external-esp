@@ -250,6 +250,19 @@ void Config::ApplySettings(json data) {
 	cfg::world::bomb::timer = data["world"]["bomb"].value("timer", true);
 	cfg::world::bomb::pos = JsonToVec2(data["world"]["bomb"], "pos", { 10.f, 300.f });
 
+	// hitmarker
+	{
+		namespace hm = cfg::world::hitmarker;
+		const auto& from = data["world"].contains("hitmarker") && data["world"]["hitmarker"].is_object() ? data["world"]["hitmarker"] : json::object();
+		hm::crosshair = from.value("crosshair", false);
+		hm::world = from.value("world", false);
+		hm::damage = from.value("damage", true);
+		hm::duration = from.value("duration", 0.5f);
+		hm::size = from.value("size", 6.f);
+		hm::color = JsonToColor(from, "color", color_t(1.f, 1.f, 1.f, 1.f));
+		hm::kill_color = JsonToColor(from, "kill_color", color_t(1.f, 0.27f, 0.27f, 1.f));
+	}
+
 	// crosshair
 	cfg::world::crosshair::enabled = data["world"]["crosshair"].value("enabled", false);
 	cfg::world::crosshair::style = data["world"]["crosshair"].value("style", static_cast<int>(cfg::world::crosshair::STYLE_CLASSIC));
@@ -287,9 +300,16 @@ void Config::ApplySettings(json data) {
 		cfg::misc::clantag_mode = std::clamp(data["misc"].value("clantag_mode", 0), 0, 11);
 		cfg::misc::clantag_speed = std::clamp(data["misc"].value("clantag_speed", 350.f), 100.f, 1500.f);
 		snprintf(cfg::misc::clantag_text, sizeof(cfg::misc::clantag_text), "%s", data["misc"].value("clantag_text", std::string("Cs2 External")).c_str());
+		cfg::misc::clantag_source = std::clamp(data["misc"].value("clantag_source", 0), 0, 1);
 		cfg::misc::clantag_target = std::clamp(data["misc"].value("clantag_target", data["misc"].value("clantag_brackets", true) ? 0 : 1), 0, 3);
 		cfg::misc::name_change = data["misc"].value("name_change", false);
 		snprintf(cfg::misc::name_text, sizeof(cfg::misc::name_text), "%s", data["misc"].value("name_text", std::string()).c_str());
+		cfg::misc::hitsound = data["misc"].value("hitsound", false);
+		cfg::misc::hitsound_file = data["misc"].value("hitsound_file", std::string());
+		cfg::misc::hitsound_volume = std::clamp(data["misc"].value("hitsound_volume", 70), 0, 100);
+		cfg::misc::killsound = data["misc"].value("killsound", false);
+		cfg::misc::killsound_file = data["misc"].value("killsound_file", std::string());
+		cfg::misc::killsound_volume = std::clamp(data["misc"].value("killsound_volume", 70), 0, 100);
 	}
 
 	// visuals
@@ -360,9 +380,9 @@ void Config::ApplySettings(json data) {
 	cfg::settings::watermark = data["utils"].value("watermark", true);
 	cfg::settings::notifications = data["utils"].value("notifications", true);
 	cfg::settings::streamproof = data["utils"].value("streamproof", false);
-	cfg::settings::vsync = data["utils"].value("vsync", true);
 	cfg::settings::free_cpu = data["utils"].value("free_cpu", true);
 	cfg::settings::accent = JsonToColor(data["utils"], "accent", cfg::settings::accent);
+	cfg::settings::menu_opacity = std::clamp(data["utils"].value("menu_opacity", 0.86f), 0.3f, 1.f);
 	cfg::settings::ui_scale = std::clamp(data["utils"].value("ui_scale", 1.15f), 0.8f, 1.6f);
 
 	{
@@ -466,6 +486,19 @@ json Config::SettingsJson() {
 	data["world"]["bomb"]["timer"] = cfg::world::bomb::timer;
 	Vec2ToJson(data["world"]["bomb"], "pos", cfg::world::bomb::pos);
 
+	// hitmarker
+	{
+		namespace hm = cfg::world::hitmarker;
+		auto& to = data["world"]["hitmarker"];
+		to["crosshair"] = hm::crosshair;
+		to["world"] = hm::world;
+		to["damage"] = hm::damage;
+		to["duration"] = hm::duration;
+		to["size"] = hm::size;
+		ColorToJson(to, "color", hm::color);
+		ColorToJson(to, "kill_color", hm::kill_color);
+	}
+
 	// crosshair
 	data["world"]["crosshair"]["enabled"] = cfg::world::crosshair::enabled;
 	data["world"]["crosshair"]["style"] = cfg::world::crosshair::style;
@@ -513,7 +546,14 @@ json Config::SettingsJson() {
 	data["misc"]["clantag_mode"] = cfg::misc::clantag_mode;
 	data["misc"]["clantag_speed"] = cfg::misc::clantag_speed;
 	data["misc"]["clantag_text"] = std::string(cfg::misc::clantag_text);
+	data["misc"]["hitsound"] = cfg::misc::hitsound;
+	data["misc"]["hitsound_file"] = cfg::misc::hitsound_file;
+	data["misc"]["hitsound_volume"] = cfg::misc::hitsound_volume;
+	data["misc"]["killsound"] = cfg::misc::killsound;
+	data["misc"]["killsound_file"] = cfg::misc::killsound_file;
+	data["misc"]["killsound_volume"] = cfg::misc::killsound_volume;
 	data["misc"]["clantag_target"] = cfg::misc::clantag_target;
+	data["misc"]["clantag_source"] = cfg::misc::clantag_source;
 	data["misc"]["name_change"] = cfg::misc::name_change;
 	data["misc"]["name_text"] = std::string(cfg::misc::name_text);
 
@@ -578,9 +618,9 @@ json Config::SettingsJson() {
 	data["utils"]["watermark"] = cfg::settings::watermark;
 	data["utils"]["notifications"] = cfg::settings::notifications;
 	data["utils"]["streamproof"] = cfg::settings::streamproof;
-	data["utils"]["vsync"] = cfg::settings::vsync;
 	data["utils"]["free_cpu"] = cfg::settings::free_cpu;
 	ColorToJson(data["utils"], "accent", cfg::settings::accent);
+	data["utils"]["menu_opacity"] = cfg::settings::menu_opacity;
 	data["utils"]["ui_scale"] = cfg::settings::ui_scale;
 	data["utils"]["log"] = {
 		{ "skins", cfg::settings::logs::skins },

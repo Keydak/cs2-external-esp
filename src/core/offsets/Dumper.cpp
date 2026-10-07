@@ -32,6 +32,9 @@ namespace {
             { offsets::controller::m_sSanitizedClanTag,         "CCSPlayerController",                      "m_sSanitizedClanTag" },
             { offsets::controller::m_szClan,                    "CCSPlayerController",                      "m_szClan" },
             { offsets::controller::m_bIsLocalPlayerController,  "CCSPlayerController",                      "m_bIsLocalPlayerController" },
+            { offsets::controller::m_iCompetitiveRanking,       "CCSPlayerController",                      "m_iCompetitiveRanking" },
+            { offsets::controller::m_iCompetitiveWins,          "CCSPlayerController",                      "m_iCompetitiveWins" },
+            { offsets::controller::m_iCompetitiveRankType,      "CCSPlayerController",                      "m_iCompetitiveRankType" },
             { offsets::controller::m_pInGameMoneyServices,      "CCSPlayerController",                      "m_pInGameMoneyServices" },
             { offsets::controller::m_iAccount,                  "CCSPlayerController_InGameMoneyServices",  "m_iAccount" },
 
@@ -60,6 +63,11 @@ namespace {
             { offsets::pawn::m_iClip1,                          "C_BasePlayerWeapon",                       "m_iClip1" },
             { offsets::pawn::m_bInReload,                       "C_CSWeaponBase",                           "m_bInReload" },
             { offsets::pawn::m_pObserverServices,               "C_BasePlayerPawn",                         "m_pObserverServices" },
+
+            { offsets::hits::m_pBulletServices,                 "C_CSPlayerPawn",                           "m_pBulletServices" },
+            { offsets::hits::m_totalHitsOnServer,               "CCSPlayer_BulletServices",                 "m_totalHitsOnServer" },
+            { offsets::hits::m_pActionTrackingServices,         "CCSPlayerController",                      "m_pActionTrackingServices" },
+            { offsets::hits::m_iNumRoundKills,                  "CCSPlayerController_ActionTrackingServices", "m_iNumRoundKills" },
 
             { offsets::bomb::m_bC4Activated,                    "C_PlantedC4",                              "m_bC4Activated" },
             { offsets::bomb::m_nBombSite,                       "C_PlantedC4",                              "m_nBombSite" },
@@ -98,6 +106,7 @@ namespace {
             { offsets::grenade::m_bExplodeEffectBegan,          "C_BaseCSGrenadeProjectile",                "m_bExplodeEffectBegan" },
 
             { offsets::visuals::m_flFlashMaxAlpha,              "C_CSPlayerPawnBase",                       "m_flFlashMaxAlpha" },
+            { offsets::visuals::m_bGunGameImmunity,             "C_CSPlayerPawn",                           "m_bGunGameImmunity" },
             { offsets::visuals::m_bSmokeEffectSpawned,          "C_SmokeGrenadeProjectile",                 "m_bSmokeEffectSpawned" },
             { offsets::visuals::m_zoomLevel,                    "C_CSWeaponBaseGun",                        "m_zoomLevel" },
             { offsets::visuals::m_clrRender,                    "C_BaseModelEntity",                        "m_clrRender" },
@@ -477,6 +486,17 @@ bool Dumper::InitImpl() {
         LOGF(VERBOSE, "Found the game event manager at 0x{:X}", offsets::votes::dwGameEventManager);
     } else
         Missing("Could not find the game event manager, the vote list shows no names");
+
+    // The "playvol" command of the sound system, called with arguments of ours: the hit & kill sounds through the game
+    {
+        auto sound = Engine::GetProcess()->GetModule("soundsystem.dll");
+        auto found = sound.base ? ScanMemory(offsets::signatures::playVol, sound.base, sound.base + sound.size) : std::vector<DWORD64>{};
+        if (!found.empty()) {
+            offsets::sounds::fnPlayVol = found.at(0) - sound.base;
+            LOGF(VERBOSE, "Found 'playvol' of the sound system at 0x{:X}", offsets::sounds::fnPlayVol);
+        } else
+            Missing("Could not find 'playvol' of the sound system, hit & kill sounds play through Windows");
+    }
 
     // Name, optional
     if (auto found = ScanMemory(offsets::signatures::updateName, client.base, client.base + client.size); !found.empty()) {

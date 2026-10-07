@@ -2,6 +2,7 @@
 
 #include "core/engine/Engine.hpp"
 #include "core/engine/cache/Cache.hpp"
+#include "core/offsets/Offsets.hpp"
 #include "core/features/Movement.hpp"
 #include "core/features/Subtick.hpp"
 #include "core/features/View.hpp"
@@ -15,6 +16,9 @@
 #include "assets/models/PlayerModels.h"
 #include "assets/models/PlayerPreviews.h"
 #include "gui/frontend/images/ImageCache.hpp"
+#include "gui/frontend/images/Avatars.hpp"
+#include "updater/Updater.hpp"
+#include "core/features/Sounds.hpp"
 #include "core/engine/classes/Weapon.hpp"
 #include "gui/frontend/esp/Esp.hpp"
 #include "gui/frontend/esp/GameCrosshair.hpp"
@@ -33,27 +37,33 @@
 namespace {
 	// Palette
 	namespace col {
-		// Neutral greys, no tint, so the single accent carries all the color
-		constexpr ImU32 window = IM_COL32(17, 17, 19, 255);
-		constexpr ImU32 sidebar = IM_COL32(13, 13, 15, 255);
-		constexpr ImU32 panel = IM_COL32(22, 22, 25, 255);
-		constexpr ImU32 selected = IM_COL32(32, 32, 36, 255);
-		constexpr ImU32 border = IM_COL32(37, 37, 41, 255);
-		constexpr ImU32 border_hover = IM_COL32(60, 60, 66, 255);
-		constexpr ImU32 hover = IM_COL32(255, 255, 255, 7);
+		// Dark navy hues, a little see through: the game shows behind the window
+		constexpr ImU32 window = IM_COL32(15, 17, 23, 255);
+		constexpr ImU32 sidebar = IM_COL32(12, 14, 19, 240);		// Sidebar & header a little see through
+		constexpr ImU32 header = IM_COL32(17, 19, 26, 245);
+		constexpr ImU32 panel = IM_COL32(21, 26, 37, 255);		// Group boxes
+		constexpr ImU32 selected = IM_COL32(34, 44, 68, 170);	// Active tab
+		constexpr ImU32 border = IM_COL32(255, 255, 255, 14);
+		constexpr ImU32 border_hover = IM_COL32(255, 255, 255, 32);
+		constexpr ImU32 hover = IM_COL32(255, 255, 255, 5);
 		constexpr ImU32 online = IM_COL32(126, 204, 142, 255);
-		constexpr ImU32 track = IM_COL32(44, 44, 49, 255);
-		constexpr ImU32 track_hover = IM_COL32(56, 56, 62, 255);
-		constexpr ImU32 text = IM_COL32(237, 237, 239, 255);
-		constexpr ImU32 text_label = IM_COL32(200, 200, 205, 255);
-		constexpr ImU32 text_dim = IM_COL32(140, 140, 148, 255);
-		constexpr ImU32 text_faint = IM_COL32(90, 90, 98, 255);
-		constexpr ImU32 on_accent = IM_COL32(18, 18, 20, 255); // Text on accent fills
+		constexpr ImU32 track = IM_COL32(27, 33, 47, 255);		// Fields & tracks, "frame inactive"
+		constexpr ImU32 track_hover = IM_COL32(38, 49, 74, 255);	// "frame active"
+		constexpr ImU32 button = IM_COL32(25, 28, 38, 255);
+		constexpr ImU32 button_hover = IM_COL32(33, 37, 49, 255);
+		constexpr ImU32 text = IM_COL32(255, 255, 255, 255);
+		constexpr ImU32 text_label = IM_COL32(145, 149, 160, 255);	// Labels of what is off
+		constexpr ImU32 text_dim = IM_COL32(145, 149, 160, 255);
+		constexpr ImU32 text_faint = IM_COL32(255, 255, 255, 128);	// Group & section titles
+		constexpr ImU32 on_accent = IM_COL32(6, 10, 18, 255);		// Text on accent fills
 		constexpr ImU32 knob = IM_COL32(255, 255, 255, 255);
 		constexpr ImU32 shadow = IM_COL32(0, 0, 0, 255);
 
+		// How much of the window background covers the game, the group boxes stay solid. From the config like the accent
+		inline float backdrop = 0.86f;
+
 		// From the config, refreshed every frame
-		inline ImU32 accent = IM_COL32(255, 112, 67, 255);
+		inline ImU32 accent = IM_COL32(255, 255, 255, 255);
 	}
 
 	// Layout, at a scale of 1. SetScale() fills in the scaled values below every frame
@@ -90,27 +100,26 @@ namespace {
 	constexpr float MENU_OPEN_SPEED = 6.f;    // 1 / seconds
 	constexpr float MENU_CLOSE_SPEED = 9.f;
 	constexpr float TAB_SWITCH_SPEED = 4.5f;
-	constexpr float RIPPLE_DURATION = 0.45f;
 
 	void SetScale(float scale) {
 		ui_scale = scale;
 
 		MENU_SIZE = S(BASE_MENU_SIZE);
-		WINDOW_ROUNDING = S(14.f);
-		SIDEBAR_WIDTH = S(200.f);
-		HEADER_HEIGHT = S(68.f);
-		CONTENT_PADDING = S(20.f);
-		COLUMN_SPACING = S(16.f);
-		ROW_HEIGHT = S(34.f);
-		PANEL_ROUNDING = S(10.f);
+		WINDOW_ROUNDING = S(8.f);
+		SIDEBAR_WIDTH = S(190.f);
+		HEADER_HEIGHT = S(60.f);
+		CONTENT_PADDING = S(16.f);
+		COLUMN_SPACING = S(10.f);
+		ROW_HEIGHT = S(30.f);
+		PANEL_ROUNDING = S(6.f);
 
-		TOGGLE_SIZE = S(ImVec2(38.f, 20.f));
+		TOGGLE_SIZE = S(ImVec2(30.f, 17.f));
 		SWATCH_SIZE = S(18.f);
 		SLIDER_WIDTH = S(116.f);
 		SLIDER_VALUE_WIDTH = S(54.f);
 		WIDGET_SPACING = S(8.f);
 
-		TAB_SLIDE = S(14.f);
+		TAB_SLIDE = S(6.f);
 	}
 
 #ifdef _DEBUG
@@ -121,6 +130,41 @@ namespace {
 	constexpr auto BRAND_SUBTITLE = "Counter-Strike 2";
 #endif
 
+	// Bottom left of the sidebar: the author of this fork, opens the credits & the accent
+	constexpr auto AUTHOR = "Keydak";
+	constexpr auto AUTHOR_AVATAR = "https://github.com/Keydak.png?size=96";
+	constexpr auto AUTHOR_URL = L"https://github.com/Keydak";
+
+	struct Credit {
+		const char* name;
+		const char* what;
+	};
+
+	constexpr Credit CREDITS[] = {
+		{ "Keydak", "This fork & its rework" },
+		{ "IMXNOOBX", "The original cs2-external-esp" },
+		{ "a2x", "cs2-dumper, the offsets" },
+	};
+
+	// Activation of a feature with a key, cfg mode values 0, 1, 2
+	const std::vector<const char*> ACTIVATION_MODES = { "Toggle", "Hold", "Always" };
+	constexpr const char* ACTIVATION_DESCRIPTIONS[] = {
+		"Press the key to switch it on & off",
+		"On only while the key is held",
+		"Always on, no key",
+	};
+
+	// Quick accents, the swatch after them picks any other
+	constexpr ImU32 ACCENTS[] = {
+		IM_COL32(255, 255, 255, 255),
+		IM_COL32(74, 144, 255, 255),
+		IM_COL32(150, 110, 255, 255),
+		IM_COL32(255, 105, 180, 255),
+		IM_COL32(255, 90, 90, 255),
+		IM_COL32(255, 150, 60, 255),
+		IM_COL32(90, 210, 130, 255),
+	};
+
 	ImFont* font_regular = nullptr;
 	ImFont* font_bold = nullptr;
 
@@ -129,6 +173,15 @@ namespace {
 	} column_layout{};
 
 	// Applies the current style alpha, so fades & BeginDisabled() also reach custom drawings
+	// Tooltips with their own padding: inside a panel the style has none above & below
+	template<typename... Args>
+	void ShowTooltip(const char* format, Args... args) {
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(10.f), S(8.f)));
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(S(8.f), S(4.f)));
+		ImGui::SetTooltip(format, args...);
+		ImGui::PopStyleVar(2);
+	}
+
 	ImU32 C(ImU32 color, float alpha = 1.f) {
 		return ImGui::GetColorU32(color, alpha);
 	}
@@ -161,14 +214,11 @@ namespace {
 		return value;
 	}
 
-	// Soft glow around a rect, layers of growing translucent rects
-	void Glow(ImDrawList* d, ImVec2 min, ImVec2 max, ImU32 color, float rounding, float size, float strength) {
-		constexpr int layers = 6;
-
-		for (int i = layers; i >= 1; i--) {
-			float f = static_cast<float>(i) / layers;
-			float grow = size * f;
-			d->AddRectFilled(min - ImVec2(grow, grow), max + ImVec2(grow, grow), C(color, strength * (1.f - f) * 0.5f), rounding + grow);
+	// Thin dark edge around a see through window: strokes only, so nothing dark ends up under the window itself
+	void Outline(ImDrawList* d, ImVec2 min, ImVec2 max, float rounding) {
+		for (int i = 1; i <= 3; i++) {
+			float grow = static_cast<float>(i);
+			d->AddRect(min - ImVec2(grow, grow), max + ImVec2(grow, grow), C(col::shadow, 0.3f / i), rounding + grow, 0, 1.f);
 		}
 	}
 
@@ -192,11 +242,16 @@ namespace {
 		ImGui::EndChild();
 	}
 
+	// A group box: its title dim above it, then the navy box with a hairline border
 	void BeginPanel(const char* title) {
+		auto start = ImGui::GetCursorScreenPos();
+		ImGui::GetWindowDrawList()->AddText(ImVec2(start.x + S(10.f), start.y), C(col::text_faint), title, ImGui::FindRenderedTextEnd(title));
+		ImGui::Dummy(ImVec2(0, ImGui::GetTextLineHeight() + S(5.f)));
+
 		ImGui::PushStyleColor(ImGuiCol_ChildBg, col::panel);
 		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, PANEL_ROUNDING);
 		ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.f);
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(14.f), 0.f));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(12.f), 0.f));
 		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(S(8.f), 0.f));
 
 		ImGui::BeginChild(
@@ -206,35 +261,21 @@ namespace {
 			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
 		);
 
-		// Title bar: accent mark, title and a faint divider
-		auto d = ImGui::GetWindowDrawList();
-		auto window_pos = ImGui::GetWindowPos();
-		auto window_width = ImGui::GetWindowWidth();
-		auto start = ImGui::GetCursorScreenPos();
-
-		d->AddRectFilled(start + ImVec2(0.f, S(14.f)), start + ImVec2(S(2.f), S(26.f)), C(col::accent), 1.f);
-		d->AddText(font_bold, S(12.f), start + ImVec2(S(11.f), S(13.f)), C(col::text_dim), title);
-		d->AddLine(ImVec2(window_pos.x, start.y + S(39.f)), ImVec2(window_pos.x + window_width, start.y + S(39.f)), C(col::border, 0.7f));
-
-		ImGui::Dummy(ImVec2(0, S(44.f)));
+		ImGui::Dummy(ImVec2(0, S(6.f)));
 	}
 
 	void EndPanel() {
-		ImGui::Dummy(ImVec2(0, S(8.f)));
+		ImGui::Dummy(ImVec2(0, S(6.f)));
 		ImGui::EndChild();
 
 		ImGui::PopStyleVar(4);
 		ImGui::PopStyleColor();
 
-		// Border lights up while hovered
 		auto min = ImGui::GetItemRectMin();
 		auto max = ImGui::GetItemRectMax();
-		bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseHoveringRect(min, max);
-		float h = Animate(ImGui::GetItemID() + 1, hovered ? 1.f : 0.f, 10.f);
+		ImGui::GetWindowDrawList()->AddRect(min, max, C(col::border), PANEL_ROUNDING, 0, 1.f);
 
-		ImGui::GetWindowDrawList()->AddRect(min, max, LerpColor(col::border, col::border_hover, h), PANEL_ROUNDING, 0, 1.f);
-
-		ImGui::Dummy(ImVec2(0, S(14.f)));
+		ImGui::Dummy(ImVec2(0, S(12.f)));
 	}
 
 	// Rows, label on the left and widgets aligned to the right
@@ -245,6 +286,9 @@ namespace {
 		float right; // Where the next right-aligned widget ends
 	};
 
+	// Label of the next row in white: a toggle that is on
+	bool row_lit = false;
+
 	Row BeginRow(const char* label, const char* tooltip = nullptr) {
 		Row row{};
 		row.start = ImGui::GetCursorScreenPos();
@@ -253,21 +297,19 @@ namespace {
 
 		auto d = ImGui::GetWindowDrawList();
 
-		// Hover highlight
-		auto highlight_min = row.start + ImVec2(-S(8.f), 1.f);
-		auto highlight_max = row.start + ImVec2(row.width + S(8.f), ROW_HEIGHT - 1.f);
-		bool hovered = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(highlight_min, highlight_max);
+		auto hover_min = row.start + ImVec2(-S(6.f), 0.f);
+		auto hover_max = row.start + ImVec2(row.width + S(6.f), ROW_HEIGHT);
+		bool hovered = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(hover_min, hover_max);
 		float h = Animate(ImGui::GetID("##row_hover"), hovered ? 1.f : 0.f, 16.f);
-
-		if (h > 0.01f)
-			d->AddRectFilled(highlight_min, highlight_max, C(col::hover, h), S(7.f));
+		float lit = Animate(ImGui::GetID("##row_lit"), row_lit ? 1.f : 0.f, 12.f);
+		row_lit = false;
 
 		// What follows ## is only the id, like everywhere in ImGui
 		auto label_end = ImGui::FindRenderedTextEnd(label);
 		auto text_size = ImGui::CalcTextSize(label, label_end);
-		auto text_pos = ImVec2(row.start.x + h * 2.f, row.start.y + (ROW_HEIGHT - text_size.y) * 0.5f);
+		auto text_pos = ImVec2(row.start.x, row.start.y + (ROW_HEIGHT - text_size.y) * 0.5f);
 
-		d->AddText(text_pos, LerpColor(col::text_label, col::text, h), label, label_end);
+		d->AddText(text_pos, LerpColor(col::text_label, col::text, std::max(lit, h * 0.6f)), label, label_end);
 
 		if (tooltip) {
 			// Small hint so users know there is more info
@@ -281,7 +323,7 @@ namespace {
 			d->AddText(font_bold, S(10.f), hint_center - mark_size * 0.5f, LerpColor(col::text_dim, col::text, hh), "?");
 
 			if (hint_hovered)
-				ImGui::SetTooltip("%s", tooltip);
+				ShowTooltip("%s", tooltip);
 		}
 
 		return row;
@@ -309,44 +351,26 @@ namespace {
 
 		bool pressed = ImGui::InvisibleButton(id, TOGGLE_SIZE);
 		auto item = ImGui::GetItemID();
-		auto storage = ImGui::GetStateStorage();
 
-		if (pressed) {
+		if (pressed)
 			*value = !*value;
-			storage->SetFloat(item + 2, static_cast<float>(ImGui::GetTime())); // Ripple start
-		}
-
-		bool hovered = ImGui::IsItemHovered();
-		bool held = ImGui::IsItemActive();
 
 		float t = EaseOutCubic(Animate(item, *value ? 1.f : 0.f, 10.f));
-		float hover = Animate(item + 1, hovered ? 1.f : 0.f, 16.f);
-		float squish = Animate(item + 3, held ? 1.f : 0.f, 20.f);
+		float hover = Animate(item + 1, ImGui::IsItemHovered() ? 1.f : 0.f, 16.f);
 
 		auto d = ImGui::GetWindowDrawList();
 		auto max = pos + TOGGLE_SIZE;
 		float radius = TOGGLE_SIZE.y * 0.5f;
 
-		// Track, fills with the accent when on
-		d->AddRectFilled(pos, max, LerpColor(LerpColor(col::track, col::track_hover, hover), col::accent, t), radius);
+		// Track: dark & bordered when off, filled with the accent when on, so on & off never look alike
+		d->AddRectFilled(pos, max, LerpColor(col::track, col::track_hover, hover * 0.6f), radius);
+		d->AddRectFilled(pos, max, C(col::accent, t), radius);
+		d->AddRect(pos, max, LerpColor(col::border_hover, col::accent, t), radius);
 
-		// Ripple when switched on
-		float since = static_cast<float>(ImGui::GetTime()) - storage->GetFloat(item + 2, -100.f);
-		if (*value && since < RIPPLE_DURATION) {
-			float p = EaseOutCubic(since / RIPPLE_DURATION);
-			float grow = p * 7.f;
-			d->AddRect(pos - ImVec2(grow, grow), max + ImVec2(grow, grow), C(col::accent, (1.f - p) * 0.7f), radius + grow, 0, 1.5f);
-		}
-
-		// Knob, stretches while pressed
-		float knob_radius = radius - S(3.f);
-		float stretch = squish * 5.f;
-		float travel = TOGGLE_SIZE.x - TOGGLE_SIZE.y - stretch;
-		float x = pos.x + radius + t * travel;
-		float y = pos.y + radius;
-
-		d->AddRectFilled(ImVec2(x - knob_radius, y - knob_radius + 1.5f), ImVec2(x + knob_radius + stretch, y + knob_radius + 1.5f), C(col::shadow, 0.35f), knob_radius);
-		d->AddRectFilled(ImVec2(x - knob_radius, y - knob_radius), ImVec2(x + knob_radius + stretch, y + knob_radius), C(col::knob), knob_radius);
+		// Knob: dim grey on the left when off, dark on the accent when on
+		float knob_radius = radius - S(2.5f);
+		float x = pos.x + radius + t * (TOGGLE_SIZE.x - TOGGLE_SIZE.y);
+		d->AddCircleFilled(ImVec2(x, pos.y + radius), knob_radius, LerpColor(LerpColor(col::text_faint, col::text_dim, hover), col::window, t), 24);
 
 		return pressed;
 	}
@@ -361,7 +385,7 @@ namespace {
 		float h = Animate(ImGui::GetItemID(), hovered || ImGui::IsPopupOpen(id) ? 1.f : 0.f, 16.f);
 
 		if (tooltip && hovered)
-			ImGui::SetTooltip("%s", tooltip);
+			ShowTooltip("%s", tooltip);
 
 		auto d = ImGui::GetWindowDrawList();
 		auto grow = ImVec2(h * 1.5f, h * 1.5f);
@@ -402,6 +426,7 @@ namespace {
 	bool Toggle(const char* label, bool* value, const char* tooltip = nullptr, color_t* team = nullptr, color_t* enemy = nullptr) {
 		ImGui::PushID(label);
 
+		row_lit = *value;
 		auto row = BeginRow(label, tooltip);
 		bool changed = ToggleSwitch("##toggle", value, RowSlot(row, TOGGLE_SIZE));
 
@@ -422,6 +447,9 @@ namespace {
 	}
 
 	// Label & value on one line, the slider over the whole width under them
+	// The last slider was let go this frame, to act once the value is picked
+	bool slider_released = false;
+
 	bool SliderRow(const char* label, float* value, float min, float max, const char* value_text, const char* tooltip = nullptr) {
 		ImGui::PushID(label);
 
@@ -441,6 +469,7 @@ namespace {
 
 		ImGui::SetCursorScreenPos(slider_pos);
 		ImGui::InvisibleButton("##slider", ImVec2(slider_width, slider_height));
+		slider_released = ImGui::IsItemDeactivated();
 
 		auto item = ImGui::GetItemID();
 		bool active = ImGui::IsItemActive();
@@ -462,20 +491,18 @@ namespace {
 
 		float y = slider_pos.y + slider_height * 0.5f;
 		float fill_x = slider_pos.x + t * slider_width;
+		const float half = S(2.5f);
 
-		d->AddRectFilled(ImVec2(slider_pos.x, y - S(2.f)), ImVec2(slider_pos.x + slider_width, y + S(2.f)), C(col::track), S(2.f));
+		d->AddRectFilled(ImVec2(slider_pos.x, y - half), ImVec2(slider_pos.x + slider_width, y + half), C(col::track_hover), half);
 
-		if (fill_x > slider_pos.x + 1.f) {
-			d->AddRectFilled(ImVec2(slider_pos.x, y - S(2.f)), ImVec2(fill_x, y + S(2.f)), C(col::accent), S(2.f));
-		}
+		if (fill_x > slider_pos.x + 1.f)
+			d->AddRectFilled(ImVec2(slider_pos.x, y - half), ImVec2(fill_x, y + half), C(col::accent), half);
 
-		// Knob, grows while hovered
-		float radius = S(6.f) + hover * 1.5f;
-		d->AddCircleFilled(ImVec2(fill_x, y + 1.5f), radius, C(col::shadow, 0.35f), 24);
-		d->AddCircleFilled(ImVec2(fill_x, y), radius, C(col::knob), 24);
-		d->AddCircleFilled(ImVec2(fill_x, y), S(2.5f) * hover, C(col::accent), 16);
+		// Knob in the accent, a little bigger while held or hovered
+		d->AddCircleFilled(ImVec2(fill_x, y), S(5.f) + hover * S(1.f), C(col::accent), 24);
 
-		d->AddRectFilled(box_pos, box_pos + ImVec2(SLIDER_VALUE_WIDTH, box_height), LerpColor(col::track, col::track_hover, hover), S(6.f));
+		d->AddRectFilled(box_pos, box_pos + ImVec2(SLIDER_VALUE_WIDTH, box_height), LerpColor(col::track, col::track_hover, hover * 0.5f), S(4.f));
+		d->AddRect(box_pos, box_pos + ImVec2(SLIDER_VALUE_WIDTH, box_height), C(col::border), S(4.f));
 
 		auto text_size = ImGui::CalcTextSize(value_text);
 		d->AddText(
@@ -490,7 +517,7 @@ namespace {
 			auto bubble_size = ImVec2(text_size.x + S(14.f), text_size.y + S(6.f));
 			auto bubble_min = ImVec2(fill_x - bubble_size.x * 0.5f, y - S(16.f) - bubble_size.y - drag * 4.f);
 
-			fd->AddRectFilled(bubble_min, bubble_min + bubble_size, C(col::accent, drag), S(6.f));
+			fd->AddRectFilled(bubble_min, bubble_min + bubble_size, C(col::accent, drag), S(4.f));
 			fd->AddText(bubble_min + ImVec2(S(7.f), S(3.f)), C(col::on_accent, drag), value_text);
 		}
 
@@ -595,9 +622,8 @@ namespace {
 		auto d = ImGui::GetWindowDrawList();
 		float pulse = waiting ? 0.5f + 0.5f * sinf(static_cast<float>(ImGui::GetTime()) * 6.f) : 0.f;
 
-		d->AddRectFilled(box_pos, box_pos + box_size, LerpColor(col::track, col::track_hover, hover), S(6.f));
-		if (waiting)
-			d->AddRect(box_pos, box_pos + box_size, C(col::accent, 0.4f + 0.6f * pulse), S(6.f), 0, 1.f);
+		d->AddRectFilled(box_pos, box_pos + box_size, LerpColor(col::track, col::track_hover, hover), S(4.f));
+		d->AddRect(box_pos, box_pos + box_size, waiting ? C(col::accent, 0.4f + 0.6f * pulse) : C(col::border), S(4.f), 0, 1.f);
 
 		d->AddText(
 			box_pos + (box_size - text_size) * 0.5f,
@@ -627,7 +653,8 @@ namespace {
 			total += ImGui::CalcTextSize(item).x + padding * 2.f;
 
 		auto box = RowSlot(row, ImVec2(total, height));
-		d->AddRectFilled(box, box + ImVec2(total, height), C(col::track), S(7.f));
+		d->AddRectFilled(box, box + ImVec2(total, height), C(col::button), S(4.f));
+		d->AddRect(box, box + ImVec2(total, height), C(col::border), S(4.f));
 
 		// Selection first, the labels go on top
 		float x = inset, selected_x = 0.f, selected_w = 0.f;
@@ -647,7 +674,7 @@ namespace {
 		float slide_x = Animate(ImGui::GetID("##selection_x"), selected_x, 16.f);
 		float slide_w = Animate(ImGui::GetID("##selection_w"), selected_w, 16.f);
 
-		d->AddRectFilled(box + ImVec2(slide_x, inset), box + ImVec2(slide_x + slide_w, height - inset), C(col::accent), S(5.f));
+		d->AddRectFilled(box + ImVec2(slide_x, inset), box + ImVec2(slide_x + slide_w, height - inset), C(col::track_hover), S(3.f));
 
 		bool changed = false;
 		x = inset;
@@ -667,7 +694,7 @@ namespace {
 			}
 
 			float hover = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() ? 1.f : 0.f, 16.f);
-			auto color = index == *value ? C(col::on_accent) : LerpColor(col::text_dim, col::text, hover);
+			auto color = index == *value ? C(col::text) : LerpColor(col::text_dim, col::text, hover * 0.6f);
 
 			d->AddText(min + ImVec2(padding, (height - text_size.y) * 0.5f), color, item);
 
@@ -714,14 +741,13 @@ namespace {
 		bool open = ImGui::IsPopupOpen("##list");
 		float h = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() || open ? 1.f : 0.f, 16.f);
 
-		d->AddRectFilled(pos, pos + ImVec2(width, height), LerpColor(col::track, col::track_hover, h), S(7.f));
-		if (open)
-			d->AddRect(pos, pos + ImVec2(width, height), C(col::accent, 0.8f), S(7.f), 0, 1.f);
+		d->AddRectFilled(pos, pos + ImVec2(width, height), LerpColor(col::track, col::track_hover, h * 0.5f), S(3.f));
+		d->AddRect(pos, pos + ImVec2(width, height), open ? C(col::border_hover) : C(col::border), S(3.f), 0, 1.f);
 
 		int current = std::clamp(*value, 0, static_cast<int>(items.size()) - 1);
 		auto text_size = ImGui::CalcTextSize(items[current]);
 		d->PushClipRect(pos, pos + ImVec2(width - S(24.f), height), true);
-		d->AddText(pos + ImVec2(S(10.f), (height - text_size.y) * 0.5f), C(col::text), items[current]);
+		d->AddText(pos + ImVec2(S(10.f), (height - text_size.y) * 0.5f), C(col::text_dim), items[current]);
 		d->PopClipRect();
 
 		// Chevron, points up while open
@@ -730,8 +756,11 @@ namespace {
 		d->AddTriangleFilled(center + ImVec2(-s, -s * 0.5f * flip), center + ImVec2(s, -s * 0.5f * flip), center + ImVec2(0.f, s * 0.6f * flip),
 			LerpColor(col::text_dim, open ? col::accent : col::text, h));
 
-		// The list, all items when they fit on the screen, scrolls otherwise
-		float list_height = items.size() * item_height + padding * 2.f;
+		// The list: at most DROPDOWN_VISIBLE items, scrolls past that with a search on top. Less when the screen is short
+		constexpr size_t DROPDOWN_VISIBLE = 8;
+		bool searchable = items.size() > DROPDOWN_VISIBLE;
+		const float search_height = searchable ? ImGui::GetTextLineHeight() + S(12.f) + S(6.f) : 0.f;
+		float list_height = std::min(items.size(), DROPDOWN_VISIBLE) * item_height + padding * 2.f + search_height;
 		float display = ImGui::GetIO().DisplaySize.y;
 		float below = display - (pos.y + height + S(4.f)) - S(8.f);
 		float above = pos.y - S(4.f) - S(8.f);
@@ -748,11 +777,50 @@ namespace {
 		ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, S(4.f));
 
 		bool changed = false;
-		if (ImGui::BeginPopup("##list", ImGuiWindowFlags_NoMove)) {
+		auto popup_flags = ImGuiWindowFlags_NoMove | (searchable ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : 0);
+		if (ImGui::BeginPopup("##list", popup_flags)) {
+			bool appearing = ImGui::IsWindowAppearing();
+
+			// One list is open at a time, its search starts empty
+			static char search[64] = "";
+			if (appearing)
+				search[0] = '\0';
+
+			if (searchable) {
+				ImGui::PushStyleColor(ImGuiCol_FrameBg, col::track);
+				ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, col::track_hover);
+				ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, S(4.f));
+				ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(S(8.f), S(6.f)));
+
+				if (appearing)
+					ImGui::SetKeyboardFocusHere();
+				ImGui::SetNextItemWidth(-FLT_MIN);
+				ImGui::InputTextWithHint("##search", "Search...", search, sizeof(search));
+
+				ImGui::PopStyleVar(2);
+				ImGui::PopStyleColor(2);
+				ImGui::Dummy(ImVec2(0.f, S(6.f)));
+			}
+
+			auto matches = [&](const char* text) {
+				if (!search[0])
+					return true;
+				std::string a = text, b = search;
+				std::transform(a.begin(), a.end(), a.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+				std::transform(b.begin(), b.end(), b.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+				return a.find(b) != std::string::npos;
+			};
+
+			ImGui::BeginChild("##items", ImVec2(0.f, 0.f), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
 			auto list = ImGui::GetWindowDrawList();
 			float inner = ImGui::GetContentRegionAvail().x;
+			int found = 0;
 
 			for (int i = 0; i < static_cast<int>(items.size()); i++) {
+				if (!matches(items[i]))
+					continue;
+				found++;
+
 				ImGui::PushID(i);
 				auto min = ImGui::GetCursorScreenPos();
 
@@ -775,15 +843,19 @@ namespace {
 					selected ? C(col::text) : LerpColor(col::text_dim, col::text, hover), items[i]);
 
 				if (descriptions && ImGui::IsItemHovered())
-					ImGui::SetTooltip("%s", descriptions[i]);
+					ShowTooltip("%s", descriptions[i]);
 
 				ImGui::PopID();
 			}
 
 			// Opened at the selection
-			if (ImGui::IsWindowAppearing())
-				ImGui::SetScrollY(std::max(0.f, current * item_height - shown * 0.5f));
+			if (appearing)
+				ImGui::SetScrollY(std::max(0.f, current * item_height - (shown - search_height) * 0.5f));
 
+			if (!found)
+				ImGui::TextDisabled("Nothing found");
+
+			ImGui::EndChild();
 			ImGui::EndPopup();
 		}
 
@@ -791,6 +863,61 @@ namespace {
 
 		EndRow(row);
 		ImGui::PopID();
+		return changed;
+	}
+
+	// Toggle with three dots after it: they open the activation & the key, which stay out of the panel
+	bool ToggleBind(const char* label, bool* value, int* mode, int* key, const char* tooltip = nullptr) {
+		ImGui::PushID(label);
+
+		row_lit = *value;
+		auto row = BeginRow(label, tooltip);
+
+		// Slots go right to left: the dots at the edge, the toggle before them
+		const ImVec2 dots_size(S(20.f), S(20.f));
+		auto dots = RowSlot(row, dots_size);
+		bool changed = ToggleSwitch("##toggle", value, RowSlot(row, TOGGLE_SIZE));
+
+		ImGui::SetCursorScreenPos(dots);
+		if (ImGui::InvisibleButton("##bind_menu", dots_size))
+			ImGui::OpenPopup("##bind_popup");
+
+		bool open = ImGui::IsPopupOpen("##bind_popup");
+		bool hovered = ImGui::IsItemHovered();
+		float h = Animate(ImGui::GetItemID(), hovered || open ? 1.f : 0.f, 16.f);
+
+		int current = std::clamp(*mode, 0, static_cast<int>(ACTIVATION_MODES.size()) - 1);
+		if (hovered && !open) {
+			if (current == 2)
+				ShowTooltip("%s", ACTIVATION_MODES[current]);
+			else
+				ShowTooltip("%s: %s", ACTIVATION_MODES[current], KeyName(*key).c_str());
+		}
+
+		auto d = ImGui::GetWindowDrawList();
+		auto center = dots + dots_size * 0.5f;
+		auto color = open ? C(col::accent) : LerpColor(col::text_faint, col::text, h);
+		for (int i = -1; i <= 1; i++)
+			d->AddCircleFilled(center + ImVec2(i * S(4.5f), 0.f), S(1.7f), color, 8);
+
+		// Under the dots, its right edge on theirs
+		ImGui::SetNextWindowPos(ImVec2(dots.x + dots_size.x, dots.y + dots_size.y + S(4.f)), ImGuiCond_Appearing, ImVec2(1.f, 0.f));
+		ImGui::SetNextWindowSize(ImVec2(S(240.f), 0.f));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(12.f), S(6.f)));
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(S(8.f), 0.f));
+
+		if (ImGui::BeginPopup("##bind_popup", ImGuiWindowFlags_NoMove)) {
+			DropdownRow("Activation", mode, ACTIVATION_MODES, ACTIVATION_DESCRIPTIONS, nullptr, S(110.f));
+			if (*mode != 2)
+				KeybindRow("Key", key);
+			ImGui::EndPopup();
+		}
+
+		ImGui::PopStyleVar(2);
+
+		EndRow(row);
+		ImGui::PopID();
+
 		return changed;
 	}
 
@@ -816,9 +943,8 @@ namespace {
 		bool open = ImGui::IsPopupOpen("##list");
 		float h = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() || open ? 1.f : 0.f, 16.f);
 
-		d->AddRectFilled(pos, pos + ImVec2(width, height), LerpColor(col::track, col::track_hover, h), S(7.f));
-		if (open)
-			d->AddRect(pos, pos + ImVec2(width, height), C(col::accent, 0.8f), S(7.f), 0, 1.f);
+		d->AddRectFilled(pos, pos + ImVec2(width, height), LerpColor(col::track, col::track_hover, h * 0.5f), S(3.f));
+		d->AddRect(pos, pos + ImVec2(width, height), open ? C(col::border_hover) : C(col::border), S(3.f), 0, 1.f);
 
 		// The picked ones by name, a count when they do not fit
 		std::string preview;
@@ -913,7 +1039,7 @@ namespace {
 		ImGui::SetNextItemWidth(-FLT_MIN);
 		ImGui::InputTextWithHint(id, hint, buffer, size);
 		if (tooltip && ImGui::IsItemHovered())
-			ImGui::SetTooltip("%s", tooltip);
+			ShowTooltip("%s", tooltip);
 		ImGui::Dummy(ImVec2(0, S(4.f)));
 		ImGui::PopStyleVar(2);
 		ImGui::PopStyleColor(2);
@@ -1047,7 +1173,7 @@ namespace {
 		d->AddText(pos + (size - text_size) * 0.5f, accent ? C(col::on_accent) : C(LerpColor(col::text_dim, col::text, hover)), label, text);
 
 		if (tooltip && hovered)
-			ImGui::SetTooltip("%s", tooltip);
+			ShowTooltip("%s", tooltip);
 
 		return pressed;
 	}
@@ -1310,6 +1436,14 @@ namespace {
 		return url.empty() ? url : url + "/256fx192f";
 	}
 
+	// Picture of a weapon without a skin, for the ones the icon font has no glyph of. Already small, no SmallImage
+	std::string BaseImage(int index) {
+		if (index == weapon_mp5sd)
+			return "https://raw.githubusercontent.com/ByMykel/counter-strike-image-tracker/main/static/panorama/images/econ/weapons/base_weapons/weapon_mp5sd_png.png";
+
+		return "";
+	}
+
 	ImU32 RarityColor(uint32_t rgb) {
 		if (!rgb)
 			return col::border_hover;
@@ -1435,8 +1569,8 @@ namespace {
 		for (auto item : items)
 			total += ImGui::CalcTextSize(item).x + padding * 2.f;
 
-		d->AddRectFilled(pos, pos + ImVec2(total, height), C(col::panel), S(9.f));
-		d->AddRect(pos, pos + ImVec2(total, height), C(col::border), S(9.f));
+		d->AddRectFilled(pos, pos + ImVec2(total, height), C(col::button), S(4.f));
+		d->AddRect(pos, pos + ImVec2(total, height), C(col::border), S(4.f));
 
 		float x = inset, selected_x = 0.f, selected_w = 0.f;
 		int index = 0;
@@ -1454,7 +1588,7 @@ namespace {
 
 		float slide_x = Animate(ImGui::GetID("##x"), selected_x, 16.f);
 		float slide_w = Animate(ImGui::GetID("##w"), selected_w, 16.f);
-		d->AddRectFilled(pos + ImVec2(slide_x, inset), pos + ImVec2(slide_x + slide_w, height - inset), C(col::accent), S(7.f));
+		d->AddRectFilled(pos + ImVec2(slide_x, inset), pos + ImVec2(slide_x + slide_w, height - inset), C(col::track_hover), S(3.f));
 
 		bool changed = false;
 		x = inset;
@@ -1473,7 +1607,7 @@ namespace {
 			}
 
 			float hover = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() ? 1.f : 0.f, 16.f);
-			auto color = index == *value ? C(col::on_accent) : LerpColor(col::text_dim, col::text, hover);
+			auto color = index == *value ? C(col::text) : LerpColor(col::text_dim, col::text, hover * 0.6f);
 			d->AddText(pos + ImVec2(x + padding, (height - text_size.y) * 0.5f), color, item);
 
 			ImGui::PopID();
@@ -1510,6 +1644,7 @@ namespace {
 	bool ToggleColors(const char* label, bool* value, const char* tooltip, color_t* visible, color_t* invisible) {
 		ImGui::PushID(label);
 
+		row_lit = *value;
 		auto row = BeginRow(label, tooltip);
 		bool changed = ToggleSwitch("##toggle", value, RowSlot(row, TOGGLE_SIZE));
 
@@ -1607,7 +1742,7 @@ namespace {
 			DraggedChip(flag);
 
 		if (hovered && !dragging)
-			ImGui::SetTooltip(placed ? "Drag to move, right click to remove" : "Drag next to the box, or click to add it");
+			ShowTooltip(placed ? "Drag to move, right click to remove" : "Drag next to the box, or click to add it");
 
 		int result = pressed ? 1 : hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) ? 2 : 0;
 
@@ -1767,7 +1902,7 @@ namespace {
 			yaw -= ImGui::GetIO().MouseDelta.x * 0.01f;
 
 		if (ImGui::IsItemHovered() && !ImGui::IsItemActive())
-			ImGui::SetTooltip("Drag to turn the camera");
+			ShowTooltip("Drag to turn the camera");
 
 		ImGui::GetWindowDrawList()->AddRectFilled(min, min + size, C(col::window), S(8.f));
 		return ImRect(min, min + size);
@@ -2297,6 +2432,68 @@ namespace {
 		return true;
 	}
 
+	// The skeleton of the pre-rendered player, its joints read off the pictures: pixels of a frame (x, y down from
+	// the top) & how far forward of the body. Turned frame by frame like the picture, placed like it on the rect.
+	// Gives where the head is, for the head tracker
+	ImVec2 DrawPreviewSkeleton(ImDrawList* d, bool terrorist, ImVec2 min, ImVec2 max, float yaw, const color_t* color) {
+		namespace pp = player_preview;
+
+		struct Joint {
+			float x, y, forward;
+		};
+
+		Joint joints[24]{};
+		auto set = [&](int bone, float x, float y, float forward) { joints[bone] = { x, y, forward }; };
+
+		set(head, 117.f, 32.f, 8.f);
+		set(neck, 120.f, 55.f, 2.f);
+		set(chest, 124.f, 72.f, -4.f);
+		set(spine_2, 125.f, 88.f, -8.f);
+		set(spine_1, 126.f, 110.f, -10.f);
+		set(pelvis, 126.f, 145.f, -7.f);
+
+		// Holding the rifle at us: the right hand on the grip, the left one under the barrel
+		set(shoulder_R, 95.f, 70.f, 0.f);
+		set(elbow_R, 78.f, 108.f, 25.f);
+		set(hand_R, 112.f, 92.f, 50.f);
+		set(shoulder_L, 150.f, 68.f, 0.f);
+		set(elbow_L, 138.f, 105.f, 50.f);
+		set(hand_L, 108.f, 82.f, 90.f);
+
+		// Left foot forward
+		set(hip_R, 110.f, 150.f, -8.f);
+		set(knee_R, 100.f, 225.f, -15.f);
+		set(foot_heel_R, 92.f, 300.f, -55.f);
+		set(hip_L, 140.f, 150.f, -5.f);
+		set(knee_L, 150.f, 218.f, 22.f);
+		set(foot_heel_L, 150.f, 300.f, 50.f);
+
+		// The angle of the frame shown, the same rounding as DrawPlayerPicture
+		constexpr float STEP = 2.f * std::numbers::pi_v<float> / pp::FRAMES;
+		int frame = static_cast<int>(roundf(yaw / STEP)) % pp::FRAMES;
+		if (frame < 0)
+			frame += pp::FRAMES;
+		float angle = frame * STEP;
+		float c = cosf(angle), s = sinf(angle);
+
+		float breath = sinf(static_cast<float>(ImGui::GetTime()) * 2.2f);
+		float scale = (max.y - min.y) / (terrorist ? player_preview_t_height : player_preview_ct_height);
+		float scale_x = scale * (1.f + 0.004f * breath), scale_y = scale * (1.f + 0.006f * breath);
+		ImVec2 feet((min.x + max.x) * 0.5f, max.y);
+
+		auto place = [&](int bone) {
+			const auto& j = joints[bone];
+			float side = j.x - pp::FRAME_WIDTH * 0.5f;
+			return ImVec2(feet.x + (side * c - j.forward * s) * scale_x, feet.y + (j.y - pp::FEET) * scale_y);
+		};
+
+		if (color)
+			for (const auto& bone : connections)
+				d->AddLine(place(bone[0]), place(bone[1]), ImColor(*color), 1.5f);
+
+		return place(head);
+	}
+
 	// Flat shaded, sorted back to front, standing on the bottom of the rect
 	void DrawModel(ImDrawList* d, const PreviewModel& model, ImVec2 min, ImVec2 max, float yaw, ImU32 color, ImU32 glow = 0) {
 		float scale = (max.y - min.y) / model.height;
@@ -2399,25 +2596,27 @@ namespace {
 
 		auto d = ImGui::GetWindowDrawList();
 
+		// The selected one in navy, fading in & out
+		if (t > 0.01f)
+			d->AddRectFilled(pos, pos + size, C(col::selected, t), S(5.f));
 		if (h > 0.01f)
-			d->AddRectFilled(pos, pos + size, C(col::hover, h), S(8.f));
+			d->AddRectFilled(pos, pos + size, C(col::hover, h), S(5.f));
 
-		float slide = h * 3.f + t * 2.f;
 		auto text_y = pos.y + (size.y - ImGui::GetTextLineHeight()) * 0.5f;
 
 		// Icons fit a box in front of the label, wide weapon icons are made smaller
-		const float icon_box = S(22.f);
+		const float icon_box = S(18.f);
 		auto font = ImGui::GetFont();
-		float font_size = ImGui::GetFontSize();
+		float font_size = ImGui::GetFontSize() * 0.9f;
 		auto icon_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, icon);
 		if (icon_size.x > icon_box) {
 			font_size *= icon_box / icon_size.x;
 			icon_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, icon);
 		}
 
-		auto icon_pos = ImVec2(pos.x + S(12.f) + slide + (icon_box - icon_size.x) * 0.5f, pos.y + (size.y - icon_size.y) * 0.5f);
-		d->AddText(font, font_size, ImVec2(floorf(icon_pos.x), floorf(icon_pos.y)), LerpColor(LerpColor(col::text_faint, col::text_dim, h), col::accent, t), icon);
-		d->AddText(ImVec2(pos.x + S(42.f) + slide, text_y), LerpColor(col::text_dim, col::text, std::max(t, h)), label);
+		auto icon_pos = ImVec2(pos.x + S(10.f) + (icon_box - icon_size.x) * 0.5f, pos.y + (size.y - icon_size.y) * 0.5f);
+		d->AddText(font, font_size, ImVec2(floorf(icon_pos.x), floorf(icon_pos.y)), C(col::accent, 0.55f + 0.45f * std::max(t, h)), icon);
+		d->AddText(ImVec2(pos.x + S(36.f), text_y), LerpColor(col::text_label, col::text, std::max(t, h)), label);
 
 		ImGui::PopID();
 		return pressed;
@@ -2461,13 +2660,12 @@ void Menu::RenderImpl() {
 		return;
 
 	// Clicked in the preset lists last frame
-	if (ProcessPreset(Config::Preset::CONFIG, config_presets)) {
-		Window::vsync = cfg::settings::vsync;
+	if (ProcessPreset(Config::Preset::CONFIG, config_presets))
 		Window::SetAffinity(Window::hwnd, cfg::settings::streamproof ? WindowAffinity::Invisible : WindowAffinity::Disabled);
-	}
 	ProcessPreset(Config::Preset::SKINS, skin_presets);
 
 	col::accent = ImGui::ColorConvertFloat4ToU32(ImVec4(cfg::settings::accent.r, cfg::settings::accent.g, cfg::settings::accent.b, 1.f));
+	col::backdrop = std::clamp(cfg::settings::menu_opacity, 0.3f, 1.f);
 
 	auto& io = ImGui::GetIO();
 	bool open = Renderer::IsOpen();
@@ -2565,9 +2763,13 @@ void Menu::RenderImpl() {
 	ImGui::PopFont();
 }
 
-// Previews of the tabs in their own panel next to the menu, so the options fit without scrolling
+static void ProfilePanel();
+
+// Previews of the tabs in their own panel next to the menu, so the options fit without scrolling. The profile page
+// of the misc tab shows the player picked there
 void Menu::RenderPreviewPanel(float alpha) {
-	if (active_tab != Tab::PLAYERS && active_tab != Tab::BOMB && active_tab != Tab::PROJECTILES && active_tab != Tab::ITEMS)
+	bool profile = active_tab == Tab::MISC && misc_page == 1;
+	if (active_tab != Tab::PLAYERS && active_tab != Tab::BOMB && active_tab != Tab::PROJECTILES && active_tab != Tab::ITEMS && !profile)
 		return;
 
 	auto& io = ImGui::GetIO();
@@ -2580,6 +2782,8 @@ void Menu::RenderPreviewPanel(float alpha) {
 		at.x = pos.x - gap - width;
 
 	float tab = EaseOutCubic(tab_progress);
+	if (profile)
+		tab *= EaseOutCubic(misc_page_progress);	// Comes in with the page too
 
 	ImGui::SetNextWindowPos(at, ImGuiCond_Always);
 	ImGui::SetNextWindowSize(ImVec2(width, size.y), ImGuiCond_Always);
@@ -2603,8 +2807,8 @@ void Menu::RenderPreviewPanel(float alpha) {
 		auto min = ImGui::GetWindowPos();
 		auto max = min + ImGui::GetWindowSize();
 
-		Glow(ImGui::GetBackgroundDrawList(), min, max, col::shadow, WINDOW_ROUNDING, S(24.f), 0.8f);
-		d->AddRectFilled(min, max, C(col::window), WINDOW_ROUNDING);
+		Outline(ImGui::GetBackgroundDrawList(), min, max, WINDOW_ROUNDING);
+		d->AddRectFilled(min, max, C(col::window, col::backdrop), WINDOW_ROUNDING);
 		d->AddRect(min, max, C(col::border), WINDOW_ROUNDING, 0, 1.f);
 
 		// Slides & fades in with the tab
@@ -2616,6 +2820,7 @@ void Menu::RenderPreviewPanel(float alpha) {
 		case Tab::BOMB:         RenderBombPreview();        break;
 		case Tab::PROJECTILES:  RenderProjectilesPreview(); break;
 		case Tab::ITEMS:        RenderItemsPreview();       break;
+		case Tab::MISC:         ProfilePanel();             break;
 		default: break;
 		}
 
@@ -2633,39 +2838,185 @@ void Menu::RenderBackground() {
 
 	// Dim the game a bit & drop a shadow under the window
 	bg->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize, C(col::shadow, 0.2f));
-	Glow(bg, pos, max, col::shadow, WINDOW_ROUNDING, S(24.f), 0.8f);
+	Outline(bg, pos, max, WINDOW_ROUNDING);
 
-	// Window & sidebar
-	d->AddRectFilled(pos, max, C(col::window), WINDOW_ROUNDING);
-	d->AddRectFilled(pos, ImVec2(pos.x + SIDEBAR_WIDTH, max.y), C(col::sidebar), WINDOW_ROUNDING, ImDrawFlags_RoundCornersLeft);
+	// Sidebar, header band & content, the game a little visible through them
+	d->AddRectFilled(pos, ImVec2(pos.x + SIDEBAR_WIDTH, max.y), C(col::sidebar, col::backdrop), WINDOW_ROUNDING, ImDrawFlags_RoundCornersLeft);
+	d->AddRectFilled(ImVec2(pos.x + SIDEBAR_WIDTH, pos.y), ImVec2(max.x, pos.y + HEADER_HEIGHT), C(col::header, col::backdrop), WINDOW_ROUNDING, ImDrawFlags_RoundCornersTopRight);
+	d->AddRectFilled(ImVec2(pos.x + SIDEBAR_WIDTH, pos.y + HEADER_HEIGHT), max, C(col::window, col::backdrop), WINDOW_ROUNDING, ImDrawFlags_RoundCornersBottomRight);
+
 	d->AddLine(ImVec2(pos.x + SIDEBAR_WIDTH, pos.y), ImVec2(pos.x + SIDEBAR_WIDTH, max.y), C(col::border));
-
 	d->AddRect(pos, max, C(col::border), WINDOW_ROUNDING, 0, 1.f);
 }
 
 void Menu::RenderSidebar() {
 	auto d = ImGui::GetWindowDrawList();
 
-	// Brand
-	auto logo_min = pos + ImVec2(S(18.f), S(20.f));
-	auto logo_max = logo_min + ImVec2(S(38.f), S(38.f));
+	// Brand: the name big & bold in the middle, a 1 px accent shadow under it
+	{
+		const float brand_size = S(24.f);
+		auto brand_width = font_bold->CalcTextSizeA(brand_size, FLT_MAX, 0.f, BRAND_TITLE).x;
+		auto brand_pos = ImVec2(floorf(pos.x + (SIDEBAR_WIDTH - brand_width) * 0.5f), pos.y + S(18.f));
 
-	// The picture built into the program, the "CS" square when it cannot be made
-	static ImTextureID logo = ImageCache::FromMemory(logo_image, logo_image_size);
-
-	if (logo) {
-		d->AddImageRounded(ImTextureRef(logo), logo_min, logo_max, ImVec2(0, 0), ImVec2(1, 1), C(IM_COL32_WHITE), S(9.f));
-		d->AddRect(logo_min, logo_max, C(col::border), S(9.f), 0, 1.f);
-	}
-	else {
-		d->AddRectFilled(logo_min, logo_max, C(col::accent), S(9.f));
-
-		auto logo_text_size = font_bold->CalcTextSizeA(S(15.f), FLT_MAX, 0.f, "CS");
-		d->AddText(font_bold, S(15.f), logo_min + (ImVec2(S(38.f), S(38.f)) - logo_text_size) * 0.5f, C(col::on_accent), "CS");
+		d->AddText(font_bold, brand_size, brand_pos + ImVec2(1.f, 0.f), C(col::accent, 0.6f), BRAND_TITLE);
+		d->AddText(font_bold, brand_size, brand_pos, C(col::text), BRAND_TITLE);
 	}
 
-	d->AddText(font_bold, S(15.f), ImVec2(logo_max.x + S(11.f), logo_min.y + S(2.f)), C(col::text), BRAND_TITLE);
-	d->AddText(font_regular, S(12.f), ImVec2(logo_max.x + S(11.f), logo_min.y + S(21.f)), C(col::text_dim), BRAND_SUBTITLE);
+	// Bottom: the author's GitHub picture, name & the version under a line. Clicked it opens the credits & the accent
+	{
+		const float avatar = S(30.f);
+		auto line_y = pos.y + size.y - S(50.f);
+		d->AddLine(ImVec2(pos.x, line_y), ImVec2(pos.x + SIDEBAR_WIDTH, line_y), C(col::border));
+
+		auto area_min = ImVec2(pos.x + S(8.f), line_y + S(4.f));
+		auto area_max = ImVec2(pos.x + SIDEBAR_WIDTH - S(8.f), pos.y + size.y - S(4.f));
+
+		ImGui::SetCursorScreenPos(area_min);
+		if (ImGui::InvisibleButton("##author", area_max - area_min))
+			ImGui::OpenPopup("##author_popup");
+
+		bool popup_open = ImGui::IsPopupOpen("##author_popup");
+		float h = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() || popup_open ? 1.f : 0.f, 16.f);
+		if (h > 0.01f)
+			d->AddRectFilled(area_min, area_max, C(col::hover, h * 1.6f), S(5.f));
+
+		auto avatar_min = ImVec2(pos.x + S(15.f), pos.y + size.y - S(40.f));
+		auto avatar_center = avatar_min + ImVec2(avatar, avatar) * 0.5f;
+		auto texture = ImageCache::Get(AUTHOR_AVATAR);
+
+		if (texture)
+			d->AddImageRounded(texture, avatar_min, avatar_min + ImVec2(avatar, avatar), ImVec2(0, 0), ImVec2(1, 1), C(IM_COL32_WHITE), avatar * 0.5f);
+		else
+			d->AddCircleFilled(avatar_center, avatar * 0.5f, C(col::track_hover), 24);
+
+		auto text_x = avatar_min.x + avatar + S(8.f);
+		d->AddText(font_regular, S(14.f), ImVec2(text_x, avatar_min.y), LerpColor(col::text_label, col::text, std::max(h, 0.8f)), AUTHOR);
+
+		constexpr auto version_label = "Version: ";
+		auto version = std::to_string(Updater::GetVersion());
+		auto label_width = font_regular->CalcTextSizeA(S(13.f), FLT_MAX, 0.f, version_label).x;
+		d->AddText(font_regular, S(13.f), ImVec2(text_x, avatar_min.y + S(15.f)), C(col::text_dim), version_label);
+		d->AddText(font_regular, S(13.f), ImVec2(text_x + label_width, avatar_min.y + S(15.f)), C(col::accent), version.c_str());
+
+		// Small arrow on the right, up while open
+		auto arrow = ImVec2(area_max.x - S(12.f), (area_min.y + area_max.y) * 0.5f);
+		float dir = popup_open ? -1.f : 1.f;
+		d->AddTriangleFilled(
+			arrow + ImVec2(-S(3.5f), -S(2.f) * dir),
+			arrow + ImVec2(S(3.5f), -S(2.f) * dir),
+			arrow + ImVec2(0.f, S(2.f) * dir),
+			LerpColor(col::text_faint, col::text, h));
+
+		// The popup grows up from the bottom left, next to the sidebar
+		const float popup_width = S(250.f);
+		ImGui::SetNextWindowPos(ImVec2(pos.x + S(8.f), line_y - S(6.f)), ImGuiCond_Always, ImVec2(0.f, 1.f));
+		ImGui::SetNextWindowSize(ImVec2(popup_width, 0.f));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(14.f), S(14.f)));
+		ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, S(6.f));
+
+		if (ImGui::BeginPopup("##author_popup", ImGuiWindowFlags_NoMove)) {
+			auto pd = ImGui::GetWindowDrawList();
+			auto start = ImGui::GetCursorScreenPos();
+			float inner = ImGui::GetContentRegionAvail().x;
+
+			// Author, the name opens the GitHub page
+			const float big = S(40.f);
+			if (texture)
+				pd->AddImageRounded(texture, start, start + ImVec2(big, big), ImVec2(0, 0), ImVec2(1, 1), C(IM_COL32_WHITE), big * 0.5f);
+			else
+				pd->AddCircleFilled(start + ImVec2(big, big) * 0.5f, big * 0.5f, C(col::track_hover), 24);
+
+			auto name_pos = start + ImVec2(big + S(10.f), S(3.f));
+			pd->AddText(font_bold, S(16.f), name_pos, C(col::text), AUTHOR);
+
+			constexpr auto link = "github.com/Keydak";
+			auto link_pos = name_pos + ImVec2(0.f, S(19.f));
+			auto link_size = font_regular->CalcTextSizeA(S(13.f), FLT_MAX, 0.f, link);
+			ImGui::SetCursorScreenPos(link_pos);
+			if (ImGui::InvisibleButton("##github", link_size))
+				ShellExecuteW(nullptr, L"open", AUTHOR_URL, nullptr, nullptr, SW_SHOWNORMAL);
+
+			bool link_hovered = ImGui::IsItemHovered();
+			if (link_hovered)
+				ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+			pd->AddText(font_regular, S(13.f), link_pos, link_hovered ? C(col::accent) : C(col::text_dim), link);
+			if (link_hovered)
+				pd->AddLine(link_pos + ImVec2(0.f, link_size.y), link_pos + link_size, C(col::accent));
+
+			ImGui::SetCursorScreenPos(start + ImVec2(0.f, big + S(12.f)));
+
+			auto section = [&](const char* title) {
+				auto at = ImGui::GetCursorScreenPos();
+				pd->AddLine(at, at + ImVec2(inner, 0.f), C(col::border));
+				pd->AddText(font_regular, S(12.f), at + ImVec2(0.f, S(9.f)), C(col::text_faint), title);
+				ImGui::Dummy(ImVec2(inner, S(30.f)));
+			};
+
+			// Credits
+			section("CREDITS");
+			for (const auto& credit : CREDITS) {
+				auto at = ImGui::GetCursorScreenPos();
+				pd->AddText(font_regular, S(13.f), at, C(col::text), credit.name);
+				auto what_size = font_regular->CalcTextSizeA(S(12.f), FLT_MAX, 0.f, credit.what);
+				pd->AddText(font_regular, S(12.f), ImVec2(at.x + inner - what_size.x, at.y + S(1.f)), C(col::text_dim), credit.what);
+				ImGui::Dummy(ImVec2(inner, S(19.f)));
+			}
+
+			ImGui::Dummy(ImVec2(inner, S(4.f)));
+
+			// Accent: the quick ones, then any color
+			section("ACCENT");
+			{
+				const float dot = S(20.f);
+				const float gap = S(8.f);
+				auto at = ImGui::GetCursorScreenPos();
+				auto current = ImGui::ColorConvertFloat4ToU32(ImVec4(cfg::settings::accent.r, cfg::settings::accent.g, cfg::settings::accent.b, 1.f));
+
+				for (int i = 0; i < IM_ARRAYSIZE(ACCENTS); i++) {
+					auto dot_min = at + ImVec2(i * (dot + gap), 0.f);
+					auto center = dot_min + ImVec2(dot, dot) * 0.5f;
+
+					ImGui::PushID(i);
+					ImGui::SetCursorScreenPos(dot_min);
+					if (ImGui::InvisibleButton("##accent", ImVec2(dot, dot))) {
+						auto value = ImGui::ColorConvertU32ToFloat4(ACCENTS[i]);
+						cfg::settings::accent.r = value.x;
+						cfg::settings::accent.g = value.y;
+						cfg::settings::accent.b = value.z;
+						cfg::settings::accent.a = 1.f;
+					}
+					float dh = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() ? 1.f : 0.f, 16.f);
+					ImGui::PopID();
+
+					pd->AddCircleFilled(center, dot * 0.5f - S(1.f) + dh, C(ACCENTS[i]), 24);
+					if (current == ACCENTS[i])
+						pd->AddCircle(center, dot * 0.5f + S(3.f), C(col::text, 0.85f), 24, 1.5f);
+				}
+
+				// Any other color
+				ImGui::PushID("##accent_custom");
+				ColorSwatch("##custom", &cfg::settings::accent,
+					at + ImVec2(IM_ARRAYSIZE(ACCENTS) * (dot + gap) + (dot - SWATCH_SIZE) * 0.5f, (dot - SWATCH_SIZE) * 0.5f), "Any other color");
+				ImGui::PopID();
+
+				ImGui::SetCursorScreenPos(at + ImVec2(0.f, dot + S(2.f)));
+				ImGui::Dummy(ImVec2(inner, 0.f));
+			}
+
+			// How much the game shows through the menu
+			ImGui::Dummy(ImVec2(inner, S(8.f)));
+			section("BACKGROUND");
+			{
+				int percent = static_cast<int>(std::round(cfg::settings::menu_opacity * 100.f));
+				if (SliderInt("Opacity", &percent, 30, 100, "%d%%"))
+					cfg::settings::menu_opacity = percent / 100.f;
+			}
+
+			ImGui::EndPopup();
+		}
+
+		ImGui::PopStyleVar(2);
+	}
 
 	// Tabs
 	struct Entry {
@@ -2676,58 +3027,34 @@ void Menu::RenderSidebar() {
 	};
 
 	const Entry entries[] = {
-		{ "VISUALS", {}, nullptr, nullptr },
+		{ "Visuals", {}, nullptr, nullptr },
 		{ nullptr, Tab::PLAYERS, "Players", Icons::PEOPLE },
 		{ nullptr, Tab::BOMB, "Bomb", WeaponIcons::C4 },
 		{ nullptr, Tab::PROJECTILES, "Projectiles", WeaponIcons::SMOKEGRENADE },
 		{ nullptr, Tab::ITEMS, "Items", WeaponIcons::DEAGLE },
-		{ "INVENTORY", {}, nullptr, nullptr },
+		{ "Inventory", {}, nullptr, nullptr },
 		{ nullptr, Tab::SKINS, "Skins", WeaponIcons::AK47 },
-		{ "COMMON", {}, nullptr, nullptr },
+		{ "Common", {}, nullptr, nullptr },
 		{ nullptr, Tab::MOVEMENT, "Movement", Icons::PERSON },
 		{ nullptr, Tab::MISC, "Misc", Icons::GLOBE },
 		{ nullptr, Tab::CONFIGS, "Configs", Icons::RELOAD },
 		{ nullptr, Tab::SETTINGS, "Settings", Icons::SETTINGS },
 	};
 
-	const float margin = S(12.f);
-	const ImVec2 item_size(SIDEBAR_WIDTH - margin * 2.f, S(36.f));
+	const float margin = S(10.f);
+	const ImVec2 item_size(SIDEBAR_WIDTH - margin * 2.f, S(30.f));
 
-	// Layout first, so the highlight can be drawn below the items
-	float tab_y[16]{};
-	float y = pos.y + S(82.f);
-
-	for (const auto& entry : entries) {
-		if (entry.caption) {
-			y += S(26.f);
-			continue;
-		}
-
-		tab_y[entry.tab] = y;
-		y += item_size.y + S(3.f);
-	}
-
-	// Highlight sliding towards the active tab
-	float target = tab_y[active_tab] - pos.y;
-	if (indicator_y < 0.f)
-		indicator_y = target;
-	indicator_y += (target - indicator_y) * std::min(1.f, ImGui::GetIO().DeltaTime * 14.f);
-
-	auto highlight_min = ImVec2(pos.x + margin, pos.y + indicator_y);
-	auto highlight_max = highlight_min + item_size;
-
-	d->AddRectFilled(highlight_min, highlight_max, C(col::selected), S(8.f));
-
-	auto bar_min = ImVec2(highlight_min.x - margin, highlight_min.y + S(11.f));
-	d->AddRectFilled(bar_min, ImVec2(bar_min.x + S(2.f), highlight_max.y - S(11.f)), C(col::accent), 1.f);
-
-	// Items
-	y = pos.y + S(82.f);
+	float y = pos.y + S(66.f);
+	bool first_caption = true;
 
 	for (const auto& entry : entries) {
 		if (entry.caption) {
-			d->AddText(font_bold, S(11.f), ImVec2(pos.x + margin + S(14.f), y + S(8.f)), C(col::text_faint), entry.caption);
-			y += S(26.f);
+			if (!first_caption)
+				y += S(10.f);
+			first_caption = false;
+
+			d->AddText(font_regular, S(14.f), ImVec2(pos.x + margin + S(10.f), y + S(4.f)), C(col::text_faint), entry.caption);
+			y += S(24.f);
 			continue;
 		}
 
@@ -2736,7 +3063,7 @@ void Menu::RenderSidebar() {
 			tab_progress = 0.f;
 		}
 
-		y += item_size.y + S(3.f);
+		y += item_size.y + S(2.f);
 	}
 }
 
@@ -2762,11 +3089,7 @@ void Menu::RenderHeader() {
 	float x = pos.x + SIDEBAR_WIDTH + CONTENT_PADDING;
 	float slide = (1.f - tab) * 10.f;
 
-	d->AddText(font_bold, S(21.f), ImVec2(x + slide, pos.y + (HEADER_HEIGHT - S(21.f)) * 0.5f), C(col::text, tab), title);
-
-	// Underline growing under the title
-	auto title_width = font_bold->CalcTextSizeA(S(21.f), FLT_MAX, 0.f, title).x;
-	d->AddRectFilled(ImVec2(x, pos.y + HEADER_HEIGHT - S(2.f)), ImVec2(x + title_width * tab, pos.y + HEADER_HEIGHT), C(col::accent));
+	d->AddText(font_bold, S(19.f), ImVec2(x + slide, pos.y + (HEADER_HEIGHT - S(19.f)) * 0.5f), C(col::text, tab), title);
 
 	d->AddLine(
 		ImVec2(pos.x + SIDEBAR_WIDTH, pos.y + HEADER_HEIGHT),
@@ -2775,13 +3098,13 @@ void Menu::RenderHeader() {
 	);
 
 	// Right side: the DPI scale of the menu, then the notifications switch left of it
-	const float pill_height = S(34.f);
+	const float pill_height = S(28.f);
 	const float pill_y = pos.y + (HEADER_HEIGHT - pill_height) * 0.5f;
 	float right = pos.x + size.x - CONTENT_PADDING;
 
 	auto pill = [&](ImVec2 min, ImVec2 pill_size) {
-		d->AddRectFilled(min, min + pill_size, C(col::panel), pill_size.y * 0.5f);
-		d->AddRect(min, min + pill_size, C(col::border), pill_size.y * 0.5f);
+		d->AddRectFilled(min, min + pill_size, C(col::button), S(4.f));
+		d->AddRect(min, min + pill_size, C(col::border), S(4.f));
 	};
 
 	// DPI scale, steps of 5%. Applied the same way as before, once the mouse is let go
@@ -2791,7 +3114,7 @@ void Menu::RenderHeader() {
 		auto value = std::format("{:.0f}%", std::round(cfg::settings::ui_scale * 20.f) * 5.f);
 		auto value_size = ImGui::CalcTextSize("160%");
 
-		const float button = S(24.f);
+		const float button = S(20.f);
 		auto pill_size = ImVec2(S(14.f) + label_size.x + S(10.f) + button + S(6.f) + value_size.x + S(6.f) + button + S(5.f), pill_height);
 		auto min = ImVec2(right - pill_size.x, pill_y);
 		pill(min, pill_size);
@@ -2805,7 +3128,7 @@ void Menu::RenderHeader() {
 			float hover = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() ? 1.f : 0.f, 16.f);
 
 			auto center = at + ImVec2(button, button) * 0.5f;
-			d->AddCircleFilled(center, button * 0.5f, C(LerpColor(col::track, col::track_hover, hover)), 20);
+			d->AddRectFilled(center - ImVec2(button, button) * 0.5f, center + ImVec2(button, button) * 0.5f, LerpColor(col::track, col::track_hover, hover), S(3.f));
 
 			auto sign_size = ImGui::CalcTextSize(sign);
 			d->AddText(center - sign_size * 0.5f, C(LerpColor(col::text_dim, col::accent, hover)), sign);
@@ -2875,7 +3198,7 @@ void Menu::RenderPlayersPreview() {
 		d->PushClipRect(preview_min, preview_max, true);
 
 		// Enemies are the other team of ours, T when we are not in a game
-		int local_team = Cache::CopySnapshot().local.team;
+		int local_team = Cache::Current()->local.team;
 		bool terrorist = esp_group == 0 ? local_team == 2 : local_team != 2;
 
 		// Stands idle facing us, drag to turn it
@@ -2886,7 +3209,7 @@ void Menu::RenderPlayersPreview() {
 			model_yaw += ImGui::GetIO().MouseDelta.x * 0.012f;
 
 		if (ImGui::IsItemHovered() && !ImGui::IsItemActive() && !dragging)
-			ImGui::SetTooltip("Drag to turn the model");
+			ShowTooltip("Drag to turn the model");
 
 		// The pre-rendered picture, the plain model when the picture cannot be made, a figure without both
 		auto model_min = box_min + ImVec2(0.f, box_size.y * 0.04f), model_max = box_max - ImVec2(0.f, box_size.y * 0.015f);
@@ -2926,8 +3249,12 @@ void Menu::RenderPlayersPreview() {
 		else if (dragging)
 			d->AddRect(box_min, box_max, C(col::border_hover), 0.f, 0, 1.f);
 
-		if (group.head_tracker)
-			Esp::DrawTracker(d, ImVec2(box_min.x + box_size.x * 0.5f, box_min.y + box_size.y * 0.085f), box_size.x, group.tracker_visible);
+		// Skeleton on the model, the head tracker around its head about the size it has in the game
+		auto head_at = DrawPreviewSkeleton(d, terrorist, model_min, model_max, model_yaw, group.skeleton ? &group.skeleton_visible : nullptr);
+		if (group.head_tracker) {
+			float head_radius = (model_max.y - model_min.y) * 0.04f;
+			Esp::DrawTracker(d, head_at, head_radius * 6.f, group.tracker_visible);
+		}
 
 		std::vector<Esp::FlagArea> areas;
 		Esp::DrawFlags(d, preview_local, preview_player, box_min, box_max, group, true, &areas);
@@ -2968,7 +3295,7 @@ void Menu::RenderPlayersPreview() {
 			}
 			else if (hovered && !dragging) {
 				d->AddRect(rect.Min, rect.Max, C(col::accent, 0.9f), S(3.f));
-				ImGui::SetTooltip("%s\nDrag to move, right click to remove", FlagName(area.flag));
+				ShowTooltip("%s\nDrag to move, right click to remove", FlagName(area.flag));
 			}
 
 			ImGui::PopID();
@@ -3169,7 +3496,7 @@ void Menu::RenderPlayersTab() {
 		// Written into the game
 		ImGui::BeginDisabled(!Visuals::IsAvailable());
 		Toggle("Outline Glow", esp_group == 0 ? &cfg::visuals::glow::team : &cfg::visuals::glow::enemies,
-			Visuals::IsAvailable() ? "Outline of the game, seen through walls" : "Only available when the game is launched with -insecure",
+			Visuals::IsAvailable() ? nullptr : "Only available when the game is launched with -insecure",
 			nullptr, esp_group == 0 ? &cfg::visuals::glow::team_color : &cfg::visuals::glow::enemy_color);
 		Toggle("Chams", esp_group == 0 ? &cfg::visuals::chams::team : &cfg::visuals::chams::enemies,
 			Visuals::IsAvailable()
@@ -3193,15 +3520,15 @@ void Menu::RenderPlayersTab() {
 			ImGui::EndDisabled();
 		}
 		ImGui::EndDisabled();
-		Toggle("Visible Only", &group.visible_only, "Hides players behind walls & smokes");
+		Toggle("Visible Only", &group.visible_only);
 
-		if (esp_group == 0 && Cache::CopySnapshot().game.deathmatch)
+		if (esp_group == 0 && Cache::Current()->game.deathmatch)
 			TextBlock("Deathmatch: everyone is an enemy, the Enemy ESP is used for all players");
 		EndPanel();
 
 		BeginPanel("BARS");
-		Toggle("Health Number", &group.health_number, "Shows the health on the health bar");
-		Toggle("Armor Number", &group.armor_number, "Shows the armor on the armor bar");
+		Toggle("Health Number", &group.health_number);
+		Toggle("Armor Number", &group.armor_number);
 		EndPanel();
 	}
 	ImGui::EndDisabled();
@@ -3220,10 +3547,10 @@ void Menu::RenderPlayersTab() {
 		BeginPanel("FLAG COLORS");
 		ColorRow("Text", &group.text, "Name, weapon, ping, money...");
 		ColorRow("Icons", &group.icon, "Flashed, reloading, scoped & kit icons");
-		ColorRow("Flashed", &group.flashed, "The FLASHED text");
-		ColorRow("Reloading", &group.reloading, "The RELOADING text");
-		ColorRow("Scoped", &group.scoped, "The SCOPED text");
-		ColorRow("Defusing", &group.defusing, "The DEFUSING text");
+		ColorRow("Flashed", &group.flashed);
+		ColorRow("Reloading", &group.reloading);
+		ColorRow("Scoped", &group.scoped);
+		ColorRow("Defusing", &group.defusing);
 		EndPanel();
 	}
 	ImGui::EndDisabled();
@@ -3290,7 +3617,7 @@ void Menu::RenderBombTab() {
 	BeginColumn(0);
 	{
 		BeginPanel("BOMB ESP");
-		Toggle("Bomb ESP", &cfg::esp::bomb, "Box & icon on the planted bomb", nullptr, &cfg::esp::colors::bomb);
+		Toggle("Bomb ESP", &cfg::esp::bomb, nullptr, nullptr, &cfg::esp::colors::bomb);
 
 		ImGui::BeginDisabled(!Visuals::IsAvailable());
 		Toggle("Outline Glow", &cfg::visuals::glow::bomb, Visuals::IsAvailable()
@@ -3304,8 +3631,8 @@ void Menu::RenderBombTab() {
 	BeginColumn(1);
 	{
 		BeginPanel("BOMB WINDOW");
-		Toggle("Bomb Location", &cfg::world::bomb::location, "Site the bomb was planted on");
-		Toggle("Bomb Timer", &cfg::world::bomb::timer, "Time left until it explodes");
+		Toggle("Bomb Location", &cfg::world::bomb::location);
+		Toggle("Bomb Timer", &cfg::world::bomb::timer);
 		EndPanel();
 	}
 	EndColumn();
@@ -3393,9 +3720,9 @@ void Menu::RenderProjectilesTab() {
 	BeginColumn(0);
 	{
 		BeginPanel("GRENADES");
-		Toggle("Grenade ESP", &cfg::esp::grenades::enabled, "Smokes, molotovs, flashes, HEs & decoys");
+		Toggle("Grenade ESP", &cfg::esp::grenades::enabled);
 		ImGui::BeginDisabled(!cfg::esp::grenades::enabled);
-		Toggle("Trails", &cfg::esp::grenades::trails, "Path of grenades that are still in the air", nullptr, &cfg::esp::colors::grenades::trail);
+		Toggle("Trails", &cfg::esp::grenades::trails, nullptr, nullptr, &cfg::esp::colors::grenades::trail);
 		ImGui::BeginDisabled(!cfg::esp::grenades::trails);
 		Toggle("Grenade Color Trails", &cfg::esp::grenades::trail_type_color, "Color each trail like its grenade instead of using the trail color");
 		ImGui::EndDisabled();
@@ -3423,13 +3750,13 @@ void Menu::RenderProjectilesTab() {
 		Toggle("Smoke Area", &cfg::esp::grenades::smoke_area, "Outline & fill of a popped smoke on the ground.\nIts icon & timer stay");
 		Toggle("Fire Area", &cfg::esp::grenades::fire_area, "Outline & fill of a molotov or incendiary fire on the ground.\nIts icon & timer stay");
 		Toggle("Glow", &cfg::esp::grenades::glow, "Popped smokes & burning fires glow on the ground");
-		Toggle("Icons", &cfg::esp::grenades::icons, "Icon of the grenade above it");
-		Toggle("Names", &cfg::esp::grenades::names, "Smoke, Molotov, Flash...");
-		Toggle("Timers", &cfg::esp::grenades::timers, "Time left of smokes & fires");
+		Toggle("Icons", &cfg::esp::grenades::icons);
+		Toggle("Names", &cfg::esp::grenades::names);
+		Toggle("Timers", &cfg::esp::grenades::timers);
 		ImGui::BeginDisabled(!cfg::esp::grenades::timers);
-		Toggle("Timer Bars", &cfg::esp::grenades::timer_bars, "Bar under the time left");
+		Toggle("Timer Bars", &cfg::esp::grenades::timer_bars);
 		ImGui::EndDisabled();
-		SliderFloat("Text Size", &cfg::esp::grenades::text_size, 8.f, 28.f, "%.0f px", "Size of the names & timers");
+		SliderFloat("Text Size", &cfg::esp::grenades::text_size, 8.f, 28.f, "%.0f px");
 		ImGui::EndDisabled();
 		EndPanel();
 	}
@@ -3516,7 +3843,7 @@ void Menu::RenderItemsTab() {
 		Toggle("Icon", &category.icon);
 		Toggle("Name", &category.name, "Always shown when the icon is off");
 		if (has_ammo)
-			Toggle("Ammo", &category.ammo, "Bullets left in the magazine");
+			Toggle("Ammo", &category.ammo);
 		Toggle("Distance", &category.distance);
 		ImGui::EndDisabled();
 		ImGui::PopID();
@@ -3528,7 +3855,7 @@ void Menu::RenderItemsTab() {
 		BeginPanel("ITEMS");
 		Toggle("Item ESP", &it::enabled, "Weapons, grenades, the bomb & defuse kits nobody holds");
 		ImGui::BeginDisabled(!it::enabled);
-		SliderFloat("Max Distance", &it::max_distance, 5.f, 200.f, "%.0f m", "Items further away are not drawn");
+		SliderFloat("Max Distance", &it::max_distance, 5.f, 200.f, "%.0f m");
 		SliderFloat("Text Size", &it::text_size, 8.f, 24.f, "%.0f px");
 		SliderFloat("Icon Size", &it::icon_size, 8.f, 28.f, "%.0f px");
 		ImGui::EndDisabled();
@@ -3578,7 +3905,7 @@ void Menu::RenderSkinsTab() {
 	const auto& all_items = loaded ? Skins::GetItems() : no_items;
 
 	// Item in hand, copied before locking as the cache has its own lock
-	auto local = Cache::CopySnapshot().local;
+	auto local = Cache::Current()->local;
 	int in_hand = local.weapon.item_index > 0 ? local.weapon.item_index : 0;
 
 	std::lock_guard<std::mutex> lock(cfg::skins::mutex);
@@ -3612,7 +3939,7 @@ void Menu::RenderSkinsTab() {
 		ImGui::EndDisabled();
 
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("%s", available
+			ShowTooltip("%s", available
 				? "Applies the skins of your team, only you can see them"
 				: Engine::IsInsecure()
 					? "The skin code was not found in this game version"
@@ -3637,6 +3964,24 @@ void Menu::RenderSkinsTab() {
 	ImGui::SetCursorPos(origin + ImVec2(0.f, toolbar_height + (1.f - page) * TAB_SLIDE));
 	ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * page);
 	ImGui::BeginChild("##skins_page", ImVec2(region.x, region.y - toolbar_height), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+
+	// When a change shows up in the game
+	{
+		constexpr auto note = "Changes show after the next round or a respawn. Set in the lobby, they are on from the start of the match";
+		auto at = ImGui::GetCursorScreenPos();
+		auto d = ImGui::GetWindowDrawList();
+		const float line = S(16.f);
+
+		auto center = at + ImVec2(S(7.f), line * 0.5f);
+		d->AddCircle(center, S(6.f), C(col::text_faint), 16, 1.2f);
+		auto mark = font_bold->CalcTextSizeA(S(10.f), FLT_MAX, 0.f, "i");
+		d->AddText(font_bold, S(10.f), center - mark * 0.5f, C(col::text_dim), "i");
+
+		auto text = font_regular->CalcTextSizeA(S(13.f), FLT_MAX, 0.f, note);
+		d->AddText(font_regular, S(13.f), at + ImVec2(S(20.f), (line - text.y) * 0.5f), C(col::text_dim), note);
+
+		ImGui::Dummy(ImVec2(0.f, line + S(8.f)));
+	}
 
 	std::optional<SkinPage> go_to;
 
@@ -3706,7 +4051,7 @@ void Menu::RenderSkinsTab() {
 			NextCard(grid);
 
 			auto label = std::format("Item #{}", in_hand);
-			if (ItemCard("##in_hand", grid.card, "", Weapon::IconFor(in_hand), label.c_str(), "", col::border_hover, false, true)) {
+			if (ItemCard("##in_hand", grid.card, BaseImage(in_hand), Weapon::IconFor(in_hand), label.c_str(), "", col::border_hover, false, true)) {
 				go_to = SkinPage::SKINS;
 				selected_item = in_hand;
 			}
@@ -3740,7 +4085,7 @@ void Menu::RenderSkinsTab() {
 			auto id = std::to_string(item.definition_index);
 
 			if (ItemCard(id.c_str(), grid.card,
-				skin ? SmallImage(skin->image) : "", Weapon::IconFor(item.definition_index),
+				skin ? SmallImage(skin->image) : BaseImage(item.definition_index), Weapon::IconFor(item.definition_index),
 				item.name.c_str(),
 				skin ? skin->name.c_str() : "Default",
 				skin ? RarityColor(skin->rarity_color) : col::border_hover,
@@ -4005,7 +4350,7 @@ void Menu::RenderSkinsTab() {
 			NextCard(grid);
 
 			// Knives: the plain knife, still equipped
-			auto default_image = is_knife && info && !info->image.empty() ? SmallImage(info->image) : "";
+			auto default_image = is_knife && info && !info->image.empty() ? SmallImage(info->image) : BaseImage(selected_item);
 			if (ItemCard("##default", grid.card, default_image, is_glove ? nullptr : Weapon::IconFor(selected_item), is_knife ? "Vanilla" : "Default", "", col::border_hover, !entry.paint_kit || !equipped)) {
 				entry.paint_kit = 0;
 				if (is_glove && loadout.glove == selected_item)
@@ -4056,7 +4401,8 @@ void Menu::RenderSkinsTab() {
 				d->AddRectFilled(pos, pos + size, C(col::window), S(8.f));
 				d->AddCircleFilled(center, S(64.f), C(skin ? RarityColor(skin->rarity_color) : col::border_hover, 0.12f), 48);
 
-				auto texture = skin ? ImageCache::Get(SmallImage(skin->image)) : ImTextureID{};
+				auto base_image = BaseImage(selected_item);
+				auto texture = skin ? ImageCache::Get(SmallImage(skin->image)) : base_image.empty() ? ImTextureID{} : ImageCache::Get(base_image);
 				if (texture) {
 					auto fit = ImVec2(size.y * 4.f / 3.f, size.y);
 					d->AddImage(texture, center - fit * 0.5f, center + fit * 0.5f, ImVec2(0, 0), ImVec2(1, 1), C(IM_COL32_WHITE));
@@ -4121,26 +4467,16 @@ void Menu::RenderMovementTab() {
 	{
 		BeginPanel("JUMP");
 		ImGui::BeginDisabled(!available);
-		Toggle("Bunny Hop", &cfg::misc::bhop, available ? "Hold SPACE to jump automatically when landing.\nWith -insecure the jump goes in right at the landing (subtick), so it keeps the speed" : unavailable);
+		Toggle("Bunny Hop", &cfg::misc::bhop, available ? nullptr : unavailable);
 		// Subtick needs the input layout of this game build
 		ImGui::BeginDisabled(!Subtick::IsAvailable());
-		Toggle("Air Strafe", &cfg::misc::auto_strafe, Subtick::IsAvailable()
-			? "Strafes for you in the air: more speed on every jump & free to steer where you fly"
+		ToggleBind("Air Strafe", &cfg::misc::auto_strafe, &cfg::misc::air_strafe_mode, &cfg::misc::air_strafe_key, Subtick::IsAvailable()
+			? nullptr
 			: "Only with -insecure, on the game build it was made for");
-		if (cfg::misc::auto_strafe) {
-			SegmentRow("Activation", &cfg::misc::air_strafe_mode, { "Toggle", "Hold", "Always" });
-			if (cfg::misc::air_strafe_mode != 2)
-				KeybindRow("Key", &cfg::misc::air_strafe_key);
-		}
 
-		Toggle("Jump Bug", &cfg::misc::jump_bug, Subtick::IsAvailable()
+		ToggleBind("Jump Bug", &cfg::misc::jump_bug, &cfg::misc::jump_bug_mode, &cfg::misc::jump_bug_key, Subtick::IsAvailable()
 			? "Jumps right before touching the ground: no fall damage & a higher jump. Hold SPACE with it while falling"
 			: "Only with -insecure, on the game build it was made for");
-		if (cfg::misc::jump_bug) {
-			SegmentRow("Activation##jump_bug", &cfg::misc::jump_bug_mode, { "Toggle", "Hold", "Always" });
-			if (cfg::misc::jump_bug_mode != 2)
-				KeybindRow("Key##jump_bug", &cfg::misc::jump_bug_key);
-		}
 		ImGui::EndDisabled();
 
 		// Rows the keybind list leaves out
@@ -4169,6 +4505,388 @@ void Menu::RenderMovementTab() {
 		EndPanel();
 	}
 	EndColumn();
+}
+
+// The people of the match, as the scoreboard knows them. Read twice a second, the menu is drawn every frame
+struct MatchPlayer {
+	uint64_t steam_id = 0;
+	std::string name;
+	int index = 0;
+	int team = 0;
+	bool bot = false;
+	bool local = false;
+
+	int rank_type = 0;
+	int ranking = 0;
+	int wins = 0;
+};
+
+static const std::vector<MatchPlayer>& MatchPlayers() {
+	static std::vector<MatchPlayer> players;
+	static std::chrono::steady_clock::time_point next{};
+
+	auto now = std::chrono::steady_clock::now();
+	if (now < next)
+		return players;
+	next = now + std::chrono::milliseconds(500);
+
+	players.clear();
+	auto p = Engine::GetProcess();
+	auto snapshot = Cache::Current();
+	if (!p || !snapshot->globals.in_match)
+		return players;
+
+	for (const auto& player : snapshot->players) {
+		auto controller = player.GetControllerAddress();
+		if (!controller || player.index < 0)
+			continue;
+
+		MatchPlayer entry;
+		entry.steam_id = player.steam_id;
+		entry.index = player.index;
+		entry.team = player.team;
+		entry.bot = player.bot;
+		entry.local = player.localplayer;
+
+		// The whole name, the cache keeps 32 bytes of it
+		char name[128]{};
+		p->read_raw(controller + offsets::controller::m_iszPlayerName, name, sizeof(name) - 1);
+		entry.name = std::string(name, strnlen(name, sizeof(name)));
+
+		entry.ranking = p->read<int32_t>(controller + offsets::controller::m_iCompetitiveRanking);
+		entry.wins = p->read<int32_t>(controller + offsets::controller::m_iCompetitiveWins);
+		entry.rank_type = p->read<int8_t>(controller + offsets::controller::m_iCompetitiveRankType);
+
+		players.push_back(std::move(entry));
+	}
+
+	// Teams together, us first in ours
+	std::sort(players.begin(), players.end(), [](const MatchPlayer& a, const MatchPlayer& b) {
+		if (a.team != b.team)
+			return a.team > b.team;
+		if (a.local != b.local)
+			return a.local;
+		return a.index < b.index;
+	});
+	return players;
+}
+
+// What the scoreboard shows: the Premier rating in the color of its tier, else the skill group
+static std::pair<std::string, ImU32> RankText(const MatchPlayer& player) {
+	static const char* groups[] = {
+		"Silver I", "Silver II", "Silver III", "Silver IV", "Silver Elite", "Silver Elite Master",
+		"Gold Nova I", "Gold Nova II", "Gold Nova III", "Gold Nova Master",
+		"Master Guardian I", "Master Guardian II", "Master Guardian Elite", "Distinguished Master Guardian",
+		"Legendary Eagle", "Legendary Eagle Master", "Supreme Master First Class", "Global Elite",
+	};
+
+	if (player.bot)
+		return { "Bot", col::text_dim };
+	if (player.ranking <= 0)
+		return { "Unranked", col::text_dim };
+
+	if (player.rank_type == 11) {
+		int rating = player.ranking;
+		ImU32 color = rating >= 30000 ? IM_COL32(254, 215, 0, 255)
+			: rating >= 25000 ? IM_COL32(235, 75, 75, 255)
+			: rating >= 20000 ? IM_COL32(211, 44, 230, 255)
+			: rating >= 15000 ? IM_COL32(136, 71, 255, 255)
+			: rating >= 10000 ? IM_COL32(75, 105, 255, 255)
+			: rating >= 5000 ? IM_COL32(94, 152, 217, 255)
+			: IM_COL32(176, 195, 217, 255);
+		return { std::format("{},{:03}", rating / 1000, rating % 1000), color };
+	}
+
+	if (player.ranking >= 1 && player.ranking <= 18) {
+		auto text = std::string(groups[player.ranking - 1]);
+		if (player.rank_type == 7)
+			text += " (Wingman)";
+		return { text, col::text };
+	}
+
+	return { std::to_string(player.ranking), col::text };
+}
+
+static ImU32 TeamColor(int team) {
+	return team == 2 ? IM_COL32(234, 190, 84, 255) : team == 3 ? IM_COL32(120, 160, 230, 255) : col::text_dim;
+}
+
+// Their picture in a circle with a ring of their side, the first letter of the name without one
+static void DrawAvatar(ImDrawList* d, const MatchPlayer& player, ImVec2 center, float size) {
+	if (auto texture = player.bot ? ImTextureID{} : Avatars::Get(player.steam_id))
+		d->AddImageRounded(texture, center - ImVec2(size, size) * 0.5f, center + ImVec2(size, size) * 0.5f,
+			ImVec2(0, 0), ImVec2(1, 1), C(IM_COL32_WHITE), size * 0.5f);
+	else {
+		d->AddCircleFilled(center, size * 0.5f, C(col::track), 32);
+		char letter[2] = { player.name.empty() ? '?' : static_cast<char>(toupper(static_cast<unsigned char>(player.name[0]))), 0 };
+		auto letter_size = font_bold->CalcTextSizeA(size * 0.45f, FLT_MAX, 0.f, letter);
+		d->AddText(font_bold, size * 0.45f, center - letter_size * 0.5f, C(col::text_dim), letter);
+	}
+	d->AddCircle(center, size * 0.5f + S(1.5f), C(TeamColor(player.team)), 32, S(1.5f));
+}
+
+// A name cut to fit a buffer, not in the middle of a letter
+static void CopyName(char* buffer, size_t size, const std::string& name) {
+	size_t length = std::min(name.size(), size - 1);
+	while (length > 0 && length < name.size() && (static_cast<unsigned char>(name[length]) & 0xC0) == 0x80)
+		length--;
+
+	std::memcpy(buffer, name.data(), length);
+	buffer[length] = 0;
+}
+
+static int profile_selected = -1;	// Entity index of the player shown, -1 for ourselves
+
+static const MatchPlayer* SelectedPlayer(const std::vector<MatchPlayer>& players) {
+	for (const auto& player : players)
+		if (profile_selected >= 0 ? player.index == profile_selected : player.local)
+			return &player;
+	return players.empty() ? nullptr : &players.front();
+}
+
+// Everyone in the match, by side: picture, name & rank. Picking one shows their profile next to it
+static void MatchPlayersPanel() {
+	BeginPanel("PLAYERS");
+
+	const auto& players = MatchPlayers();
+	if (players.empty())
+		TextBlock("Join a match to see the players in it");
+
+	auto selected = SelectedPlayer(players);
+	auto d = ImGui::GetWindowDrawList();
+	const float row_height = S(40.f);
+	const float avatar = S(26.f);
+
+	int last_team = -1;
+	for (const auto& player : players) {
+		ImGui::PushID(player.index);
+
+		// The side, above its players
+		if (player.team != last_team) {
+			last_team = player.team;
+			SectionTitle(player.team == 2 ? "TERRORISTS" : player.team == 3 ? "COUNTER-TERRORISTS" : "SPECTATORS");
+		}
+
+		auto pos = ImGui::GetCursorScreenPos();
+		auto size = ImVec2(ImGui::GetContentRegionAvail().x, row_height);
+		bool is_selected = selected == &player;
+
+		if (ImGui::InvisibleButton("##player", size))
+			profile_selected = player.local ? -1 : player.index;
+
+		float hover = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() && !is_selected ? 1.f : 0.f, 16.f);
+		float active = Animate(ImGui::GetItemID() + 1, is_selected ? 1.f : 0.f, 14.f);
+
+		auto row_min = pos - ImVec2(S(6.f), 0.f), row_max = pos + size + ImVec2(S(6.f), 0.f);
+		if (active > 0.01f) {
+			d->AddRectFilled(row_min, row_max, C(col::selected, active), S(6.f));
+			d->AddRectFilled(ImVec2(row_min.x, row_min.y + S(10.f)), ImVec2(row_min.x + S(2.f), row_max.y - S(10.f)), C(col::accent, active), 1.f);
+		}
+		if (hover > 0.01f)
+			d->AddRectFilled(row_min, row_max, C(col::hover, hover), S(6.f));
+
+		DrawAvatar(d, player, ImVec2(pos.x + S(4.f) + avatar * 0.5f, pos.y + row_height * 0.5f), avatar);
+
+		// Rank at the right, the name up to it
+		auto [rank, rank_color] = RankText(player);
+		auto rank_size = ImGui::CalcTextSize(rank.c_str());
+		float text_y = pos.y + (row_height - ImGui::GetTextLineHeight()) * 0.5f;
+		d->AddText(ImVec2(pos.x + size.x - rank_size.x - S(4.f), text_y), C(rank_color), rank.c_str());
+
+		float text_x = pos.x + S(4.f) + avatar + S(10.f);
+		d->PushClipRect(ImVec2(text_x, pos.y), ImVec2(pos.x + size.x - rank_size.x - S(14.f), pos.y + row_height), true);
+		auto name = player.name.empty() ? std::string("?") : player.name;
+		d->AddText(ImVec2(text_x, text_y), LerpColor(col::text_label, col::text, std::max(std::max(hover, active), player.local ? 1.f : 0.f)), name.c_str());
+		if (player.local)
+			d->AddText(ImVec2(text_x + ImGui::CalcTextSize(name.c_str()).x + S(6.f), text_y), C(col::accent, 0.8f), "(you)");
+		d->PopClipRect();
+
+		ImGui::PopID();
+	}
+
+	EndPanel();
+}
+
+// Label at the left, value at the right, a thin line under it
+static void InfoLine(const char* label, const std::string& value, ImU32 color = col::text) {
+	if (value.empty())
+		return;
+
+	auto d = ImGui::GetWindowDrawList();
+	auto pos = ImGui::GetCursorScreenPos();
+	float width = ImGui::GetContentRegionAvail().x;
+	float height = S(26.f);
+	float text_y = pos.y + (height - ImGui::GetTextLineHeight()) * 0.5f;
+
+	d->AddText(ImVec2(pos.x, text_y), C(col::text_dim), label);
+
+	auto label_width = ImGui::CalcTextSize(label).x;
+	auto value_size = ImGui::CalcTextSize(value.c_str());
+	float value_x = std::max(pos.x + label_width + S(16.f), pos.x + width - value_size.x);
+	d->PushClipRect(ImVec2(pos.x + label_width + S(16.f), pos.y), ImVec2(pos.x + width, pos.y + height), true);
+	d->AddText(ImVec2(value_x, text_y), C(color), value.c_str());
+	d->PopClipRect();
+
+	d->AddLine(ImVec2(pos.x, pos.y + height - 0.5f), ImVec2(pos.x + width, pos.y + height - 0.5f), C(col::border));
+	ImGui::Dummy(ImVec2(width, height));
+}
+
+// The player picked in the list, in the panel next to the menu: their rank & their Steam profile
+static void ProfilePanel() {
+	BeginPanel("PROFILE");
+
+	const auto& players = MatchPlayers();
+	auto player = SelectedPlayer(players);
+	if (!player) {
+		TextBlock("Join a match, then pick a player to see their profile");
+		EndPanel();
+		return;
+	}
+
+	auto d = ImGui::GetWindowDrawList();
+	auto profile = player->bot ? SteamProfile{} : Avatars::GetProfile(player->steam_id);
+	float width = ImGui::GetContentRegionAvail().x;
+
+	// Header: picture, name, what Steam says they do. Their rank at the right
+	{
+		auto pos = ImGui::GetCursorScreenPos();
+		const float avatar = S(46.f);
+		const float height = avatar + S(8.f);
+		DrawAvatar(d, *player, ImVec2(pos.x + avatar * 0.5f + S(2.f), pos.y + height * 0.5f), avatar);
+
+		auto [rank, rank_color] = RankText(*player);
+		auto rank_size = font_bold->CalcTextSizeA(S(16.f), FLT_MAX, 0.f, rank.c_str());
+		d->AddText(font_bold, S(16.f), ImVec2(pos.x + width - rank_size.x, pos.y + height * 0.5f - S(19.f)), C(rank_color), rank.c_str());
+
+		std::string rank_under = player->rank_type == 11 ? "Premier" : player->rank_type == 7 ? "Wingman" : player->ranking > 0 ? "Competitive" : "";
+		if (!player->bot && player->wins > 0)
+			rank_under += std::format("{}{} wins", rank_under.empty() ? "" : "  ", player->wins);
+		auto under_size = ImGui::CalcTextSize(rank_under.c_str());
+		d->AddText(ImVec2(pos.x + width - under_size.x, pos.y + height * 0.5f + S(3.f)), C(col::text_dim), rank_under.c_str());
+
+		float text_x = pos.x + avatar + S(14.f);
+		float text_right = pos.x + width - std::max(rank_size.x, under_size.x) - S(12.f);
+		auto name = player->name.empty() ? std::string("?") : player->name;
+		d->PushClipRect(ImVec2(text_x, pos.y), ImVec2(text_right, pos.y + height), true);
+		d->AddText(font_bold, S(16.f), ImVec2(text_x, pos.y + height * 0.5f - S(19.f)), C(col::text), name.c_str());
+
+		std::string state = player->bot ? "Bot"
+			: !profile.loaded ? "Loading Steam profile..."
+			: !profile.state.empty() ? profile.state
+			: "Steam profile not found";
+		d->AddText(ImVec2(text_x, pos.y + height * 0.5f + S(3.f)), C(col::text_dim), state.c_str());
+		d->PopClipRect();
+
+		ImGui::Dummy(ImVec2(width, height + S(8.f)));
+	}
+
+	SectionTitle("STEAM");
+	if (player->bot)
+		TextBlock("Bots have no Steam profile");
+	else {
+		InfoLine("Steam Name", profile.persona);
+		InfoLine("Real Name", profile.real_name);
+		InfoLine("Location", profile.location);
+		InfoLine("Member Since", profile.member_since);
+		if (profile.cs2_listed) {
+			InfoLine("CS2 Hours", profile.cs2_hours.empty() ? std::string() : profile.cs2_hours + " h");
+			InfoLine("Last 2 Weeks", profile.cs2_recent_hours.empty() ? std::string() : profile.cs2_recent_hours + " h");
+		}
+		else if (profile.loaded && profile.privacy == "public")
+			InfoLine("CS2 Hours", "Hidden", col::text_dim);	// Game details private, or not played in two weeks
+		if (profile.loaded) {
+			std::string privacy = profile.privacy == "public" ? "Public" : profile.privacy == "friendsonly" ? "Friends only"
+				: profile.privacy.empty() ? "" : "Private";
+			InfoLine("Profile", privacy);
+			InfoLine("VAC", profile.vac_banned ? "Banned" : "Clean", profile.vac_banned ? IM_COL32(235, 75, 75, 255) : IM_COL32(126, 204, 142, 255));
+			if (!profile.trade_ban.empty())
+				InfoLine("Trade Ban", profile.trade_ban, profile.trade_ban == "None" ? col::text : IM_COL32(235, 75, 75, 255));
+			InfoLine("Limited Account", profile.limited ? "Yes" : "No");
+		}
+		InfoLine("SteamID64", std::to_string(player->steam_id), col::text_dim);
+	}
+
+	// Their profile in the browser (Steam, csst.at), their ID, their name for ours. Two rows of two
+	ImGui::Dummy(ImVec2(0, S(10.f)));
+	{
+		auto pos = ImGui::GetCursorScreenPos();
+		const float gap = S(6.f);
+		auto button = ImVec2(floorf((width - gap) / 2.f), S(28.f));
+		auto second = ImVec2(button.x + gap, 0.f);
+		auto below = ImVec2(0.f, button.y + gap);
+
+		auto open = [](const std::wstring& url) { ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL); };
+
+		ImGui::BeginDisabled(player->bot);
+		if (PillButton("Steam Profile##open", pos, button))
+			open(std::format(L"https://steamcommunity.com/profiles/{}", player->steam_id));
+		if (PillButton("csst.at##csst", pos + second, button, false, "Their CS2 stats on csst.at, in the browser"))
+			open(std::format(L"https://csst.at/profile/{}", player->steam_id));
+		if (PillButton("Copy ID##copy", pos + below, button, false, "Copies their SteamID64"))
+			ImGui::SetClipboardText(std::to_string(player->steam_id).c_str());
+		ImGui::EndDisabled();
+
+		bool can_steal = ClanTag::IsNameAvailable() && !player->local;
+		ImGui::BeginDisabled(!can_steal);
+		if (PillButton("Steal Name##steal", pos + below + second, button, true,
+			ClanTag::IsNameAvailable() ? "Their name as yours (Change Name)" : "Only available when the game is launched with -insecure")) {
+			CopyName(cfg::misc::name_text, sizeof(cfg::misc::name_text), player->name);
+			cfg::misc::name_change = true;
+		}
+		ImGui::EndDisabled();
+
+		ImGui::SetCursorScreenPos(pos);
+		ImGui::Dummy(ImVec2(width, button.y * 2.f + gap));
+	}
+
+	EndPanel();
+}
+
+// A sound of the sound folder: on & off, which file (heard when picked) & its volume (heard when let go)
+static void SoundRows(const char* label, bool* enabled, std::string& file, int* volume, const char* tooltip) {
+	ImGui::PushID(label);
+	if (Toggle(label, enabled, tooltip) && *enabled)
+		Sounds::Preload(file);
+
+	if (*enabled) {
+		auto files = Sounds::List();
+
+		if (files.empty()) {
+			auto text = std::format("No sounds in the {} folder yet, download them below or put .vsnd_c, .wav or .mp3 files in it",
+				Sounds::Folder().string());
+			TextBlock(text.c_str());
+		}
+		else {
+			auto found = std::find(files.begin(), files.end(), file);
+			if (found == files.end()) {
+				file = files.front();
+				found = files.begin();
+			}
+
+			// Shown without the file extension
+			std::vector<std::string> shown;
+			for (const auto& name : files) {
+				auto dot = name.find_last_of('.');
+				shown.push_back(dot == std::string::npos || dot == 0 ? name : name.substr(0, dot));
+			}
+
+			std::vector<const char*> names;
+			for (const auto& name : shown)
+				names.push_back(name.c_str());
+
+			int index = static_cast<int>(found - files.begin());
+			if (DropdownRow("Sound", &index, names, nullptr, nullptr, S(150.f))) {
+				file = files[index];
+				Sounds::Play(file, *volume);
+			}
+
+			SliderInt("Volume", volume, 0, 100, "%d%%");
+			if (slider_released)
+				Sounds::Play(file, *volume);
+		}
+	}
+
+	ImGui::PopID();
 }
 
 void Menu::RenderMiscTab() {
@@ -4205,17 +4923,14 @@ void Menu::RenderMiscTab() {
 
 			BeginPanel("THIRD PERSON");
 			ImGui::BeginDisabled(!View::IsThirdPersonAvailable());
-			Toggle("Third Person", &cfg::view::third_person, View::IsThirdPersonAvailable()
-				? "Camera behind your player, like the thirdperson command without sv_cheats"
-				: View::IsAvailable()
-					? "The third person code was not found in this game version"
-					: unavailable);
-			if (cfg::view::third_person) {
-				SegmentRow("Activation", &cfg::view::third_person_mode, { "Toggle", "Hold", "Always" });
-				if (cfg::view::third_person_mode != 2)
-					KeybindRow("Key", &cfg::view::third_person_key);
-				Toggle("Off While Scoped", &cfg::view::third_person_scoped_off, "Back to first person while looking through a scope");
-			}
+			ToggleBind("Third Person", &cfg::view::third_person, &cfg::view::third_person_mode, &cfg::view::third_person_key,
+				View::IsThirdPersonAvailable()
+					? nullptr
+					: View::IsAvailable()
+						? "The third person code was not found in this game version"
+						: unavailable);
+			if (cfg::view::third_person)
+				Toggle("Off While Scoped", &cfg::view::third_person_scoped_off);
 			ImGui::EndDisabled();
 			EndPanel();
 		}
@@ -4287,8 +5002,12 @@ void Menu::RenderMiscTab() {
 				: unavailable);
 
 			if (cfg::misc::clantag) {
-				TextField("##clantag_text", "Tag... (tag 1|tag 2 take turns)", cfg::misc::clantag_text, sizeof(cfg::misc::clantag_text),
-					"Separate texts with | to show them one after another,\neach one a whole round of the animation");
+				SegmentRow("Text", &cfg::misc::clantag_source, { "Custom", "Players" },
+					"Custom: the text below\nPlayers: the names of everyone in the match take turns");
+
+				if (cfg::misc::clantag_source == 0)
+					TextField("##clantag_text", "Tag... (tag 1|tag 2 take turns)", cfg::misc::clantag_text, sizeof(cfg::misc::clantag_text),
+						"Separate texts with | to show them one after another,\neach one a whole round of the animation");
 
 				// Where the tag goes, the name ones need the name update
 				ImGui::BeginDisabled(!ClanTag::IsNameAvailable());
@@ -4314,11 +5033,7 @@ void Menu::RenderMiscTab() {
 			}
 			ImGui::EndDisabled();
 			EndPanel();
-		}
-		EndColumn();
 
-		BeginColumn(1);
-		{
 			BeginPanel("NAME");
 			ImGui::BeginDisabled(!ClanTag::IsNameAvailable());
 			Toggle("Change Name", &cfg::misc::name_change, ClanTag::IsNameAvailable()
@@ -4328,7 +5043,12 @@ void Menu::RenderMiscTab() {
 				TextField("##name_text", "Name...", cfg::misc::name_text, sizeof(cfg::misc::name_text));
 			ImGui::EndDisabled();
 			EndPanel();
+
 		}
+		EndColumn();
+
+		BeginColumn(1);
+		MatchPlayersPanel();
 		EndColumn();
 		break;
 	}
@@ -4361,7 +5081,7 @@ void Menu::RenderMiscTab() {
 			Toggle("Spectator List", &cfg::world::spectators::enabled);
 			if (cfg::world::spectators::enabled) {
 				Toggle("Detailed", &cfg::world::spectators::detailed);
-				Toggle("Only Self", &cfg::world::spectators::self_only, "Only display users spectating you");
+				Toggle("Only Self", &cfg::world::spectators::self_only);
 			}
 			EndPanel();
 
@@ -4421,7 +5141,7 @@ void Menu::RenderMiscTab() {
 		{
 			BeginPanel("REMOVALS");
 			ImGui::BeginDisabled(!writes);
-			Toggle("No Flash", &vis::no_flash, writes ? "Flashbangs blind you less, or not at all" : unavailable);
+			Toggle("No Flash", &vis::no_flash, writes ? nullptr : unavailable);
 			if (vis::no_flash)
 				SliderFloat("Flash Strength", &vis::flash_alpha, 0.f, 255.f, "%.0f", "0 is no white at all, 255 is the game");
 
@@ -4429,6 +5149,47 @@ void Menu::RenderMiscTab() {
 				? "Smokes are not drawn. The smoke ESP still shows where they are"
 				: unavailable);
 			ImGui::EndDisabled();
+			EndPanel();
+
+			namespace hm = cfg::world::hitmarker;
+			BeginPanel("HITMARKER");
+			Toggle("Crosshair", &hm::crosshair);
+			Toggle("World", &hm::world, "An X on the player you hit, at their bone nearest to your crosshair");
+			if (hm::world)
+				Toggle("Damage", &hm::damage);
+			if (hm::crosshair || hm::world) {
+				SliderFloat("Duration", &hm::duration, 0.2f, 2.f, "%.1f s");
+				SliderFloat("Size", &hm::size, 3.f, 16.f, "%.0f");
+				ColorRow("Color", &hm::color);
+				ColorRow("Kill Color", &hm::kill_color);
+			}
+			EndPanel();
+		}
+		EndColumn();
+
+		BeginColumn(1);
+		{
+			BeginPanel("HIT & KILL SOUND");
+			SoundRows("Hit Sound", &cfg::misc::hitsound, cfg::misc::hitsound_file, &cfg::misc::hitsound_volume, nullptr);
+			SoundRows("Kill Sound", &cfg::misc::killsound, cfg::misc::killsound_file, &cfg::misc::killsound_volume,
+				"Played instead of the hit sound when you kill");
+
+			{
+				auto row = BeginRow("Download Sounds");
+				const ImVec2 button(S(96.f), S(24.f));
+				auto at = RowSlot(row, button);
+				bool busy = Sounds::IsDownloading();
+
+				ImGui::BeginDisabled(busy);
+				if (PillButton(busy ? "Downloading" : "Download", at, button, true))
+					Sounds::Download();
+				ImGui::EndDisabled();
+				EndRow(row);
+			}
+
+			auto status = Sounds::GetStatus();
+			if (!status.empty())
+				TextBlock(status.c_str());
 			EndPanel();
 		}
 		EndColumn();
@@ -4464,7 +5225,7 @@ void Menu::RenderSettingsTab() {
 	BeginColumn(0);
 	{
 		BeginPanel("GENERAL");
-		Toggle("ESP", &cfg::enabled, "Master switch of everything drawn over the game");
+		Toggle("ESP", &cfg::enabled);
 
 		if (Toggle("Streamproof", &cfg::settings::streamproof, "Hides the overlay from screen capture and streaming software"))
 		{
@@ -4474,7 +5235,6 @@ void Menu::RenderSettingsTab() {
 			);
 		}
 
-		ColorRow("Menu Accent", &cfg::settings::accent, "The one color of the menu");
 		EndPanel();
 
 	#ifdef _DEBUG
@@ -4501,11 +5261,8 @@ void Menu::RenderSettingsTab() {
 	BeginColumn(1);
 	{
 		BeginPanel("PERFORMANCE");
-		if (Toggle("VSync", &cfg::settings::vsync, "Overlay at the refresh rate of the screen\nOff when the overlay lags, V-Sync of the game too (Advanced Video)"))
-			Window::vsync = cfg::settings::vsync;
-
 		Toggle("Free CPU", &cfg::settings::free_cpu, "Let the CPU sleep to free resources\nOff as a last resort: more CPU use, less latency");
-		Toggle("Watermark", &cfg::settings::watermark, "Name, frame rate & map in the top right corner");
+		Toggle("Watermark", &cfg::settings::watermark);
 
 	#ifdef _DEBUG
 		ImGui::BeginDisabled(!cfg::settings::watermark);
@@ -4529,7 +5286,7 @@ void Menu::SetupStyles() {
 
 	style.Colors[ImGuiCol_WindowBg] = c(col::window);
 	style.Colors[ImGuiCol_ChildBg] = c(col::panel);
-	style.Colors[ImGuiCol_PopupBg] = c(col::sidebar);
+	style.Colors[ImGuiCol_PopupBg] = c(IM_COL32(23, 27, 38, 248));
 	style.Colors[ImGuiCol_Border] = c(col::border);
 	style.Colors[ImGuiCol_BorderShadow] = ImVec4(0.f, 0.f, 0.f, 0.f);
 
@@ -4552,8 +5309,8 @@ void Menu::SetupStyles() {
 	style.Colors[ImGuiCol_SliderGrab] = c(col::accent);
 	style.Colors[ImGuiCol_SliderGrabActive] = c(col::accent);
 
-	style.Colors[ImGuiCol_Button] = c(col::track);
-	style.Colors[ImGuiCol_ButtonHovered] = c(col::track_hover);
+	style.Colors[ImGuiCol_Button] = c(col::button);
+	style.Colors[ImGuiCol_ButtonHovered] = c(col::button_hover);
 	style.Colors[ImGuiCol_ButtonActive] = c(col::border_hover);
 	style.Colors[ImGuiCol_Header] = c(col::track);
 	style.Colors[ImGuiCol_HeaderHovered] = c(col::track_hover);
@@ -4583,9 +5340,9 @@ void Menu::SetupStyles() {
 
 	style.WindowRounding = WINDOW_ROUNDING;
 	style.ChildRounding = PANEL_ROUNDING;
-	style.FrameRounding = 6.f;
-	style.PopupRounding = 10.f;
-	style.GrabRounding = 6.f;
+	style.FrameRounding = 3.f;
+	style.PopupRounding = 4.f;
+	style.GrabRounding = 3.f;
 	style.ScrollbarRounding = 3.f;
 	style.ScrollbarSize = 6.f;
 
@@ -4634,38 +5391,94 @@ void Menu::SetupStyles() {
 
 void Menu::RenderStartupHelpImpl() {
 	col::accent = ImGui::ColorConvertFloat4ToU32(ImVec4(cfg::settings::accent.r, cfg::settings::accent.g, cfg::settings::accent.b, 1.f));
+	col::backdrop = std::clamp(cfg::settings::menu_opacity, 0.3f, 1.f);
 
-	static bool has_opened_menu = false;
+	// Toast in the top left corner of the game once the program runs. Gone after a few seconds, or right away
+	// once the menu opens
+	constexpr float LIFETIME = 4.5f;
+
+	static double started = -1.0;
+	static bool dismissed = false;
 	static float fade = 0.f;
 
-	if (Renderer::IsOpen())
-		has_opened_menu = true;
-
-	// Fades out once the menu was opened the first time
 	auto& io = ImGui::GetIO();
-	fade = std::clamp(fade + io.DeltaTime * (has_opened_menu ? -4.f : 3.f), 0.f, 1.f);
+	double now = ImGui::GetTime();
+	if (started < 0.0)
+		started = now;
 
+	float age = static_cast<float>(now - started);
+	if (Renderer::IsOpen() || age > LIFETIME)
+		dismissed = true;
+
+	fade = std::clamp(fade + io.DeltaTime * (dismissed ? -5.f : 4.f), 0.f, 1.f);
 	if (fade <= 0.f)
 		return;
 
-	auto d = ImGui::GetBackgroundDrawList();
+	auto d = ImGui::GetForegroundDrawList();
 	float alpha = EaseOutCubic(fade);
-	constexpr auto text = "Press  INSERT  or  RIGHT SHIFT  to open the menu,  END  to close";
-	auto text_size = ImGui::CalcTextSize(text);
+	auto with_alpha = [&](ImU32 color, float a = 1.f) { return ImGui::GetColorU32(color, a * alpha); };
 
-	auto toast_size = ImVec2(text_size.x + S(56.f), S(40.f));
-	auto toast_min = ImVec2((io.DisplaySize.x - toast_size.x) * 0.5f, S(60.f) + (1.f - alpha) * -S(12.f));
-	auto toast_max = toast_min + toast_size;
+	// What it says: the name & version, then the keys of the menu as key caps
+	const float title_size = S(16.f);
+	const float text_size = S(13.f);
+	const float padding = S(14.f);
+	const float key_pad = S(6.f);
 
-	auto with_alpha = [&](ImU32 color, float a) {
-		return ImGui::GetColorU32(color, a * alpha);
+	auto version = std::format("v{}", Updater::GetVersion());
+	auto title_width = font_bold->CalcTextSizeA(title_size, FLT_MAX, 0.f, BRAND_TITLE).x;
+	auto version_width = font_regular->CalcTextSizeA(text_size, FLT_MAX, 0.f, version.c_str()).x;
+
+	struct Part {
+		const char* text;
+		bool key;
 	};
+	const Part parts[] = { { "Press", false }, { "INSERT", true }, { "or", false }, { "RIGHT SHIFT", true }, { "to open the menu", false } };
 
-	d->AddRectFilled(toast_min, toast_max, with_alpha(col::sidebar, 0.95f), S(20.f));
-	d->AddRect(toast_min, toast_max, with_alpha(col::border_hover, 1.f), S(20.f), 0, 1.f);
+	float line_width = 0.f;
+	for (const auto& part : parts) {
+		float w = font_regular->CalcTextSizeA(text_size, FLT_MAX, 0.f, part.text).x;
+		line_width += w + (part.key ? key_pad * 2.f : 0.f) + S(6.f);
+	}
+	line_width -= S(6.f);
 
-	auto dot = ImVec2(toast_min.x + S(20.f), toast_min.y + toast_size.y * 0.5f);
-	d->AddCircleFilled(dot, S(4.f), with_alpha(col::accent, 1.f), 16);
+	auto size = ImVec2(padding * 2.f + std::max(title_width + S(8.f) + version_width, line_width), padding * 2.f + title_size + S(10.f) + S(20.f));
 
-	d->AddText(ImVec2(toast_min.x + S(36.f), toast_min.y + (toast_size.y - text_size.y) * 0.5f), with_alpha(col::text, 1.f), text);
+	// Slides in from the left
+	auto min = ImVec2(floorf(S(16.f) - (1.f - alpha) * S(24.f)), S(16.f));
+	auto max = min + size;
+
+	d->AddRectFilled(min, max, with_alpha(col::window, 0.96f), S(8.f));
+	d->AddRect(min, max, with_alpha(col::border_hover), S(8.f), 0, 1.f);
+
+	// Accent bar on the left & the time left as a line under it all
+	d->AddRectFilled(min + ImVec2(0.f, S(10.f)), ImVec2(min.x + S(2.f), max.y - S(10.f)), with_alpha(col::accent), 1.f);
+	float left = dismissed ? 0.f : std::clamp(1.f - age / LIFETIME, 0.f, 1.f);
+	d->AddRectFilled(ImVec2(min.x + S(8.f), max.y - S(3.f)), ImVec2(min.x + S(8.f) + (size.x - S(16.f)) * left, max.y - S(1.5f)), with_alpha(col::accent, 0.6f), 1.f);
+
+	float y = min.y + padding;
+	d->AddText(font_bold, title_size, ImVec2(min.x + padding, y), with_alpha(col::text), BRAND_TITLE);
+	d->AddText(font_regular, text_size, ImVec2(min.x + padding + title_width + S(8.f), y + (title_size - text_size) * 0.5f + S(1.f)),
+		with_alpha(col::accent), version.c_str());
+
+	y += title_size + S(10.f);
+	float x = min.x + padding;
+	const float key_height = S(20.f);
+
+	for (const auto& part : parts) {
+		auto w = font_regular->CalcTextSizeA(text_size, FLT_MAX, 0.f, part.text).x;
+		float text_y = y + (key_height - text_size) * 0.5f;
+
+		if (part.key) {
+			auto key_min = ImVec2(x, y);
+			auto key_max = ImVec2(x + w + key_pad * 2.f, y + key_height);
+			d->AddRectFilled(key_min, key_max, with_alpha(col::track_hover), S(4.f));
+			d->AddRect(key_min, key_max, with_alpha(col::border_hover), S(4.f));
+			d->AddText(font_regular, text_size, ImVec2(x + key_pad, text_y), with_alpha(col::text), part.text);
+			x = key_max.x + S(6.f);
+		}
+		else {
+			d->AddText(font_regular, text_size, ImVec2(x, text_y), with_alpha(col::text_dim), part.text);
+			x += w + S(6.f);
+		}
+	}
 }

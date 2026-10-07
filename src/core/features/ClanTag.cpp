@@ -2,6 +2,7 @@
 
 #include "core/engine/Engine.hpp"
 #include "core/engine/GameThread.hpp"
+#include "core/engine/cache/Cache.hpp"
 #include "core/offsets/Offsets.hpp"
 
 
@@ -24,6 +25,30 @@ namespace {
 
     std::string ConfigText(const char* text, size_t size) {
         return std::string(text, strnlen(text, size));
+    }
+
+    // The names of the others in the match, separated by | so they take turns like texts of the config
+    std::string PlayerNames() {
+        auto snapshot = Cache::Current();
+
+        std::vector<std::pair<int, std::string>> names;
+        for (const auto& player : snapshot->players) {
+            if (player.localplayer)
+                continue;
+
+            auto name = std::string(player.name, strnlen(player.name, sizeof(player.name)));
+            std::replace(name.begin(), name.end(), '|', '/');
+            if (!name.empty())
+                names.push_back({ player.index, name });
+        }
+
+        // Same order every time, players joining only add to it
+        std::sort(names.begin(), names.end());
+
+        std::string out;
+        for (const auto& [index, name] : names)
+            out += (out.empty() ? "" : "|") + name;
+        return out;
     }
 }
 
@@ -383,8 +408,10 @@ void ClanTag::Thread() {
         if (tag_on) {
             float speed = std::clamp(cfg::misc::clantag_speed, 100.f, 1500.f);
             auto elapsed = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - started).count();
-            tag = Animate(ConfigText(cfg::misc::clantag_text, sizeof(cfg::misc::clantag_text)), cfg::misc::clantag_mode,
-                static_cast<uint64_t>(elapsed / speed));
+            auto texts = cfg::misc::clantag_source == 1
+                ? PlayerNames()
+                : ConfigText(cfg::misc::clantag_text, sizeof(cfg::misc::clantag_text));
+            tag = Animate(texts, cfg::misc::clantag_mode, static_cast<uint64_t>(elapsed / speed));
         }
 
         // Clan slot: our tag with brackets, else the one of the game

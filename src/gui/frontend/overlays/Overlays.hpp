@@ -48,4 +48,5 @@ private:
     void RenderSpectatorList();
     void RenderKeybinds();
     void RenderVotes();
+    void RenderHitmarkers();
 };

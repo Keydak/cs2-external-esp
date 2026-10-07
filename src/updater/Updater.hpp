@@ -23,6 +23,8 @@ public:
     static bool Process();
 
     static Status GetStatus();
+    // The version of this build, the number in .github/status.json
+    static int GetVersion() { return GetInstance().current_version; }
 private:
     Updater() {};
 

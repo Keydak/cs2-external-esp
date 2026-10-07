@@ -12,6 +12,10 @@ public:
     bool Update();
     bool GetBounds(view_matrix_t matrix, Vec2_t size, std::pair<Vec2_t, Vec2_t>& bounds) const;
     uintptr_t GetPawnAddress() const { return pawn; }
+    uintptr_t GetControllerAddress() const { return controller; }
+
+    // Where it stands & its bones of right now, two reads. For drawing with the camera of the same moment
+    bool RefreshPose();
 public:
     int8_t index = -1; // To use as invalid/un-initialize check
 
@@ -56,6 +60,7 @@ private:
 
     uintptr_t pawn;
     uintptr_t controller;
+    uintptr_t bone_array = 0;
     
 private:
     bool GetPawn();
