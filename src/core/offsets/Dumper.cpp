@@ -1069,32 +1069,49 @@ bool Dumper::ResolveSkins(ProcessModule client) {
         auto helper = *reinterpret_cast<int32_t*>(call + 3);
         auto apply = gloves.at(0) + 12 + *reinterpret_cast<int32_t*>(call + 8);
 
-        // "call ModelHasOwnGloves; test al, al; je keep; cmp byte ptr [pawn + reapply], 0" at +0x42
-        uint8_t remove[16]{};
-        process->read_raw(apply + 0x42, remove, sizeof(remove));
+        // The places below move around between builds (the pawn went from rdi to r14 in 1.41.9), so they are looked
+        // for in the function instead of at fixed distances from its start
+        constexpr size_t APPLY_SIZE = 0x1000;
+        std::vector<uint8_t> code(APPLY_SIZE);
+        process->read_raw(apply, code.data(), code.size());
 
-        if (remove[0] == 0xE8 && remove[5] == 0x84 && remove[6] == 0xC0 && remove[7] == 0x74 && remove[9] == 0x80 && remove[10] == 0xBF) {
-            offsets::skins::gloveRemoveJump = apply + 0x49 - client.base;
+        // "call ModelHasOwnGloves; test al, al; je keep; cmp byte ptr [pawn + reapply], 0 or bl", the first one
+        for (size_t i = 0; i + 13 < code.size(); i++) {
+            const uint8_t* c = code.data() + i;
+            if (c[0] != 0xE8 || c[5] != 0x84 || c[6] != 0xC0 || c[7] != 0x74)
+                continue;
+
+            // cmp byte ptr [reg + disp32], imm8 or a low register, with or without a REX prefix
+            const uint8_t* cmp = c[9] == 0x41 ? c + 10 : c + 9;
+            bool compares = (cmp[0] == 0x80 || cmp[0] == 0x38) && (cmp[1] & 0xC0) == 0x80;
+            if (!compares)
+                continue;
+
+            offsets::skins::gloveRemoveJump = apply + i + 7 - client.base;
             LOGF(VERBOSE, "Found the glove removal check at 0x{:X}", offsets::skins::gloveRemoveJump);
+            break;
         }
 
-        // "mov dl, 1; mov rcx, rdi; call ShowDefaultGloves" at +0x581, when the glove entity could not be made
-        uint8_t show[10]{};
-        process->read_raw(apply + 0x581, show, sizeof(show));
+        // "mov dl, 1; mov rcx, pawn; call ShowDefaultGloves", when the glove entity could not be made
+        for (size_t i = 0; i + 10 <= code.size(); i++) {
+            const uint8_t* c = code.data() + i;
+            if (c[0] != 0xB2 || c[1] != 0x01 || (c[2] != 0x48 && c[2] != 0x49) || c[3] != 0x8B || (c[4] & 0xF8) != 0xC8 || c[5] != 0xE8)
+                continue;
 
-        constexpr uint8_t show_call[] = { 0xB2, 0x01, 0x48, 0x8B, 0xCF, 0xE8 };
-        if (std::equal(std::begin(show_call), std::end(show_call), show)) {
-            offsets::skins::showDefaultGloves = apply + 0x581 + 10 + *reinterpret_cast<int32_t*>(show + 6) - client.base;
+            offsets::skins::showDefaultGloves = apply + i + 10 + *reinterpret_cast<const int32_t*>(c + 6) - client.base;
             LOGF(VERBOSE, "Found 'ShowDefaultGloves' at 0x{:X}", offsets::skins::showDefaultGloves);
+            break;
         }
 
-        // "cmp [rax], r13b; je ...; call ShouldPrecache" at +0x1DC, ShouldPrecache is "movzx eax, byte ptr [flag]; ret"
-        uint8_t check[14]{}, flag[8]{};
-        process->read_raw(apply + 0x1DC, check, sizeof(check));
+        // "cmp byte ptr [rax], 0 (or r13b); je ...; call ShouldPrecache", ShouldPrecache is "movzx eax, byte ptr [flag]; ret"
+        for (size_t i = 0; i + 14 <= code.size(); i++) {
+            const uint8_t* c = code.data() + i;
+            bool compares = (c[0] == 0x80 && c[1] == 0x38 && c[2] == 0x00) || (c[0] == 0x44 && c[1] == 0x38 && c[2] == 0x28);
+            if (!compares || c[3] != 0x0F || c[4] != 0x84 || c[9] != 0xE8)
+                continue;
 
-        constexpr uint8_t expected[] = { 0x44, 0x38, 0x28, 0x0F, 0x84 };
-        if (std::equal(std::begin(expected), std::end(expected), check) && check[9] == 0xE8) {
-            auto should_precache = apply + 0x1DC + 14 + *reinterpret_cast<int32_t*>(check + 10);
+            uint8_t flag[8]{};
+            auto should_precache = apply + i + 14 + *reinterpret_cast<const int32_t*>(c + 10);
             process->read_raw(should_precache, flag, sizeof(flag));
 
             if (flag[0] == 0x0F && flag[1] == 0xB6 && flag[2] == 0x05 && flag[7] == 0xC3) {
@@ -1102,6 +1119,7 @@ bool Dumper::ResolveSkins(ProcessModule client) {
                 offsets::skins::precacheGloves = should_precache + 7 + *reinterpret_cast<int32_t*>(flag + 3) - client.base;
 
                 LOGF(VERBOSE, "Found the glove code, helper 0x{:X}, precache flag 0x{:X}", helper, offsets::skins::precacheGloves);
+                break;
             }
         }
     }

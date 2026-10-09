@@ -86,10 +86,10 @@ namespace offsets
 
 	// Hits & kills of ours, for the hitmarker & the hit & kill sounds. Read from the schema of the game
 	namespace hits {
-		inline std::ptrdiff_t m_pBulletServices = 0; // CCSPlayer_BulletServices* - C_CSPlayerPawn
-		inline std::ptrdiff_t m_totalHitsOnServer = 0; // int32 - CCSPlayer_BulletServices, counts every hit the server gave us
-		inline std::ptrdiff_t m_pActionTrackingServices = 0; // CCSPlayerController_ActionTrackingServices* - CCSPlayerController
-		inline std::ptrdiff_t m_iNumRoundKills = 0; // int32 - CCSPlayerController_ActionTrackingServices, back to 0 every round
+		inline std::ptrdiff_t m_pBulletServices = 0x1570; // CCSPlayer_BulletServices* - C_CSPlayerPawn
+		inline std::ptrdiff_t m_totalHitsOnServer = 0x48; // int32 - CCSPlayer_BulletServices, counts every hit the server gave us
+		inline std::ptrdiff_t m_pActionTrackingServices = 0x828; // CCSPlayerController_ActionTrackingServices* - CCSPlayerController
+		inline std::ptrdiff_t m_iNumRoundKills = 0x128; // int32 - CCSPlayerController_ActionTrackingServices, back to 0 every round
 	}
 
 	namespace bomb {
