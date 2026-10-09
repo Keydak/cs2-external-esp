@@ -17,6 +17,7 @@ External ESP for Counter-Strike 2, a fork of [IMXNOOBX/cs2-external-esp](https:/
 * **Startup toast**: shows the menu keys for a few seconds when the program starts.
 * **Keys & activation behind a button**: features with a key show it in a small menu next to their toggle (the three dots), with the activation (toggle, hold, always).
 * **Long lists**: dropdowns show a few rows at a time, scroll, and have a search box when the list is long.
+* **Side panels**: previews (ESP, bomb, grenades, items), the picked player of the profile page & the picked model of the model browser show in a card next to the menu, so the options fit without scrolling.
 * **Configs tab**: export / import configs & skin loadouts as separate files in `export/`, rename, delete & set one as **Default** (loaded on start).
 
 **Read only (ESP & overlays)**
@@ -26,6 +27,7 @@ External ESP for Counter-Strike 2, a fork of [IMXNOOBX/cs2-external-esp](https:/
 * **Visibility check**: players behind walls or inside smokes are drawn differently.
 * **Hitmarker**: a mark at the crosshair and on the player you hit, with the damage, in its own color for a kill. Kills come from your own kill counter, so someone killed by another player near your hit is not counted.
 * **Hit & kill sounds**: your own sounds with a volume each, `.vsnd_c`, `.wav` or `.mp3` from the `sound` folder, or downloaded from the [sound repository](https://github.com/Keydak/Killsound-Hitsound-custom-cs2) with one click. One sound per hit, so the pellets of a shotgun stack up. A sound is heard when it is picked or its volume changed. Without `-insecure` Windows plays them, nothing is written into the game.
+* **Profile page**: the players of the match in a list, the picked one in a card next to the menu with their model, rank / Premier rating, K/D/A & Steam details, and buttons to open their Steam profile, copy their ID or take their name.
 * **Vote list**: the vote going on (kick, surrender, timeout…) with who called it on whom & its yes / no.
 * **Overlays**: spectator list, keybind list, bomb site & timer, radar & velocity graph, all draggable and animated.
 * **Game crosshair**: the crosshair overlay follows your own CS2 crosshair settings (style, color, size, dot).
@@ -34,6 +36,8 @@ External ESP for Counter-Strike 2, a fork of [IMXNOOBX/cs2-external-esp](https:/
 
 **Memory writing (only with `-insecure`, see the warning below)**
 * **Skin changer**: weapon skins, knives, gloves, agents & music kits (round music & MVP anthem), with player model previews.
+* **Custom player models**: models made for CS2 players (e.g. from [GameBanana](https://gamebanana.com/mods/cats/22484)) picked like an agent, only you see them. Each model is checked before it can be picked (CS2 skeleton, animations of the current game, every file it needs), so a model that would crash or T-pose is not loaded. A model that sits in the wrong folder is moved where it was made for with one click. In first person its own hands are shown and the gloves of the game hidden; a model without hands of its own keeps the arms of your agent with your glove skin. A new pick is put on at the next respawn.
+* **Model browser**: the player models of GameBanana inside the menu, with big pictures, a search & a filter (all, downloaded, not downloaded). One click downloads a model, unpacks it (zip, rar & 7z) and puts it in the game folder, one more removes it. Models are checked before they are listed: ones made for the old animations or not rigged for CS2 are left out, and ones without first person hands of their own get a badge. The list & the checks are kept, so the browser opens at once after the first run.
 * **View**: custom FOV, viewmodel override (FOV 40 – 120, offsets ±20), third person, free cam & casual spectating after death.
 * **Game radar**: enemies shown on the radar of the game.
 * **Visuals**: no flash (with a strength slider), no smoke. Chams (players colored by the game itself, off while a player is spawn protected) & the outline glow of the game for players, the bomb, dropped items, dropped grenades & thrown grenades, in their ESP tabs.
