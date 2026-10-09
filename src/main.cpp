@@ -26,6 +26,8 @@
 #include "core/features/View.hpp"
 #include "core/features/Freecam.hpp"
 #include "core/features/Skins.hpp"
+#include "core/features/CustomModels.hpp"
+#include "core/features/ModBrowser.hpp"
 #include "core/features/Movement.hpp"
 #include "core/features/AutoAccept.hpp"
 #include "core/features/ClanTag.hpp"
@@ -67,6 +69,9 @@ int main()
 
     LOGF(INFO, "Everything setup and ready, just... make sure you are not in \"Full Screen\"!");
 
+    // The model list of GameBanana & its check, behind everything else
+    ModBrowser::Start();
+
     // Locking
     Renderer::Thread();
 
@@ -86,6 +91,8 @@ int main()
     Freecam::Shutdown();
     View::Shutdown();
     Skins::Shutdown();
+    CustomModels::Shutdown();
+    ModBrowser::Shutdown();
     Movement::Shutdown();
     AutoAccept::Shutdown();
     ClanTag::Shutdown();

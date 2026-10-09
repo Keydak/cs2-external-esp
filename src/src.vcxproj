@@ -192,6 +192,7 @@
     <ClCompile Include="core\engine\classes\Items.cpp" />
     <ClCompile Include="core\engine\classes\GrenadePrediction.cpp" />
     <ClCompile Include="core\engine\world\MapCollision.cpp" />
+    <ClCompile Include="core\engine\resource\Resource.cpp" />
     <ClCompile Include="core\engine\world\MapExport.cpp" />
     <ClCompile Include="external\zstd\zstddeclib.c">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -232,6 +233,8 @@
     <ClCompile Include="core\features\AutoAccept.cpp" />
     <ClCompile Include="core\features\ClanTag.cpp" />
     <ClCompile Include="core\features\VoteEvents.cpp" />
+    <ClCompile Include="core\features\CustomModels.cpp" />
+    <ClCompile Include="core\features\ModBrowser.cpp" />
     <ClCompile Include="core\features\HitEffects.cpp" />
     <ClCompile Include="core\features\Sounds.cpp" />
     <ClCompile Include="core\features\Subtick.cpp" />
@@ -255,6 +258,8 @@
     <ClInclude Include="core\features\AutoAccept.hpp" />
     <ClInclude Include="core\features\ClanTag.hpp" />
     <ClInclude Include="core\features\VoteEvents.hpp" />
+    <ClInclude Include="core\features\CustomModels.hpp" />
+    <ClInclude Include="core\features\ModBrowser.hpp" />
     <ClInclude Include="core\features\HitEffects.hpp" />
     <ClInclude Include="core\features\Sounds.hpp" />
     <ClInclude Include="core\features\Subtick.hpp" />
@@ -285,6 +290,7 @@
     <ClInclude Include="core\engine\classes\Items.hpp" />
     <ClInclude Include="core\engine\classes\GrenadePrediction.hpp" />
     <ClInclude Include="core\engine\world\MapCollision.hpp" />
+    <ClInclude Include="core\engine\resource\Resource.hpp" />
     <ClInclude Include="core\engine\world\MapExport.hpp" />
     <ClInclude Include="core\engine\world\GrenadeArea.hpp" />
     <ClInclude Include="core\engine\classes\Player.hpp" />

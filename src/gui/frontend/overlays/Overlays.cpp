@@ -1369,7 +1369,8 @@ namespace {
             LOGF(VERBOSE, "Vote controller: {}", raw);
         }
 
-        if (state.issue < 0 || state.issue > 64)
+        // A vote always has voters: a controller not filled yet (joining a server) reads issue 0 with none
+        if (state.issue < 0 || state.issue > 64 || state.potential <= 0)
             state = {};
         return state;
     }
@@ -1596,10 +1597,15 @@ void Overlays::RenderVotes() {
 
         // Who voted what, from our listener in the game
         for (auto& event : VoteEvents::Take()) {
+            // Only a ballot starts a vote: the counts the server sends when we join are of no vote
+            bool no_vote = !last || (last->ended && current.issue < 0);
+            if (no_vote && !event.cast)
+                continue;
+
             last_event = now;
 
             // Ballots late to a vote we already called decided still belong to it, while the game shows it
-            if (!last || (last->ended && current.issue < 0)) {
+            if (no_vote) {
                 VoteState unknown;
                 unknown.issue = -2;     // Some vote, the controller did not say which
                 start_entry(unknown, true);

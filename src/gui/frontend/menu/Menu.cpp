@@ -8,6 +8,8 @@
 #include "core/features/View.hpp"
 #include "core/features/Freecam.hpp"
 #include "core/features/Skins.hpp"
+#include "core/features/CustomModels.hpp"
+#include "core/features/ModBrowser.hpp"
 #include "core/features/GameRadar.hpp"
 #include "core/features/ClanTag.hpp"
 #include "core/features/Visuals.hpp"
@@ -1456,7 +1458,7 @@ namespace {
 	#define CARD_HEIGHT S(128.f)
 
 	// Picture, name, a second line & a stripe in the rarity color
-	bool ItemCard(const char* id, ImVec2 size, const std::string& image, const char* icon, const char* title, const char* subtitle, ImU32 rarity, bool selected, bool marked = false) {
+	bool ItemCard(const char* id, ImVec2 size, const std::string& image, const char* icon, const char* title, const char* subtitle, ImU32 rarity, bool selected, bool marked = false, bool figure = false, float aspect = 4.f / 3.f) {
 		ImGui::PushID(id);
 
 		auto pos = ImGui::GetCursorScreenPos();
@@ -1481,10 +1483,10 @@ namespace {
 
 		auto texture = image.empty() ? ImTextureID{} : ImageCache::Get(image);
 		if (texture) {
-			// Fit, keeping the 4:3 of the pictures
+			// Fit, keeping the shape of the pictures (4:3 of the items)
 			float w = picture_max.x - picture_min.x, h = picture_max.y - picture_min.y;
-			float fit_w = std::min(w, h * 4.f / 3.f) * (1.f + 0.04f * hover);
-			auto fit = ImVec2(fit_w, fit_w * 3.f / 4.f);
+			float fit_w = std::min(w, h * aspect) * (1.f + 0.04f * hover);
+			auto fit = ImVec2(fit_w, fit_w / aspect);
 
 			d->AddImage(texture, center - fit * 0.5f, center + fit * 0.5f, ImVec2(0, 0), ImVec2(1, 1), C(IM_COL32_WHITE));
 		}
@@ -1492,6 +1494,13 @@ namespace {
 			const float icon_size = S(36.f);
 			auto icon_extent = font_regular->CalcTextSizeA(icon_size, FLT_MAX, 0.f, icon);
 			d->AddText(font_regular, icon_size, center - icon_extent * 0.5f, LerpColor(col::text_faint, col::text_dim, hover), icon);
+		}
+		else if (figure) {
+			// A player without a picture: head & shoulders
+			float h = (picture_max.y - picture_min.y) * (1.f + 0.04f * hover);
+			auto color = LerpColor(col::text_faint, col::text_dim, hover);
+			d->AddCircleFilled(center - ImVec2(0.f, h * 0.17f), h * 0.15f, color, 32);
+			d->AddRectFilled(center + ImVec2(-h * 0.27f, h * 0.05f), center + ImVec2(h * 0.27f, h * 0.40f), color, h * 0.18f, ImDrawFlags_RoundCornersTop);
 		}
 
 		// Text, clipped to the card
@@ -1521,12 +1530,12 @@ namespace {
 		int count = 0;
 	};
 
-	Grid BeginGrid(float height = CARD_HEIGHT) {
+	Grid BeginGrid(float height = CARD_HEIGHT, float min_width = CARD_MIN_WIDTH) {
 		Grid grid{};
 		grid.start = ImGui::GetCursorScreenPos();
 
 		float available = ImGui::GetContentRegionAvail().x;
-		grid.columns = std::max(1, static_cast<int>((available + CARD_GAP) / (CARD_MIN_WIDTH + CARD_GAP)));
+		grid.columns = std::max(1, static_cast<int>((available + CARD_GAP) / (min_width + CARD_GAP)));
 		grid.card = ImVec2((available - CARD_GAP * (grid.columns - 1)) / grid.columns, height);
 
 		return grid;
@@ -2764,12 +2773,15 @@ void Menu::RenderImpl() {
 }
 
 static void ProfilePanel();
+static void ModBrowserPanel();
+static bool HasPickedMod();
 
 // Previews of the tabs in their own panel next to the menu, so the options fit without scrolling. The profile page
 // of the misc tab shows the player picked there
 void Menu::RenderPreviewPanel(float alpha) {
 	bool profile = active_tab == Tab::MISC && misc_page == 1;
-	if (active_tab != Tab::PLAYERS && active_tab != Tab::BOMB && active_tab != Tab::PROJECTILES && active_tab != Tab::ITEMS && !profile)
+	bool mod = active_tab == Tab::SKINS && skin_page == SkinPage::MODEL_BROWSER && HasPickedMod();
+	if (active_tab != Tab::PLAYERS && active_tab != Tab::BOMB && active_tab != Tab::PROJECTILES && active_tab != Tab::ITEMS && !profile && !mod)
 		return;
 
 	auto& io = ImGui::GetIO();
@@ -2784,6 +2796,8 @@ void Menu::RenderPreviewPanel(float alpha) {
 	float tab = EaseOutCubic(tab_progress);
 	if (profile)
 		tab *= EaseOutCubic(misc_page_progress);	// Comes in with the page too
+	if (mod)
+		tab *= EaseOutCubic(skin_page_progress);
 
 	ImGui::SetNextWindowPos(at, ImGuiCond_Always);
 	ImGui::SetNextWindowSize(ImVec2(width, size.y), ImGuiCond_Always);
@@ -2821,6 +2835,7 @@ void Menu::RenderPreviewPanel(float alpha) {
 		case Tab::PROJECTILES:  RenderProjectilesPreview(); break;
 		case Tab::ITEMS:        RenderItemsPreview();       break;
 		case Tab::MISC:         ProfilePanel();             break;
+		case Tab::SKINS:        ModBrowserPanel();          break;
 		default: break;
 		}
 
@@ -3890,6 +3905,323 @@ void Menu::RenderItemsTab() {
 	EndColumn();
 }
 
+// Player models of the user (csgo/characters & csgo/agents of the game) are cards of the agent list. Above it, what
+// goes with them: the state of the one picked, moving misplaced ones, the folder
+// True when the GameBanana browser is asked for
+static bool CustomModelTools(cfg::skins::loadout_t& loadout, const std::vector<CustomModel>& models) {
+	// One row, no notes: the agent cards right below it
+	if (!CustomModels::IsAvailable())
+		return false;
+
+	// Models put in another folder than the one they were made for: moved there on a click
+	static std::string move_error;
+	for (const auto& model : models) {
+		if (model.place.empty() || !model.fits_there)
+			continue;
+
+		auto label = std::format("Move {} to its folder##move_{}", model.name, model.resource);
+		auto tooltip = std::format("Moves the folder of {} (with its materials) to csgo/{}", model.name, model.place);
+		if (PillButton(label.c_str(), ImGui::GetCursorScreenPos(), ImVec2(ImGui::GetContentRegionAvail().x, S(28.f)), false, tooltip.c_str())) {
+			move_error.clear();
+			if (CustomModels::MoveToPlace(model, move_error) && loadout.custom_model == model.resource)
+				loadout.custom_model = model.made_for;      // Still the one picked, at its new place
+		}
+		ImGui::Dummy(ImVec2(0.f, S(4.f)));
+	}
+
+	// What the game did with the one picked, or why a move failed: a line next to the buttons
+	auto picked = std::find_if(models.begin(), models.end(), [&](const CustomModel& model) { return model.resource == loadout.custom_model; });
+	std::string status = move_error;
+	if (status.empty() && !loadout.custom_model.empty())
+		status = picked != models.end() ? CustomModels::LoadStatus(loadout.custom_model) : std::string("Not in the folder anymore");
+
+	auto pos = ImGui::GetCursorScreenPos();
+	auto size = ImVec2(S(110.f), S(28.f));
+
+	bool browse = PillButton("Download##custom_browse", pos, size, true, "Player models of GameBanana, put in the game with one click");
+	pos.x += size.x + S(6.f);
+
+	if (PillButton("Refresh##custom_refresh", pos, size, false, "Look at the folders again, and try a model the game could not load once more"))
+		CustomModels::Rescan();
+
+	// The folder of the model picked, else where new ones can go
+	if (PillButton("Open Folder##custom_folder", pos + ImVec2(size.x + S(6.f), 0.f), size, false,
+		picked != models.end() ? "Opens the folder of the model picked" : "Opens the csgo folder of the game, models go in characters/ or agents/")) {
+		auto folder = picked != models.end() ? picked->file.parent_path() : CustomModels::Folder().parent_path().parent_path();
+		if (!folder.empty()) {
+			std::error_code ec;
+			std::filesystem::create_directories(folder, ec);
+			ShellExecuteW(nullptr, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+		}
+	}
+
+	if (!status.empty()) {
+		auto at = pos + ImVec2((size.x + S(6.f)) * 2.f + S(4.f), 0.f);
+		float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+		// Cut with "..." where it does not fit, whole in the tooltip
+		std::string shown = status;
+		bool cut = false;
+		while (!shown.empty() && ImGui::CalcTextSize((shown + (cut ? "..." : "")).c_str()).x > right - at.x) {
+			shown.pop_back();
+			while (!shown.empty() && (static_cast<unsigned char>(shown.back()) & 0xC0) == 0x80)
+				shown.pop_back();   // Not half a character
+			if (!shown.empty() && static_cast<unsigned char>(shown.back()) >= 0xC0)
+				shown.pop_back();
+			cut = true;
+		}
+		while (cut && !shown.empty() && shown.back() == ' ')
+			shown.pop_back();
+		if (cut)
+			shown += "...";
+
+		auto text = ImGui::CalcTextSize(shown.c_str());
+		ImGui::GetWindowDrawList()->AddText(at + ImVec2(0.f, (size.y - text.y) * 0.5f), C(col::text_dim), shown.c_str());
+
+		if (cut && ImGui::IsMouseHoveringRect(at, ImVec2(right, at.y + size.y)))
+			ShowTooltip("%s", status.c_str());
+	}
+
+	ImGui::SetCursorScreenPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetCursorStartPos().x, pos.y));
+	ImGui::Dummy(ImVec2(0.f, size.y + S(6.f)));
+	return browse;
+}
+
+// A picture of a mod, 16:9 over the given rect, a little closer on hover
+static void ModPicture(ImDrawList* d, const std::string& image, ImVec2 min, ImVec2 max, float hover, float rounding, ImDrawFlags corners) {
+	auto texture = image.empty() ? ImTextureID{} : ImageCache::Get(image);
+	if (!texture) {
+		d->AddRectFilled(min, max, C(col::track), rounding, corners);
+		return;
+	}
+
+	float zoom = 0.03f * hover;
+	d->AddImageRounded(texture, min, max, ImVec2(zoom, zoom), ImVec2(1.f - zoom, 1.f - zoom), C(IM_COL32_WHITE), rounding, corners);
+}
+
+// A GameBanana mod: its picture over the whole width, a badge of what it got to, its name & who made it
+static bool ModCard(const char* id, ImVec2 size, const ModBrowser::Mod& mod, const char* badge, ImU32 badge_color, float progress, bool selected) {
+	ImGui::PushID(id);
+
+	auto pos = ImGui::GetCursorScreenPos();
+	bool pressed = ImGui::InvisibleButton("##mod", size);
+	auto item = ImGui::GetItemID();
+	float hover = Animate(item, ImGui::IsItemHovered() ? 1.f : 0.f, 14.f);
+	float active = Animate(item + 1, selected ? 1.f : 0.f, 12.f);
+
+	auto d = ImGui::GetWindowDrawList();
+	auto min = pos - ImVec2(0.f, S(2.f) * hover);
+	auto max = min + size;
+	const float rounding = S(10.f);
+
+	d->AddRectFilled(min, max, LerpColor(col::panel, col::selected, std::max(hover * 0.5f, active)), rounding);
+
+	auto picture_max = ImVec2(max.x, min.y + size.x * 9.f / 16.f);
+	ModPicture(d, mod.image, min, picture_max, hover, rounding, ImDrawFlags_RoundCornersTop);
+
+	// Download progress along the bottom of the picture
+	if (progress >= 0.f) {
+		auto bar = ImVec2(min.x, picture_max.y - S(4.f));
+		d->AddRectFilled(bar, picture_max, C(col::track));
+		d->AddRectFilled(bar, ImVec2(min.x + size.x * std::clamp(progress, 0.f, 1.f), picture_max.y), C(col::accent));
+	}
+
+	// What it got to, on the picture
+	if (badge && *badge) {
+		const float text_size = S(11.f);
+		auto text = font_bold->CalcTextSizeA(text_size, FLT_MAX, 0.f, badge);
+		auto badge_min = min + ImVec2(S(8.f), S(8.f));
+		auto badge_max = badge_min + ImVec2(text.x + S(22.f), text.y + S(8.f));
+		d->AddRectFilled(badge_min, badge_max, IM_COL32(0, 0, 0, 185), (badge_max.y - badge_min.y) * 0.5f);
+		d->AddCircleFilled(ImVec2(badge_min.x + S(9.f), (badge_min.y + badge_max.y) * 0.5f), S(3.f), badge_color, 12);
+		d->AddText(font_bold, text_size, ImVec2(badge_min.x + S(16.f), badge_min.y + S(4.f)), IM_COL32(255, 255, 255, 235), badge);
+	}
+
+	// Name & who made it
+	d->PushClipRect(ImVec2(min.x + S(10.f), picture_max.y), ImVec2(max.x - S(10.f), max.y), true);
+	d->AddText(font_bold, S(14.f), ImVec2(min.x + S(12.f), picture_max.y + S(8.f)), C(col::text), mod.name.c_str());
+	auto by = mod.author.empty() ? std::string() : "by " + mod.author;
+	d->AddText(font_regular, S(12.f), ImVec2(min.x + S(12.f), picture_max.y + S(27.f)), C(col::text_dim), by.c_str());
+	d->PopClipRect();
+
+	d->AddRect(min, max, LerpColor(LerpColor(col::border, col::border_hover, hover), col::accent, active), rounding, 0, 1.f + 0.5f * active);
+
+	ImGui::PopID();
+	return pressed;
+}
+
+// The GameBanana mod picked on the browser page, in a column next to the cards: its picture, what it is, what the
+// download got to, what can be done with it. DONE once it is downloaded or removed, CLOSE when closed, the panel goes
+// away then
+enum class ModPanelResult { NONE, DONE, CLOSE };
+
+static int picked_mod = 0;     // On the browser page, 0 for none
+
+static ModPanelResult ModPanel(const ModBrowser::Mod& mod) {
+	auto job = ModBrowser::GetJob(mod.id);
+	bool installed = ModBrowser::IsInstalled(mod.id);
+	bool busy = ModBrowser::IsBusy();
+	bool working = job.state == ModBrowser::Job::State::FETCHING || job.state == ModBrowser::Job::State::DOWNLOADING ||
+		job.state == ModBrowser::Job::State::UNPACKING;
+
+	static std::string remove_error;
+	static int remove_error_mod = 0;
+
+	// Downloaded: done with it
+	if (job.state == ModBrowser::Job::State::DONE) {
+		ModBrowser::ClearJob(mod.id);
+		return ModPanelResult::DONE;
+	}
+
+	auto result = ModPanelResult::NONE;
+	auto d = ImGui::GetWindowDrawList();
+	auto start = ImGui::GetCursorScreenPos();
+	float width = ImGui::GetContentRegionAvail().x;
+	float y = start.y;
+
+	// The picture over the whole width
+	float picture_h = width * 9.f / 16.f;
+	ModPicture(d, mod.image, start, start + ImVec2(width, picture_h), 0.f, S(8.f), ImDrawFlags_RoundCornersAll);
+	d->AddRect(start, start + ImVec2(width, picture_h), C(col::border), S(8.f));
+	y += picture_h + S(12.f);
+
+	// Name, who made it
+	auto name_size = font_bold->CalcTextSizeA(S(17.f), FLT_MAX, width, mod.name.c_str());
+	d->AddText(font_bold, S(17.f), ImVec2(start.x, y), C(col::text), mod.name.c_str(), nullptr, width);
+	y += name_size.y + S(6.f);
+
+	auto by = std::format("by {}", mod.author.empty() ? "?" : mod.author);
+	auto stats = std::format("{} likes   {} views", mod.likes, mod.views);
+	d->PushClipRect(ImVec2(start.x, y), ImVec2(start.x + width, y + S(40.f)), true);
+	d->AddText(font_regular, S(12.f), ImVec2(start.x, y), C(col::text_dim), by.c_str());
+	d->AddText(font_regular, S(12.f), ImVec2(start.x, y + S(17.f)), C(col::text_faint), stats.c_str());
+	d->PopClipRect();
+	y += S(40.f);
+
+	std::string info;
+	if (remove_error_mod == mod.id && !remove_error.empty()) {
+		info = remove_error;
+	}
+	else if (installed) {
+		std::string names;
+		for (const auto& model : ModBrowser::ModelsOf(mod.id))
+			names += (names.empty() ? "" : ", ") + model.substr(model.find_last_of('/') + 1);
+		info = std::format("Installed: {}. Pick it in the agent list", names);
+		if (!mod.own_hands)
+			info += ". It has no first person hands of its own, the arms of your agent are shown with it";
+	}
+	else if (job.state == ModBrowser::Job::State::FAILED) {
+		info = "Failed: " + job.message;
+	}
+	else if (!job.message.empty()) {
+		info = job.message;
+	}
+	else if (mod.verdict == ModBrowser::Mod::Verdict::UNUSABLE) {
+		info = "Can't be used: " + mod.note;
+	}
+	else if (mod.verdict == ModBrowser::Mod::Verdict::USABLE && !mod.own_hands) {
+		info = "It has no first person hands of its own, the arms of your agent are shown with it";
+	}
+	else if (mod.verdict == ModBrowser::Mod::Verdict::UNCHECKED) {
+		info = mod.note;
+	}
+
+	if (!info.empty()) {
+		auto size = font_regular->CalcTextSizeA(S(13.f), FLT_MAX, width, info.c_str());
+		d->AddText(font_regular, S(13.f), ImVec2(start.x, y), C(col::text_dim), info.c_str(), nullptr, width);
+		y += size.y + S(12.f);
+	}
+
+	// Download progress
+	if (job.state == ModBrowser::Job::State::DOWNLOADING || job.state == ModBrowser::Job::State::UNPACKING) {
+		d->AddRectFilled(ImVec2(start.x, y), ImVec2(start.x + width, y + S(6.f)), C(col::track), S(3.f));
+		d->AddRectFilled(ImVec2(start.x, y), ImVec2(start.x + width * std::clamp(job.progress, 0.f, 1.f), y + S(6.f)), C(col::accent), S(3.f));
+		y += S(16.f);
+	}
+
+	// Buttons over the whole width, one under the other
+	auto button = ImVec2(width, S(32.f));
+	auto pos = ImVec2(start.x, y);
+	auto next = [&]() { pos.y += button.y + S(6.f); };
+
+	if (working) {
+		if (PillButton("Cancel##mod_cancel", pos, button))
+			ModBrowser::Cancel();
+		next();
+	}
+	else if (job.state == ModBrowser::Job::State::CHOOSE && !installed) {
+		// One button per file of the mod
+		for (const auto& file : job.files) {
+			auto label = std::format("{} ({:.1f} MB)##mod_file_{}", file.name, file.size / 1048576.0, file.id);
+			ImGui::BeginDisabled(busy);
+			if (PillButton(label.c_str(), pos, button, false, file.description.empty() ? nullptr : file.description.c_str()))
+				ModBrowser::Install(mod, file.id);
+			ImGui::EndDisabled();
+			next();
+		}
+	}
+	else if (!installed) {
+		ImGui::BeginDisabled(busy);
+		if (PillButton("Download##mod_download", pos, button, true, busy ? "Another model is downloading" : "Downloads it and puts it in the game folder"))
+			ModBrowser::Install(mod);
+		ImGui::EndDisabled();
+		next();
+	}
+	else {
+		if (PillButton("Remove##mod_remove", pos, button, false, "Deletes the files it put in the game folder")) {
+			std::vector<std::string> removed;
+			remove_error.clear();
+			remove_error_mod = mod.id;
+			if (ModBrowser::Remove(mod.id, removed, remove_error))
+				result = ModPanelResult::DONE;
+
+			// Not picked anymore once its files are gone
+			for (auto& loadout : cfg::skins::loadouts)
+				if (std::find(removed.begin(), removed.end(), loadout.custom_model) != removed.end())
+					loadout.custom_model.clear();
+		}
+		next();
+	}
+
+	if (!mod.url.empty()) {
+		if (PillButton("Open Page##mod_page", pos, button, false, mod.url.c_str())) {
+			std::wstring url(mod.url.begin(), mod.url.end());
+			ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+		}
+		next();
+	}
+
+	if (PillButton("Close##mod_close", pos, button))
+		result = ModPanelResult::CLOSE;
+	next();
+
+	ImGui::SetCursorScreenPos(start);
+	ImGui::Dummy(ImVec2(width, pos.y - start.y));
+	return result;
+}
+
+static bool HasPickedMod() {
+	return picked_mod != 0;
+}
+
+// The window next to the menu on the browser page, like the previews: the picked mod
+static void ModBrowserPanel() {
+	auto mods = ModBrowser::List();
+	auto mod = std::find_if(mods.begin(), mods.end(), [](const ModBrowser::Mod& m) { return m.id == picked_mod; });
+	if (mod == mods.end())
+		return;
+
+	BeginPanel("MODEL");
+	if (ModPanel(*mod) != ModPanelResult::NONE)
+		picked_mod = 0;     // Downloaded, removed or closed: nothing picked anymore
+	EndPanel();
+}
+
+// "agents/models/x/naruto.vmdl" -> "naruto"
+static std::string CustomModelName(const std::string& resource) {
+	auto name = resource.substr(resource.find_last_of('/') + 1);
+	return name.ends_with(".vmdl") ? name.substr(0, name.size() - 5) : name;
+}
+
 void Menu::OpenSkinPage(SkinPage page, int item) {
 	skin_page = page;
 	selected_item = item;
@@ -3998,13 +4330,15 @@ void Menu::RenderSkinsTab() {
 			auto grid = BeginGrid();
 			NextCard(grid);
 
-			auto agent = loadout.agent ? Skins::FindAgent(loadout.agent) : nullptr;
+			// A custom model is the agent of the team
+			auto custom_name = loadout.custom_model.empty() ? std::string() : CustomModelName(loadout.custom_model);
+			auto agent = custom_name.empty() && loadout.agent ? Skins::FindAgent(loadout.agent) : nullptr;
 			if (ItemCard("##agent", grid.card,
 				agent ? SmallImage(agent->image) : "", nullptr,
-				agent ? agent->name.c_str() : "Agent",
-				agent ? agent->group.c_str() : "Default",
-				agent ? RarityColor(agent->rarity_color) : col::border_hover,
-				false))
+				!custom_name.empty() ? custom_name.c_str() : agent ? agent->name.c_str() : "Agent",
+				!custom_name.empty() ? "Custom" : agent ? agent->group.c_str() : "Default",
+				!custom_name.empty() ? col::accent : agent ? RarityColor(agent->rarity_color) : col::border_hover,
+				false, false, !agent))
 				go_to = SkinPage::AGENTS;
 
 			NextCard(grid);
@@ -4235,13 +4569,42 @@ void Menu::RenderSkinsTab() {
 			go_to = SkinPage::ITEMS;
 
 		ImGui::Dummy(ImVec2(0.f, S(4.f)));
+
+		// One pick for the team: the game's model, a custom model or an agent
+		auto models = CustomModels::IsAvailable() ? CustomModels::List() : std::vector<CustomModel>{};
+		if (CustomModelTools(loadout, models))
+			go_to = SkinPage::MODEL_BROWSER;
 		SearchBox("##agent_search", skin_search, sizeof(skin_search));
 
+		bool custom = !loadout.custom_model.empty();
 		auto grid = BeginGrid(S(150.f));
 		NextCard(grid);
 
-		if (ItemCard("##default", grid.card, "", nullptr, "Default", "From the game", col::border_hover, loadout.agent == 0))
+		if (ItemCard("##default", grid.card, "", nullptr, "Default", "From the game", col::border_hover, !custom && loadout.agent == 0, false, true)) {
 			loadout.agent = 0;
+			loadout.custom_model.clear();
+		}
+
+		for (const auto& model : models) {
+			if (!ContainsInsensitive(model.name, skin_search) && !ContainsInsensitive(std::string("Custom"), skin_search))
+				continue;
+
+			NextCard(grid);
+
+			bool bad = model.status == CustomModel::Status::BAD;
+			bool warning = model.status == CustomModel::Status::WARNING;
+			auto id = "custom_" + model.resource;
+
+			ImGui::BeginDisabled(bad);
+			if (ItemCard(id.c_str(), grid.card, "", nullptr, model.name.c_str(),
+				bad ? "Custom, can't be used" : warning ? "Custom, check" : "Custom",
+				bad ? col::border_hover : warning ? IM_COL32(230, 160, 60, 255) : col::accent,
+				loadout.custom_model == model.resource, false, true)) {
+				loadout.custom_model = model.resource;
+				loadout.agent = 0;
+			}
+			ImGui::EndDisabled();
+		}
 
 		bool terrorist = skin_team == cfg::skins::TERRORIST;
 
@@ -4256,8 +4619,138 @@ void Menu::RenderSkinsTab() {
 
 			auto id = std::to_string(agent.definition_index);
 			if (ItemCard(id.c_str(), grid.card, SmallImage(agent.image), nullptr, agent.name.c_str(), agent.group.c_str(),
-				RarityColor(agent.rarity_color), loadout.agent == agent.definition_index))
+				RarityColor(agent.rarity_color), !custom && loadout.agent == agent.definition_index)) {
 				loadout.agent = agent.definition_index;
+				loadout.custom_model.clear();
+			}
+		}
+
+		EndGrid(grid);
+		break;
+	}
+
+	case SkinPage::MODEL_BROWSER: {
+		if (BackButton("Agents", ImGui::GetCursorScreenPos()))
+			go_to = SkinPage::AGENTS;
+
+		ImGui::Dummy(ImVec2(0.f, S(4.f)));
+
+		auto mods = ModBrowser::List();
+		auto state = ModBrowser::GetListState();
+
+		if (state == ModBrowser::ListState::LOADING && mods.empty()) {
+			TextBlock("Loading the list...");
+			break;
+		}
+
+		if (state == ModBrowser::ListState::FAILED) {
+			TextBlock("Could not get the list from GameBanana");
+			if (PillButton("Try Again##mods_retry", ImGui::GetCursorScreenPos(), ImVec2(S(110.f), S(28.f))))
+				ModBrowser::Reload();
+			break;
+		}
+
+		// Shown: the usable ones, the ones checked on download & what was downloaded (to remove it)
+		static int mod_filter = 0;
+		std::vector<char> installed_flags;
+		int installed_count = 0, shown_count = 0;
+		for (const auto& mod : mods) {
+			installed_flags.push_back(ModBrowser::IsInstalled(mod.id));
+			installed_count += installed_flags.back();
+			shown_count += installed_flags.back() || mod.verdict == ModBrowser::Mod::Verdict::USABLE ||
+				mod.verdict == ModBrowser::Mod::Verdict::UNCHECKED;
+		}
+
+		auto all_label = std::format("All ({})", shown_count);
+		auto installed_label = std::format("Downloaded ({})", installed_count);
+		auto missing_label = std::format("Not Downloaded ({})", shown_count - installed_count);
+		DropdownRow("Show", &mod_filter, { all_label.c_str(), installed_label.c_str(), missing_label.c_str() });
+
+		// The first check of the list (later ones come from the cache at once)
+		{
+			int checked = 0, total = 0, usable = 0;
+			ModBrowser::CheckProgress(checked, total, usable);
+			if (total > 0 && checked < total) {
+				float done = static_cast<float>(checked) / total;
+				auto label = std::format("Checking the models {:.0f}%", done * 100.f);
+
+				ImGui::Dummy(ImVec2(0.f, S(4.f)));
+				auto at = ImGui::GetCursorScreenPos();
+				float width = ImGui::GetContentRegionAvail().x;
+				auto d = ImGui::GetWindowDrawList();
+				d->AddText(at, C(col::text_dim), label.c_str());
+				at.y += ImGui::GetTextLineHeight() + S(4.f);
+				d->AddRectFilled(at, at + ImVec2(width, S(6.f)), C(col::track), S(3.f));
+				d->AddRectFilled(at, at + ImVec2(width * done, S(6.f)), C(col::accent), S(3.f));
+				ImGui::Dummy(ImVec2(0.f, ImGui::GetTextLineHeight() + S(14.f)));
+			}
+		}
+
+		SearchBox("##mod_search", skin_search, sizeof(skin_search));
+
+		// Large cards, the picture is what tells them apart
+		auto grid = BeginGrid(0.f, S(250.f));
+		grid.card.y = grid.card.x * 9.f / 16.f + S(50.f);
+
+		for (size_t index = 0; index < mods.size(); index++) {
+			const auto& mod = mods[index];
+			bool installed = installed_flags[index];
+
+			if ((mod_filter == 1 && !installed) || (mod_filter == 2 && installed))
+				continue;
+
+			// Downloaded ones always show, to remove them. Ones only checked once downloaded show too
+			bool usable = mod.verdict == ModBrowser::Mod::Verdict::USABLE;
+			bool unchecked = mod.verdict == ModBrowser::Mod::Verdict::UNCHECKED;
+			if (!usable && !unchecked && !installed)
+				continue;
+			if (!ContainsInsensitive(mod.name, skin_search) && !ContainsInsensitive(mod.author, skin_search))
+				continue;
+
+			NextCard(grid);
+
+			// A download that finished while another one was picked: nothing more to show of it
+			auto job = ModBrowser::GetJob(mod.id);
+			if (job.state == ModBrowser::Job::State::DONE && mod.id != picked_mod)
+				ModBrowser::ClearJob(mod.id);
+
+			std::string badge;
+			ImU32 badge_color = C(col::text_dim);
+			float progress = -1.f;
+
+			switch (job.state) {
+			case ModBrowser::Job::State::FETCHING:    badge = "Getting files"; badge_color = C(col::accent); break;
+			case ModBrowser::Job::State::DOWNLOADING: badge = std::format("Downloading {:.0f}%", job.progress * 100.f); badge_color = C(col::accent); progress = job.progress; break;
+			case ModBrowser::Job::State::UNPACKING:   badge = "Unpacking"; badge_color = C(col::accent); progress = 1.f; break;
+			case ModBrowser::Job::State::CHOOSE:      badge = "Pick a file"; badge_color = C(col::accent); break;
+			case ModBrowser::Job::State::FAILED:      badge = "Failed"; badge_color = IM_COL32(230, 80, 80, 255); break;
+			default:
+				if (installed) {
+					badge = mod.own_hands ? "Installed" : "Installed, no own hands";
+					badge_color = C(col::online);
+				}
+				else if (mod.verdict == ModBrowser::Mod::Verdict::USABLE && !mod.own_hands) {
+					badge = "No own hands";
+					badge_color = IM_COL32(230, 160, 60, 255);
+				}
+				else if (mod.verdict == ModBrowser::Mod::Verdict::PENDING) {
+					badge = "Checking";
+				}
+				else if (mod.verdict == ModBrowser::Mod::Verdict::UNUSABLE) {
+					badge = "Can't be used";
+					badge_color = IM_COL32(230, 80, 80, 255);
+				}
+				else if (unchecked) {
+					badge = "Checked on download";
+					badge_color = IM_COL32(230, 160, 60, 255);
+				}
+				break;
+			}
+
+			// Picking the picked one again closes it
+			auto id = "mod_" + std::to_string(mod.id);
+			if (ModCard(id.c_str(), grid.card, mod, badge.c_str(), badge_color, progress, picked_mod == mod.id))
+				picked_mod = picked_mod == mod.id ? 0 : mod.id;
 		}
 
 		EndGrid(grid);

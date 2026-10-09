@@ -114,6 +114,8 @@ private:
     void PatchGloveRemoval(bool patched);
     void ShowDefaultGloves(uintptr_t pawn, bool show);
     void HideThirdPersonGloves(uintptr_t pawn, bool hide);
+    void ShowCustomModelHands(uintptr_t pawn, bool on, uint64_t mask, bool hide_gloves);
+    uint64_t AgentArms(uintptr_t pawn, const std::string& worn, uint64_t empty_mask);
     bool CallInGame(uintptr_t function, uintptr_t first, uintptr_t second);
     uintptr_t GetGloveEntity(uintptr_t pawn);
     struct MeshMask {
@@ -123,6 +125,7 @@ private:
 
     void Rebuild(const std::vector<uintptr_t>& weapons, const std::vector<MeshMask>& masks);
     void CollectMeshMasks(uintptr_t pawn, uintptr_t weapon, uint64_t mask, bool force, std::vector<MeshMask>& out);
+    void CollectArmsMask(uintptr_t node, uint64_t mask, std::vector<MeshMask>& out);
 
     bool Attach(Applied& applied);
     void Detach(Applied& applied);
@@ -186,6 +189,9 @@ private:
     bool agent_alive = false;
     bool agent_waiting = false; // Logged once that a change waits for the next spawn
     std::chrono::steady_clock::time_point agent_spawned{};
+    std::chrono::steady_clock::time_point selection_spawn{};   // The spawn the pick below was taken at
+    std::string spawn_selection;    // Agent or custom model picked when we spawned, a pick after waits for the next spawn
+    uintptr_t arms_swapped = 0;     // First person arms given the agent model (a custom model without hands)
 
     // Knife
     struct Knife {
@@ -206,4 +212,9 @@ private:
         int count = 0; // In a row, the game keeps resetting it when this grows
     };
     std::map<uintptr_t, MaskFix> mask_fixed; // By scene node
+
+    // First person of a custom model: its own hands, the glove models of the game hidden
+    uintptr_t hands_node = 0;               // Arms node whose mask we changed
+    uint64_t hands_original_mask = 0;
+    std::vector<uintptr_t> hands_hidden;    // Glove models of the arms
 };

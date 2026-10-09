@@ -121,6 +121,11 @@ namespace offsets
 		inline std::ptrdiff_t fileSystemAddSearchPath = 31; // vtable index, (path, path id, add type, priority, flags)
 	}
 
+	// Custom player models (-insecure): loading a model no manifest of the game lists
+	namespace models {
+		inline std::ptrdiff_t fnPrecache = 0; // resourcesystem.dll, IResourceSystem::PreCache(this, const CResourceNameTyped&, const char* reason), a vfunc
+	}
+
 	// What the server sends of a vote: the counts in the vote controller, who voted what in the vote_cast event
 	namespace votes {
 		inline std::ptrdiff_t dwGameEventManager = 0; // CGameEventManager* - client.dll, found by signature
@@ -234,6 +239,7 @@ namespace offsets
 		inline std::ptrdiff_t m_unMusicID = 0x58; // uint16 - CCSPlayerController_InventoryServices
 		inline std::ptrdiff_t m_fEffects = 0x52C; // uint32 - C_BaseEntity
 		inline std::ptrdiff_t m_ModelName = 0xA8; // CUtlSymbolLarge - CModelState
+		inline std::ptrdiff_t m_hModel = 0xA0; // CStrongHandle<InfoForResourceTypeCModel> - CModelState, the binding of the model resource
 		inline std::ptrdiff_t m_nSubclassID = 0x380; // CUtlStringToken - C_BaseEntity, hash of the item definition index for weapons
 	}
 
@@ -376,6 +382,8 @@ namespace offsets
 		// soundsystem.dll, callback of the "playvol" command: lea r11...; xor r13d, r13d; mov r15, rdx (the arguments);
 		// mov edx, 1; mov [rbp - 60], r13d; mov ecx, 0xC00000C8 (a CBufferString)
 		const std::string playVol = "4C 8B DC 55 41 55 41 56 41 57 49 8D AB ?? ?? ?? ?? 48 81 EC ?? ?? ?? ?? 45 33 ED 4C 8B FA BA 01 00 00 00 44 89 6D ?? B9 C8 00 00 C0";
+		// IResourceSystem::PreCache: push rbx; push rbp; push rdi; sub rsp, 80h; mov rax, [rcx]; mov rbp, r8; mov rdi, rdx
+		const std::string resourcePrecache = "40 53 55 57 48 81 EC 80 00 00 00 48 8B 01 49 8B E8 48 8B FA";
 		const std::string gameEventManager = "41 C6 46 28 01 4C 8D 05 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? 49 8D 56 20 45 33 C9 48 8B 01 FF 50 18";
 		const std::string updateClanTag ="48 89 5C 24 10 48 89 74 24 18 55 57 41 56 48 8D AC 24 ?? ?? ?? ?? 48 81 EC ?? ?? ?? ?? 48 8B 81 ?? ?? ?? ?? 48 8D 3D ?? ?? ?? ?? 48 85 C0 C7 44 24 ?? 80 00 00 C0";
 

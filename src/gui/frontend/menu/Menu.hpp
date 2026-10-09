@@ -81,7 +81,7 @@ private:
     float items_yaw = 0.8f;
 
     // Skins tab
-    enum class SkinPage { ITEMS, GLOVES, KNIVES, AGENTS, MUSIC_KITS, PRESETS, SKINS };
+    enum class SkinPage { ITEMS, GLOVES, KNIVES, AGENTS, MUSIC_KITS, PRESETS, SKINS, MODEL_BROWSER };
 
     int skin_team = 0;                  // cfg::skins::team_t
     SkinPage skin_page = SkinPage::ITEMS;

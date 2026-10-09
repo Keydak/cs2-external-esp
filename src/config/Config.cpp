@@ -405,6 +405,7 @@ void Config::ApplySkins(json skins) {
 		loadout = {};
 		loadout.glove = from.value("glove", 0);
 		loadout.agent = from.value("agent", 0);
+		loadout.custom_model = from.value("custom_model", std::string());
 		loadout.knife = from.value("knife", 0);
 
 		if (auto items = from.find("items"); items != from.end() && items->is_object()) {
@@ -647,6 +648,7 @@ json Config::SkinsJson() {
 
 		to["glove"] = loadout.glove;
 		to["agent"] = loadout.agent;
+		to["custom_model"] = loadout.custom_model;
 		to["knife"] = loadout.knife;
 		to["items"] = json::object();
 

@@ -144,6 +144,7 @@ namespace {
             { offsets::econ::m_pInventoryServices,              "CCSPlayerController",                      "m_pInventoryServices" },
             { offsets::econ::m_fEffects,                        "C_BaseEntity",                             "m_fEffects" },
             { offsets::econ::m_ModelName,                       "CModelState",                              "m_ModelName" },
+            { offsets::econ::m_hModel,                          "CModelState",                              "m_hModel" },
             { offsets::econ::m_nSubclassID,                     "C_BaseEntity",                             "m_nSubclassID" },
             { offsets::econ::m_unMusicID,                       "CCSPlayerController_InventoryServices",    "m_unMusicID" },
 
@@ -496,6 +497,17 @@ bool Dumper::InitImpl() {
             LOGF(VERBOSE, "Found 'playvol' of the sound system at 0x{:X}", offsets::sounds::fnPlayVol);
         } else
             Missing("Could not find 'playvol' of the sound system, hit & kill sounds play through Windows");
+    }
+
+    // Precache of the resource system, optional: custom player models are loaded with it
+    {
+        auto resources = Engine::GetProcess()->GetModule("resourcesystem.dll");
+        auto found = resources.base ? ScanMemory(offsets::signatures::resourcePrecache, resources.base, resources.base + resources.size) : std::vector<DWORD64>{};
+        if (found.size() == 1) {
+            offsets::models::fnPrecache = found.at(0) - resources.base;
+            LOGF(VERBOSE, "Found the precache of the resource system at 0x{:X}", offsets::models::fnPrecache);
+        } else
+            LOGF(WARNING, "Could not find the precache of the resource system, custom player models are off");
     }
 
     // Name, optional

@@ -3,6 +3,7 @@
 #include "core/engine/Engine.hpp"
 #include "core/offsets/Dumper.hpp"
 #include "core/engine/GameThread.hpp"
+#include "core/features/CustomModels.hpp"
 #include "updater/http/HttpHelper.hpp"
 
 #include <algorithm>
@@ -663,6 +664,7 @@ void Skins::Apply() {
     bool hide_third_person;
     int glove;
     int agent;
+    std::string custom_model;
     int knife;
     std::map<int, cfg::skins::item_t> wanted;
     {
@@ -676,6 +678,7 @@ void Skins::Apply() {
 
         glove = loadout.glove;
         agent = loadout.agent;
+        custom_model = loadout.custom_model;
         knife = loadout.knife;
         wanted = loadout.items;
     }
@@ -687,6 +690,7 @@ void Skins::Apply() {
 
         glove = 0;
         agent = 0;
+        custom_model.clear();
         knife = 0;
         wanted.clear();
     }
@@ -846,10 +850,42 @@ void Skins::Apply() {
         }
     }
 
-    ApplyGloves(pawn, account_id, glove, wanted);
-    HideThirdPersonGloves(pawn, this->gloves.block && hide_third_person);
     auto info = agent ? FindAgent(agent) : nullptr;
-    ApplyAgent(pawn, info ? info->model : "");
+    auto model = info ? info->model : std::string();
+
+    // A custom model over the agent, only once the game has it in memory: set before, it would be an ERROR model
+    bool custom = !custom_model.empty() && CustomModels::Prepare(custom_model);
+    if (custom)
+        model = custom_model;
+
+    // By what we wear, not what is picked (a new pick waits for the next spawn): a custom model is all of it, no gloves
+    // over its hands in third person. In first person its own hands with the gloves of the game hidden (no gloves of
+    // ours then). A model without hands of its own (or with its whole body in that group) gets the arms of the agent
+    uint64_t hands_mask = 0, empty_mask = 0;
+    auto worn = GetModelName(pawn);
+    bool custom_on = !worn.empty() && CustomModels::FirstPerson(worn, hands_mask, empty_mask);
+
+    ApplyGloves(pawn, account_id, custom_on && hands_mask ? 0 : glove, wanted);
+    HideThirdPersonGloves(pawn, custom_on || (this->gloves.block && hide_third_person));
+
+    // Only what was picked when we spawned. Changed while alive (even right after the spawn) it waits for the next one
+    auto selection = custom_model.empty() ? std::format("agent {}", agent) : custom_model;
+    if (this->agent_spawned != this->selection_spawn) {
+        this->selection_spawn = this->agent_spawned;
+        this->spawn_selection = selection;
+        this->arms_swapped = 0;     // The arms may get our model again on this spawn
+    }
+
+    if (selection == this->spawn_selection) {
+        ApplyAgent(pawn, model);
+    }
+    else if (!this->agent_waiting) {
+        LOGF(INFO, "The agent changes on the next spawn");
+        this->agent_waiting = true;
+    }
+
+    uint64_t first_person = hands_mask ? hands_mask : (custom_on ? AgentArms(pawn, worn, empty_mask) : 0);
+    ShowCustomModelHands(pawn, custom_on && first_person, first_person, hands_mask != 0);
 
 }
 
@@ -1408,6 +1444,156 @@ void Skins::HideThirdPersonGloves(uintptr_t pawn, bool hide) {
         p->write<uint32_t>(entity + offsets::econ::m_fEffects, effects | EF_NODRAW);
 
     this->glove_hidden = entity;
+}
+
+// The first person arms are the player model too, with the mesh group of its first person hands. Wearing gloves the
+// game picks the group without hands (firstperson_hide_default_gloves) and puts a glove model over it, which custom
+// models leave empty. Here the group with its hands, the glove models hidden. Put back once off
+// First person of a custom model without hands of its own: the arms entity gets the model the game gave us (its
+// agent, loaded already) with the hands of agents, right after the spawn like any model change. Too late for that, a
+// group with none of the meshes of the custom model: only the weapon, never its body in the view
+uint64_t Skins::AgentArms(uintptr_t pawn, const std::string& worn, uint64_t empty_mask) {
+    constexpr uint64_t AGENT_HANDS = 0x4;           // firstperson_default of the agents: arms with their gloves
+    constexpr uint64_t AGENT_HANDS_GLOVED = 0x8;    // firstperson_hide_default_gloves: for a glove model over them
+    constexpr int MAX_CHILDREN = 32;
+
+    auto p = Engine::GetProcess();
+    auto arms = Engine::GetEntityFromHandle(p->read<uint32_t>(pawn + offsets::econ::m_hHudModelArms));
+    if (!arms || this->model_original.empty())
+        return empty_mask;
+
+    // Gloves on (a skin of ours or of the inventory): their model goes over arms without the default gloves
+    auto agent_hands = [&]() {
+        auto node = p->read<uintptr_t>(arms + offsets::pawn::m_pGameSceneNode);
+        auto child = node ? p->read<uintptr_t>(node + offsets::econ::m_pChild) : 0;
+        for (int i = 0; child && i < MAX_CHILDREN; i++, child = p->read<uintptr_t>(child + offsets::econ::m_pNextSibling)) {
+            auto owner = p->read<uintptr_t>(child + offsets::econ::m_pOwner);
+            if (owner && GetModelName(owner).find("/arms/") != std::string::npos)
+                return AGENT_HANDS_GLOVED;
+        }
+        return AGENT_HANDS;
+    };
+
+    auto current = GetModelName(arms);
+    if (current == this->model_original)
+        return agent_hands();
+
+    // Once per arms entity, in the spawn window only, after the game gave the arms our custom model (else it would
+    // put that over ours a moment later)
+    if (current == worn && this->arms_swapped != arms && std::chrono::steady_clock::now() - this->agent_spawned <= AGENT_SPAWN_WINDOW) {
+        this->arms_swapped = arms;
+        if (SetModel(arms, this->model_original)) {
+            LOGF(VERBOSE, "First person arms of {} given to the custom model", this->model_original);
+            if (GetModelName(arms) == this->model_original)
+                return agent_hands();
+        }
+    }
+
+    return empty_mask;
+}
+
+void Skins::ShowCustomModelHands(uintptr_t pawn, bool on, uint64_t mask, bool hide_gloves) {
+    constexpr uint32_t EF_NODRAW = 0x20;
+    constexpr int MAX_CHILDREN = 32;
+
+    if (!on && !this->hands_node && this->hands_hidden.empty())
+        return;
+
+    auto p = Engine::GetProcess();
+    auto arms = Engine::GetEntityFromHandle(p->read<uint32_t>(pawn + offsets::econ::m_hHudModelArms));
+    auto arms_node = arms ? p->read<uintptr_t>(arms + offsets::pawn::m_pGameSceneNode) : 0;
+
+    // The glove models on the arms
+    std::vector<uintptr_t> gloves;
+    auto child = arms_node ? p->read<uintptr_t>(arms_node + offsets::econ::m_pChild) : 0;
+    for (int i = 0; child && i < MAX_CHILDREN; i++, child = p->read<uintptr_t>(child + offsets::econ::m_pNextSibling)) {
+        auto owner = p->read<uintptr_t>(child + offsets::econ::m_pOwner);
+        if (owner && GetModelName(owner).find("/arms/") != std::string::npos)
+            gloves.push_back(owner);
+    }
+
+    auto set_hidden = [&](uintptr_t entity, bool hidden) {
+        auto effects = p->read<uint32_t>(entity + offsets::econ::m_fEffects);
+        auto wanted = hidden ? effects | EF_NODRAW : effects & ~EF_NODRAW;
+        if (wanted != effects)
+            p->write<uint32_t>(entity + offsets::econ::m_fEffects, wanted);
+    };
+
+    if (!on) {
+        // Only what is still there: a new arms entity after the spawn has its own
+        for (auto glove : this->hands_hidden)
+            if (std::find(gloves.begin(), gloves.end(), glove) != gloves.end())
+                set_hidden(glove, false);
+        this->hands_hidden.clear();
+
+        if (this->hands_node && this->hands_node == arms_node) {
+            std::vector<MeshMask> masks;
+            CollectArmsMask(arms_node, this->hands_original_mask, masks);
+            if (!masks.empty())
+                Rebuild({}, masks);
+        }
+        this->hands_node = 0;
+        return;
+    }
+
+    if (!arms_node)
+        return;
+
+    // Over its own hands the gloves go, without them they are the hands
+    for (auto glove : gloves) {
+        bool hidden = std::find(this->hands_hidden.begin(), this->hands_hidden.end(), glove) != this->hands_hidden.end();
+        if (hide_gloves) {
+            set_hidden(glove, true);
+            if (!hidden)
+                this->hands_hidden.push_back(glove);
+        }
+        else if (hidden) {
+            set_hidden(glove, false);
+            std::erase(this->hands_hidden, glove);
+        }
+    }
+
+    auto address = arms_node + offsets::bone::m_modelState + offsets::econ::m_MeshGroupMask;
+    if (this->hands_node != arms_node) {
+        this->hands_node = arms_node;
+        this->hands_original_mask = p->read<uint64_t>(address);
+    }
+
+    std::vector<MeshMask> masks;
+    CollectArmsMask(arms_node, mask, masks);
+    if (!masks.empty()) {
+        Rebuild({}, masks);
+        LOGF(VERBOSE, "Custom model first person mask 0x{:X}, {}", mask, hide_gloves ? "its own hands" : "the gloves of the game as hands");
+    }
+}
+
+// A mask for the arms node, like CollectMeshMasks: through the game, a few times at most when it keeps resetting it
+void Skins::CollectArmsMask(uintptr_t node, uint64_t mask, std::vector<MeshMask>& out) {
+    auto p = Engine::GetProcess();
+    auto now = std::chrono::steady_clock::now();
+    auto address = node + offsets::bone::m_modelState + offsets::econ::m_MeshGroupMask;
+
+    if (p->read<uint64_t>(address) == mask)
+        return;
+
+    if (!offsets::skins::setMeshGroupMask) {
+        p->write<uint64_t>(address, mask);
+        return;
+    }
+
+    constexpr int MAX_FIXES = 3;
+    auto& fix = this->mask_fixed[node];
+    if (fix.mask != mask)
+        fix.count = 0;
+    else if (now - fix.last < 1s || fix.count >= MAX_FIXES)
+        return;
+
+    fix.last = now;
+    fix.mask = mask;
+    if (++fix.count == MAX_FIXES)
+        LOGF(VERBOSE, "The game keeps resetting the mesh of node 0x{:X}, giving up", node);
+
+    out.push_back({ node, mask });
 }
 
 void Skins::ShowDefaultGloves(uintptr_t pawn, bool show) {

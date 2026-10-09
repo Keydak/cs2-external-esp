@@ -270,6 +270,7 @@ namespace cfg {
 
 		struct loadout_t {
 			int agent = 0;                   // Definition index, 0 keeps the model the game gives
+			std::string custom_model;        // "characters/models/x/y.vmdl" of the game folder, over the agent once the game loaded it
 			int glove = 0;                   // Definition index, 0 keeps the default gloves
 			int knife = 0;                   // Definition index, 0 keeps the default knife
 			std::map<int, item_t> items;     // By definition index, also holds the glove & knife paint kits
