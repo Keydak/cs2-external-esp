@@ -15,6 +15,10 @@ Status Updater::GetStatus() {
 // Reads .github/status.json of this fork. It only tells: without internet or with a broken file the program just runs.
 // Whether the program still fits the game is checked against the game itself (Dumper), not here
 bool Updater::InitImpl() {
+	// Checked again on Retry of the loader
+	status = {};
+	isSetup = false;
+
 	json response;
 	auto http_status = HttpHelper::Get(this->status_url, response);
 

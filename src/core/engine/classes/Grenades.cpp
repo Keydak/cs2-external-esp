@@ -24,6 +24,10 @@ namespace {
     constexpr float LANDING_MAX_ERROR = 64.f; // Further from the prediction than this, something deflected it
     constexpr float LANDING_REST_DISTANCE = 32.f;
 
+    // A decoy that stayed this still this long has landed
+    constexpr float DECOY_STILL_DISTANCE = 1.f;
+    constexpr auto DECOY_REST = milliseconds(300);
+
     constexpr float TRAIL_MIN_DISTANCE = 4.f;
     constexpr size_t TRAIL_MAX_POINTS = 512;
 
@@ -297,8 +301,20 @@ void Grenades::ReadGrenade(uintptr_t entity, GrenadeType type, steady_clock::tim
         break;
     }
 
+    // A decoy on the ground until it goes off: no flight left, its lines go
+    if (type == GrenadeType::Decoy && !grenade.pos.zero() && !state.rested) {
+        if (grenade.pos.dist_to_3d(state.last_pos) > DECOY_STILL_DISTANCE)
+            state.still_since = now;
+        else if (now - state.still_since > DECOY_REST) {
+            state.rested = true;
+            state.landing_over = true;
+            state.trail.clear();
+        }
+    }
+    bool flying = !grenade.detonated && !state.rested;
+
     // Where it is going to land, simulated once from the real throw. Retried while the map collision loads
-    if (cfg::esp::grenades::landing && type != GrenadeType::Fire && !grenade.detonated && !state.landing_simulated) {
+    if (cfg::esp::grenades::landing && type != GrenadeType::Fire && flying && !state.landing_simulated) {
         auto start = p->read<Vec3_t>(entity + offsets::grenade::m_vInitialPosition);
         auto velocity = p->read<Vec3_t>(entity + offsets::grenade::m_vInitialVelocity);
 
@@ -313,11 +329,11 @@ void Grenades::ReadGrenade(uintptr_t entity, GrenadeType type, steady_clock::tim
         }
     }
 
-    if (!grenade.detonated && state.landing.valid && !state.landing_over)
+    if (flying && state.landing.valid && !state.landing_over)
         UpdateLanding(grenade, state, now);
 
     // Flight path, recorded only while the grenade is still in the air
-    if (!grenade.detonated && !grenade.pos.zero()) {
+    if (flying && !grenade.pos.zero()) {
         bool moved = state.trail.empty() || state.trail.back().dist_to_3d(grenade.pos) > TRAIL_MIN_DISTANCE;
 
         if (moved && state.trail.size() < TRAIL_MAX_POINTS)

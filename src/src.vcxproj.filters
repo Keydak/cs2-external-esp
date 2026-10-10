@@ -398,6 +398,9 @@
     <ClInclude Include="core\engine\types\Weapons.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="assets\fonts\Inter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="assets\fonts\Icons.h">
       <Filter>Header Files</Filter>
     </ClInclude>

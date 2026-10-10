@@ -10,7 +10,15 @@ public:
     Engine& operator=(const Engine&) = delete;
     Engine& operator=(Engine&&)      = delete;
 
-   static bool Init();
+   // The game found & read: the process, its modules, -insecure, the offsets of this build & the config. Waits
+   // for the game to be opened. False when it cannot be used, GetProgress says why
+   static bool Attach();
+   // The thread reading the game & the features, once the loader is done
+   static void Start();
+   // What Attach does, or why it failed
+   static std::string GetProgress();
+   // Attach waits for CS2 to be opened
+   static bool IsWaitingForGame();
    static ProcessModule GetClient();
    static ProcessModule GetEngine();
    static std::shared_ptr<pProcess> GetProcess(); // Refactor this so its easier to access
@@ -38,7 +46,9 @@ private:
         return i;
     }
 
-    bool InitImpl();
+    bool AttachImpl();
+    void StartImpl();
+    void SetProgress(const std::string& text);
 
     bool AwaitProcess();
     bool AwaitModules();
@@ -58,4 +68,9 @@ private:
     std::mutex outdated_mtx;
     std::string outdated_reason;
     int failed_checks = 0;      // Seconds in a row the checks failed
+
+    std::mutex progress_mtx;
+    std::string progress;
+    std::atomic<bool> waiting_for_game = false;
+    bool just_opened = false;   // CS2 was opened while we waited: it gets a moment to load all of itself
 };

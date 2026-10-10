@@ -5,7 +5,7 @@
 
 namespace {
     constexpr char TRI_MAGIC[4] = { 'C', 'S', '2', 'T' };
-    constexpr uint32_t TRI_VERSION = 1;
+    constexpr uint32_t TRI_VERSION = 2;
     constexpr uint32_t LEAF_SIZE = 4;
 
     Vec3_t Min(const Vec3_t& a, const Vec3_t& b) {
@@ -24,9 +24,11 @@ namespace {
         return a.x * b.x + a.y * b.y + a.z * b.z;
     }
 
-    // Looks next to the executable first, then the working directory
+    // Looks in the folder of the program (the working directory, picked in the loader) first, then next to the executable
     std::filesystem::path FindMapFile(const std::string& name) {
         auto file = std::filesystem::path("maps") / (name + ".tri");
+        if (std::filesystem::exists(file))
+            return file;
 
         char exe_path[MAX_PATH]{};
         if (GetModuleFileNameA(nullptr, exe_path, MAX_PATH)) {
@@ -38,24 +40,28 @@ namespace {
         return file;
     }
 
-    // Where a built map goes, next to the executable
+    // Where a built map goes, in the folder of the program
     std::filesystem::path BuildPath(const std::string& name) {
-        auto file = std::filesystem::path("maps") / (name + ".tri");
-
-        char exe_path[MAX_PATH]{};
-        if (GetModuleFileNameA(nullptr, exe_path, MAX_PATH))
-            return std::filesystem::path(exe_path).parent_path() / file;
-
-        return file;
+        return std::filesystem::path("maps") / (name + ".tri");
     }
 
-    // Missing, or older than the map of the game after an update
+    // Missing, built by an older version of the program, or older than the map of the game after an update
     bool NeedsBuild(const std::string& name) {
         std::error_code error;
         auto file = FindMapFile(name);
 
         if (!std::filesystem::exists(file, error))
             return true;
+
+        {
+            std::ifstream f(file, std::ios::binary);
+            char magic[4]{};
+            uint32_t version = 0;
+            f.read(magic, sizeof(magic));
+            f.read(reinterpret_cast<char*>(&version), sizeof(version));
+            if (!f || memcmp(magic, TRI_MAGIC, sizeof(magic)) != 0 || version != TRI_VERSION)
+                return true;
+        }
 
         auto maps = MapExport::FindMapsDir();
         if (maps.empty())
@@ -268,6 +274,58 @@ bool MapCollision::Blocked(const Vec3_t& start, const Vec3_t& end) {
     }
 
     return TraceWorld(*world, start, end, hit, true);
+}
+
+bool MapCollision::Near(const Vec3_t& min, const Vec3_t& max) {
+    std::shared_ptr<World> world;
+    std::shared_ptr<const std::vector<OrientedBox>> boxes;
+    {
+        auto& i = GetInstance();
+        std::lock_guard<std::mutex> lock(i.mtx);
+        world = i.world;
+        boxes = i.boxes;
+    }
+
+    auto apart = [&](const Vec3_t& low, const Vec3_t& high) {
+        return high.x < min.x || low.x > max.x || high.y < min.y || low.y > max.y || high.z < min.z || low.z > max.z;
+    };
+
+    if (boxes)
+        for (const auto& box : *boxes)
+            if (!apart(box.bounds_min, box.bounds_max))
+                return true;
+
+    if (!world || world->nodes.empty())
+        return false;
+
+    uint32_t stack[64];
+    int stack_size = 0;
+    stack[stack_size++] = 0;
+
+    while (stack_size > 0) {
+        const auto& node = world->nodes[stack[--stack_size]];
+        if (apart(node.min, node.max))
+            continue;
+
+        if (node.count == 0) {
+            if (stack_size + 2 > IM_ARRAYSIZE(stack))
+                return true;    // Too deep to tell: as if something is there
+            stack[stack_size++] = node.first;
+            stack[stack_size++] = node.first + 1;
+            continue;
+        }
+
+        // The bounds of each triangle
+        for (uint32_t i = node.first; i < node.first + node.count; i++) {
+            const auto& t = world->triangles[i];
+            auto a = t.v0, b = t.v0 + t.e1, c = t.v0 + t.e2;
+            Vec3_t low(std::min({ a.x, b.x, c.x }), std::min({ a.y, b.y, c.y }), std::min({ a.z, b.z, c.z }));
+            Vec3_t high(std::max({ a.x, b.x, c.x }), std::max({ a.y, b.y, c.y }), std::max({ a.z, b.z, c.z }));
+            if (!apart(low, high))
+                return true;
+        }
+    }
+    return false;
 }
 
 bool MapCollision::Trace(const Vec3_t& start, const Vec3_t& end, Hit& hit) {

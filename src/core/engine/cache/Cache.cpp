@@ -198,7 +198,8 @@ bool Cache::RefreshImpl() {
     }
 
     // New & picked up items now & then, where they are every refresh so dropped ones fall smoothly
-    bool want_items = cfg::esp::items::enabled;
+    namespace chams = cfg::visuals::material_chams;
+    bool want_items = cfg::esp::items::enabled || chams::items.visible.enabled || chams::items.hidden.enabled;
     if (want_items) {
         if (now - last_item_scan >= item_rate) {
             item_tracker.Update(game.entity_list);

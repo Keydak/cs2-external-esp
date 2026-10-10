@@ -29,6 +29,8 @@ public:
 
     // The events since the last call, oldest first
     static std::vector<HitEvent> Drain();
+    // Only the kills since the last call, a list of their own (KillEffect)
+    static std::vector<HitEvent> DrainKills();
 private:
     HitEffects() {};
 
@@ -72,6 +74,7 @@ private:
 
     std::mutex mutex;
     std::vector<HitEvent> events;
+    std::vector<HitEvent> kills;
 
     std::atomic<bool> stopping = false;
     std::atomic<bool> running = false;

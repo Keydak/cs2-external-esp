@@ -27,6 +27,14 @@ void HitEffects::Shutdown() {
     GetInstance().stopping = true;
 }
 
+std::vector<HitEvent> HitEffects::DrainKills() {
+    auto& i = GetInstance();
+    std::lock_guard lock(i.mutex);
+    std::vector<HitEvent> out;
+    out.swap(i.kills);
+    return out;
+}
+
 std::vector<HitEvent> HitEffects::Drain() {
     auto& effects = GetInstance();
     std::lock_guard lock(effects.mutex);
@@ -65,6 +73,12 @@ void HitEffects::Emit(const HitEvent& event) {
         this->events.erase(this->events.begin());
 
     this->events.push_back(event);
+
+    if (event.kill) {
+        if (this->kills.size() >= MAX_EVENTS)
+            this->kills.erase(this->kills.begin());
+        this->kills.push_back(event);
+    }
 }
 
 void HitEffects::Thread() {
@@ -74,7 +88,7 @@ void HitEffects::Thread() {
         std::this_thread::sleep_for(POLL);
 
         namespace hm = cfg::world::hitmarker;
-        if (!hm::crosshair && !hm::world && !cfg::misc::hitsound && !cfg::misc::killsound) {
+        if (!hm::crosshair && !hm::world && !cfg::misc::hitsound && !cfg::misc::killsound && !cfg::world::kill_effect::enabled) {
             Reset();
             continue;
         }

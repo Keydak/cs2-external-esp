@@ -4,6 +4,9 @@
 #include "core/engine/GameThread.hpp"
 #include "core/engine/cache/Cache.hpp"
 #include "core/offsets/Offsets.hpp"
+#include "core/features/View.hpp"
+
+#include <cstring>
 
 
 namespace {
@@ -11,6 +14,21 @@ namespace {
     constexpr size_t TEXT = 0x80;           // Where the clan text goes in the block
     constexpr size_t MAX_TAG = 31;
     constexpr size_t NAME_SIZE = 128;       // m_iszPlayerName
+
+    // setinfo: code, the old flags of "name", a CCommand (argc at 0x438, argv at 0x440), argv, the texts
+    constexpr size_t SERVER_SIZE = 0x1000;
+    constexpr uintptr_t SERVER_FLAGS = 0x100;
+    constexpr uintptr_t SERVER_COMMAND = 0x200;
+    constexpr uintptr_t COMMAND_ARGC = 0x438;
+    constexpr uintptr_t COMMAND_ARGV = 0x440;
+    constexpr uintptr_t SERVER_ARGV = 0x700;
+    constexpr uintptr_t SERVER_TEXTS = 0x740;   // "setinfo", "name", then the value at SERVER_VALUE
+    constexpr uintptr_t SERVER_VALUE = 0x780;
+    constexpr size_t SERVER_VALUE_SIZE = 128;
+    constexpr uintptr_t CONVAR_FLAGS = 0x30;    // uint64 - ConVarData
+    constexpr uint32_t FCVAR_USERINFO = 0x200;  // What setinfo checks (bit 9)
+    // The server is told a new name at most this often: each one is a name change there
+    constexpr auto SERVER_EVERY = std::chrono::milliseconds(1000);
 
     enum Mode { STATIC, BLINK, SCROLL, TYPING, BRUTEFORCE, WAVE, FADE, DECRYPT, GLITCH, EXPAND, PULSE, SLIDE };
     enum Target { CLAN, BEFORE, AFTER, NAME };
@@ -70,6 +88,87 @@ bool ClanTag::IsAvailable() {
 
 bool ClanTag::IsNameAvailable() {
     return Engine::IsInsecure() && offsets::controller::fnUpdateName;
+}
+
+bool ClanTag::IsServerAvailable() {
+    return Engine::IsInsecure() && offsets::controller::fnSetInfo;
+}
+
+bool ClanTag::SendName(const std::string& name) {
+    auto p = Engine::GetProcess();
+    if (!p || !offsets::controller::fnSetInfo || !GameThread::Ensure())
+        return false;
+
+    if (!this->name_convar) {
+        this->name_convar = View::FindConVar("name");
+        if (!this->name_convar) {
+            LOGF(WARNING, "Clan tag: the \"name\" variable was not found, nothing sent to the server");
+            return false;
+        }
+        LOGF(VERBOSE, "Clan tag: \"name\" at 0x{:X}, flags 0x{:X}", this->name_convar, p->read<uint64_t>(this->name_convar + CONVAR_FLAGS));
+    }
+
+    if (!this->server_block)
+        this->server_block = p->allocate_remote(SERVER_SIZE, PAGE_EXECUTE_READWRITE);
+    if (!this->server_block)
+        return false;
+    auto block = this->server_block;
+
+    std::vector<uint8_t> data(SERVER_SIZE, 0);
+    auto put = [&](uintptr_t at, const void* value, size_t size) { std::memcpy(&data[at], value, size); };
+    auto put32 = [&](uintptr_t at, uint32_t value) { put(at, &value, 4); };
+    auto put64 = [&](uintptr_t at, uint64_t value) { put(at, &value, 8); };
+
+    // setinfo name <value>
+    put(SERVER_TEXTS, "setinfo", 8);
+    put(SERVER_TEXTS + 0x10, "name", 5);
+    put(SERVER_VALUE, name.data(), std::min(name.size(), SERVER_VALUE_SIZE - 1));
+    put64(SERVER_ARGV + 0x00, block + SERVER_TEXTS);
+    put64(SERVER_ARGV + 0x08, block + SERVER_TEXTS + 0x10);
+    put64(SERVER_ARGV + 0x10, block + SERVER_VALUE);
+    put32(SERVER_COMMAND + COMMAND_ARGC, 3);
+    put64(SERVER_COMMAND + COMMAND_ARGV, block + SERVER_ARGV);
+
+    std::vector<uint8_t> code;
+    auto emit = [&](std::initializer_list<uint8_t> bytes) { code.insert(code.end(), bytes); };
+    auto emit64 = [&](uint64_t value) { for (int i = 0; i < 8; i++) code.push_back(static_cast<uint8_t>(value >> (i * 8))); };
+
+    emit({ 0x48, 0x83, 0xEC, 0x28 });                               // sub rsp, 0x28
+    // "name" a user info variable for this call, its flags kept
+    emit({ 0x48, 0xB8 }); emit64(this->name_convar);                // mov rax, name
+    emit({ 0x48, 0x8B, 0x50, CONVAR_FLAGS });                       // mov rdx, [rax + flags]
+    emit({ 0x49, 0xB8 }); emit64(block + SERVER_FLAGS);             // mov r8, &old flags
+    emit({ 0x49, 0x89, 0x10 });                                     // mov [r8], rdx
+    emit({ 0x48, 0x81, 0xCA, 0x00, 0x02, 0x00, 0x00 });             // or rdx, user info
+    emit({ 0x48, 0x89, 0x50, CONVAR_FLAGS });                       // mov [rax + flags], rdx
+    // setinfo(0, &command)
+    emit({ 0x31, 0xC9 });                                           // xor ecx, ecx
+    emit({ 0x48, 0xBA }); emit64(block + SERVER_COMMAND);           // mov rdx, &command
+    emit({ 0x48, 0xB8 }); emit64(Engine::GetEngine().base + offsets::controller::fnSetInfo); // mov rax, setinfo
+    emit({ 0xFF, 0xD0 });                                           // call rax
+    // Its flags back
+    emit({ 0x48, 0xB8 }); emit64(this->name_convar);                // mov rax, name
+    emit({ 0x49, 0xB8 }); emit64(block + SERVER_FLAGS);             // mov r8, &old flags
+    emit({ 0x49, 0x8B, 0x10 });                                     // mov rdx, [r8]
+    emit({ 0x48, 0x89, 0x50, CONVAR_FLAGS });                       // mov [rax + flags], rdx
+    emit({ 0x48, 0x83, 0xC4, 0x28 });                               // add rsp, 0x28
+    emit({ 0x33, 0xC0 });                                           // xor eax, eax
+    emit({ 0xC3 });                                                 // ret
+
+    if (code.size() > SERVER_FLAGS)
+        return false;
+    std::copy(code.begin(), code.end(), data.begin());
+    p->write_bytes(block, data);
+    FlushInstructionCache(p->handle_, reinterpret_cast<void*>(block), code.size());
+
+    if (!GameThread::Call(block)) {
+        // Might still be running, never written over
+        this->server_block = 0;
+        LOGF(WARNING, "Clan tag: the game did not send the name in time");
+        return false;
+    }
+    LOGF(VERBOSE, "Clan tag: sent the name \"{}\" to the server", name);
+    return true;
 }
 
 void ClanTag::Shutdown() {
@@ -350,6 +449,12 @@ bool ClanTag::Apply(uintptr_t controller, std::optional<uintptr_t> clan, const s
 }
 
 void ClanTag::Restore() {
+    // The real name back on the server
+    if (this->server_active && !this->original_name.empty() && SendName(this->original_name)) {
+        this->server_active = false;
+        this->server_sent.clear();
+    }
+
     if (!this->controller)
         return;
 
@@ -380,12 +485,14 @@ void ClanTag::Thread() {
 
         auto controller = p->read<uintptr_t>(Engine::GetClient().base + offsets::localPlayerController);
 
-        // New map: a new controller with its own tag & name, nothing to put back on the old one
+        // New map: a new controller with its own tag & name, nothing to put back on the old one. The server keeps the
+        // name we sent across maps of the same server: sent again from the new controller
         if (controller != this->controller && this->controller) {
             this->controller = 0;
             this->clan_active = false;
             this->name_active = false;
             this->clan_written.clear();
+            this->server_sent.clear();
         }
 
         bool tag_on = cfg::misc::clantag && IsAvailable();
@@ -400,7 +507,9 @@ void ClanTag::Thread() {
         if (!this->controller) {
             this->controller = controller;
             this->original_clan = p->read<uintptr_t>(controller + offsets::controller::m_szClan);
-            this->original_name = ReadName(controller);
+            // The server might still have our name from before: the real one stays the one seen first
+            if (!this->server_active || this->original_name.empty())
+                this->original_name = ReadName(controller);
         }
 
         // The tag at this step of the animation
@@ -454,6 +563,27 @@ void ClanTag::Thread() {
                 name_write = &name;
         } else if (this->name_active)
             name_write = &this->original_name;
+
+        // To the server: the whole name, the tag in it ([tag] name for the clan slot, the server takes clans from
+        // Steam groups only). Not more often than SERVER_EVERY, the newest one
+        bool server_on = IsServerAvailable();
+        if (server_on) {
+            std::string server_name = name;
+            if (tag_on && target == CLAN && !tag.empty())
+                server_name = "[" + tag + "] " + name;
+            auto now = std::chrono::steady_clock::now();
+            if (server_name != this->server_sent && now - this->server_last >= SERVER_EVERY) {
+                this->server_last = now;
+                if (SendName(server_name)) {
+                    this->server_sent = server_name;
+                    this->server_active = true;
+                }
+            }
+        }
+        else if (this->server_active && SendName(this->original_name)) {
+            this->server_active = false;
+            this->server_sent.clear();
+        }
 
         if (!clan && !name_write)
             continue;

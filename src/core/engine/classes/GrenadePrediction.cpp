@@ -5,6 +5,7 @@
 #include "core/engine/world/MapCollision.hpp"
 #include "core/engine/types/Weapons.hpp"
 
+#include <algorithm>
 #include <numbers>
 
 // Mirrors the grenade physics of the game (CBaseCSGrenadeProjectile), see the constants below
@@ -21,7 +22,12 @@ namespace {
     constexpr float FLOOR_NORMAL_Z = 0.7f;
     constexpr float STOP_EPSILON = 0.1f;
     constexpr float SURFACE_OFFSET = 0.1f; // Keeps the next trace from starting inside the surface
-    constexpr float MARK_BOUNCE_SPEED = 50.f; // Slower contacts are the grenade rolling or resting
+    // Speed into the surface a bounce is marked from: resting & rolling touch the floor with a few units of a tick
+    // of gravity, a small real bounce has more
+    constexpr float MARK_BOUNCE_SPEED = 15.f;
+    // The grenade is a box of this half size (CBaseCSGrenadeProjectile), not a point: it touches edges, rails &
+    // corners a line through its middle passes by
+    constexpr float HULL = 2.f;
 
     constexpr float FUSE_TIME = 1.5f;           // HE & flash
     constexpr float MOLOTOV_FUSE_TIME = 2.f;    // Molotov & incendiary explode in the air after this
@@ -62,10 +68,37 @@ namespace {
         MapCollision::Hit info;
     };
 
-    // Moves as far as the world allows
+    // Moves the box of the grenade as far as the world allows: its middle & its 8 corners traced, the nearest hit
+    // stops it. A corner inside something where it starts (past a surface from the middle, the box half in a wall
+    // or a plank) is left out: traced from in there it hit the same surface from behind every tick & the grenade
+    // lost all its speed in one place
     Move PushEntity(const Vec3_t& start, const Vec3_t& delta) {
         Move move;
         move.hit = MapCollision::Trace(start, start + delta, move.info);
+
+        // The corners only near something: in the air the middle alone, most of the flight at the cost of one trace
+        auto end = start + delta;
+        Vec3_t low(std::min(start.x, end.x) - HULL, std::min(start.y, end.y) - HULL, std::min(start.z, end.z) - HULL);
+        Vec3_t high(std::max(start.x, end.x) + HULL, std::max(start.y, end.y) + HULL, std::max(start.z, end.z) + HULL);
+        bool close_by = MapCollision::Near(low, high);
+
+        for (int corner = 0; close_by && corner < 8; corner++) {
+            Vec3_t offset((corner & 1) ? HULL : -HULL, (corner & 2) ? HULL : -HULL, (corner & 4) ? HULL : -HULL);
+            if (MapCollision::Blocked(start, start + offset))
+                continue;
+
+            MapCollision::Hit hit;
+            if (!MapCollision::Trace(start + offset, start + offset + delta, hit) || hit.fraction <= 0.f)
+                continue;
+            // A surface the corner moves away from is one it was touching, not one it runs into
+            if (Dot(delta, hit.normal) >= 0.f)
+                continue;
+            if (!move.hit || hit.fraction < move.info.fraction) {
+                move.hit = true;
+                move.info = hit;
+            }
+        }
+
         move.end = move.hit
             ? start + delta * move.info.fraction + move.info.normal * SURFACE_OFFSET
             : start + delta;
@@ -180,8 +213,8 @@ bool GrenadePrediction::Simulate(GrenadeType type, Vec3_t position, Vec3_t veloc
         path.on_ground = move.hit && move.info.normal.z > FLOOR_NORMAL_Z;
 
         if (move.hit) {
-            // Resting on the floor also "hits" it every tick, only real bounces are marked
-            if (velocity.length() > MARK_BOUNCE_SPEED)
+            // Resting on the floor also "hits" it every tick, only real bounces are marked: by the speed into it
+            if (-Dot(velocity, move.info.normal) > MARK_BOUNCE_SPEED)
                 path.bounces.push_back(move.end);
 
             auto bounced = ClipVelocity(velocity, move.info.normal, 2.f) * ELASTICITY;

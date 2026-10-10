@@ -23,6 +23,26 @@ bool Bomb::Update() {
 	this->address = p->read<uintptr_t>(client.base + offsets::plantedC4);
 	this->is_planted = (this->address != 0);
 
+	// What the bomb overlay goes by, logged when it changes
+	static uintptr_t logged_address = 0;
+	static int logged_state = -1;
+	if (this->address != logged_address) {
+		logged_address = this->address;
+		logged_state = -1;
+		LOGF(VERBOSE, "Bomb: planted C4 0x{:X}", this->address);
+	}
+	if (this->address) {
+		int state = (p->read<bool>(this->address + offsets::bomb::m_bBombDefused) ? 1 : 0)
+			| (p->read<bool>(this->address + offsets::bomb::m_bHasExploded) ? 2 : 0);
+		if (state != logged_state) {
+			logged_state = state;
+			auto node = p->read<uintptr_t>(this->address + offsets::pawn::m_pGameSceneNode);
+			auto at = node ? p->read<Vec3_t>(node + offsets::bomb::m_vecAbsOrigin) : Vec3_t{};
+			LOGF(VERBOSE, "Bomb: defused {}, exploded {}, at {:.0f} {:.0f} {:.0f} (defused 0x{:X}, exploded 0x{:X})",
+				(state & 1) != 0, (state & 2) != 0, at.x, at.y, at.z, offsets::bomb::m_bBombDefused, offsets::bomb::m_bHasExploded);
+		}
+	}
+
 	if (!this->is_planted) {
 		Bomb::prev_is_planted = false;
 		this->timed = false;

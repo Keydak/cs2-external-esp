@@ -34,12 +34,31 @@ namespace {
     constexpr uintptr_t DATA_FREE_ANGLES = 0xB0;        // QAngle, where the free cam looks, moved by the mouse we keep from the game
     constexpr uintptr_t DATA_INPUT = 0x60;      // uint64, QAngle* the free cam looks along: our own (DATA_FREE_ANGLES), turned by
                                                 // the mouse we keep from the game. 0 for where we look
+    // View punch: alive in first person, the kick the camera shows (where it looks minus where we aim) times our scale
+    constexpr uintptr_t DATA_PUNCH_SCALE = 0xC0;        // float, 0 none of it, 1 all of it
+    constexpr uintptr_t DATA_PUNCH_ON = 0xC4;           // uint32, 0 leaves the camera alone
+    constexpr uintptr_t PAGE_INPUT = 0xC8;              // uint64, where the game keeps its CSGOInput pointer
+    constexpr uintptr_t DATA_PUNCH_SEEN = 0xD0;         // QAngle, the kick of the last frame, for the log
+    constexpr uintptr_t CONST_180 = 0xDC;               // floats for the stub
+    constexpr uintptr_t CONST_MINUS_180 = 0xE0;
+    constexpr uintptr_t CONST_360 = 0xE4;
+    constexpr uintptr_t CONST_MAX_PUNCH = 0xE8;
+    // Following in first person: the camera of the game for that player (CalcView of their camera services)
+    constexpr uintptr_t DATA_CALC_ON = 0xEC;            // uint32, 0 our own position & smoothed angles
+    constexpr uintptr_t PAGE_CALC_VIEW = 0xF0;          // uint64, CalcView, 0 when not found
+    constexpr uintptr_t STUB_CALC = 0x1800;             // Code calling it
+    constexpr uintptr_t DATA_CALC = 0x1F00;             // What it gives: Vector origin, QAngle angles (+0x10), float fov (+0x1C)
+    constexpr uintptr_t DATA_CALC_ORIGIN = DATA_CALC;
+    constexpr uintptr_t DATA_CALC_ANGLES = DATA_CALC + 0x10;
+    constexpr uintptr_t DATA_CALC_FOV = DATA_CALC + 0x1C;
+    constexpr float MAX_PUNCH = 20.f;                   // Degrees, more is no kick: dead, teleported, another camera
     constexpr uintptr_t STUB = 0x100;
     constexpr uintptr_t STUB_OBSERVER = 0x340;
     constexpr uintptr_t TABLE = 0x500;
     constexpr uintptr_t OLD_TABLE = 0x400;              // Of a page from an earlier version
-    constexpr size_t PAGE_SIZE = 0x1000;
-    constexpr size_t MAX_ENTRIES = (PAGE_SIZE - TABLE) / sizeof(uintptr_t) - 1;
+    constexpr uintptr_t STUB_PUNCH = 0x1000;
+    constexpr size_t PAGE_SIZE = 0x2000;
+    constexpr size_t MAX_ENTRIES = (STUB_PUNCH - TABLE) / sizeof(uintptr_t) - 1;
     constexpr uint64_t MAGIC = 0x4D41434545524643; // "CFREECAM"
 
     constexpr float FAST = 3.f;                 // Shift
@@ -272,6 +291,8 @@ bool Freecam::Install() {
     const int32_t OBSERVER = static_cast<int32_t>(offsets::pawn::m_pObserverServices);
     const int32_t OBSERVER_MODE = static_cast<int32_t>(offsets::observerServices::m_iObserverMode);
     const int32_t OBSERVER_TARGET = static_cast<int32_t>(offsets::observerServices::m_hObserverTarget);
+    const int32_t VIEW_ANGLES = static_cast<int32_t>(offsets::input::m_angViewAngles);
+    const int32_t THIRD_PERSON = static_cast<int32_t>(offsets::input::m_bInThirdPerson);
 
     // rcx the client mode, rdx the view
     Code c;
@@ -321,6 +342,9 @@ bool Freecam::Install() {
     auto to_free = c.jump({ 0x0F, 0x84 });              // je free
     c.put({ 0x83, 0xF8, 0x02 });                        // cmp eax, follow
     auto to_follow = c.jump({ 0x0F, 0x84 });            // je follow
+
+    // Off: the camera of the game, its kick scaled (STUB_PUNCH, rbx still the view)
+    c.put({ 0xE8 }); c.put32(static_cast<int32_t>(STUB_PUNCH - (STUB + c.size() + 4)));   // call punch
     auto off = c.jump({ 0xE9 });                        // jmp done
 
     // Our field of view, not the zoom of the one watched before
@@ -375,10 +399,63 @@ bool Freecam::Install() {
     c.put({ 0x41, 0x8B, 0x42, DATA_FOLLOW_ANGLES + 8 });            // mov eax, [r10 + follow angles + 8]
     c.put({ 0x89, 0x83 }); c.put32(ANGLES + 8);                     // mov [rbx + angles + 8], eax
 
+    // First person: over that, their eyes & where they look the way the game shows them (STUB_CALC, r11 the target)
+    c.put({ 0xE8 }); c.put32(static_cast<int32_t>(STUB_CALC - (STUB + c.size() + 4)));   // call calc
+
     c.land(off); c.land(free_done); c.land(input_done); c.land(no_target); c.land(no_node);
     c.put({ 0x48, 0x83, 0xC4, 0x20 });                  // add rsp, 0x20
     c.put({ 0x5B });                                    // pop rbx
     c.put({ 0xC3 });                                    // ret
+
+    // View punch, called with rbx the view: the kick is what the camera turned past where we aim, after the game built
+    // the view of this frame, so nothing races with the game. Where we aim plus the kick times our scale
+    Code punch;
+    auto page32 = [&](std::initializer_list<uint8_t> opcode, uintptr_t at) { punch.put(opcode); punch.put32(static_cast<int32_t>(at)); };
+    std::vector<size_t> no_punch;
+    punch.put({ 0x4C, 0x8D, 0x15 }); punch.put32(-static_cast<int32_t>(STUB_PUNCH + punch.size() + 4));  // lea r10, [page]
+    page32({ 0x41, 0x8B, 0x82 }, DATA_PUNCH_ON);        // mov eax, [r10 + punch on]
+    punch.put({ 0x85, 0xC0 });                              // test eax, eax
+    no_punch.push_back(punch.jump({ 0x0F, 0x84 }));         // jz done
+    page32({ 0x4D, 0x8B, 0x9A }, PAGE_INPUT);           // mov r11, [r10 + input]
+    punch.put({ 0x4D, 0x85, 0xDB });                        // test r11, r11
+    no_punch.push_back(punch.jump({ 0x0F, 0x84 }));         // jz done
+    punch.put({ 0x4D, 0x8B, 0x1B });                        // mov r11, [r11]
+    punch.put({ 0x4D, 0x85, 0xDB });                        // test r11, r11
+    no_punch.push_back(punch.jump({ 0x0F, 0x84 }));         // jz done
+    punch.put({ 0x41, 0x80, 0xBB }); punch.put32(THIRD_PERSON); punch.put({ 0x00 });  // cmp byte [r11 + third person], 0
+    no_punch.push_back(punch.jump({ 0x0F, 0x85 }));         // jne done: the third person camera looks at us, not along
+
+    // Each angle: the kick, -180 - 180, none when too large
+    for (int32_t a = 0; a < 3; a++) {
+        punch.put({ 0xF3, 0x0F, 0x10, 0x83 }); punch.put32(ANGLES + a * 4);             // movss xmm0, [rbx + angles]
+        punch.put({ 0xF3, 0x41, 0x0F, 0x10, 0x8B }); punch.put32(VIEW_ANGLES + a * 4);  // movss xmm1, [r11 + view angles]
+        punch.put({ 0xF3, 0x0F, 0x5C, 0xC1 });                                      // subss xmm0, xmm1
+        page32({ 0x41, 0x0F, 0x2F, 0x82 }, CONST_180);                          // comiss xmm0, [180]
+        auto not_above = punch.jump({ 0x0F, 0x86 });                                // jbe
+        page32({ 0xF3, 0x41, 0x0F, 0x5C, 0x82 }, CONST_360);                    // subss xmm0, [360]
+        punch.land(not_above);
+        page32({ 0x41, 0x0F, 0x2F, 0x82 }, CONST_MINUS_180);                    // comiss xmm0, [-180]
+        auto not_below = punch.jump({ 0x0F, 0x83 });                                // jae
+        page32({ 0xF3, 0x41, 0x0F, 0x58, 0x82 }, CONST_360);                    // addss xmm0, [360]
+        punch.land(not_below);
+        page32({ 0xF3, 0x41, 0x0F, 0x11, 0x82 }, DATA_PUNCH_SEEN + a * 4);      // movss [r10 + seen], xmm0
+        punch.put({ 0x66, 0x0F, 0x7E, 0xC0 });                                      // movd eax, xmm0
+        punch.put({ 0x25, 0xFF, 0xFF, 0xFF, 0x7F });                                // and eax, 0x7FFFFFFF
+        punch.put({ 0x66, 0x0F, 0x6E, 0xC0 });                                      // movd xmm0, eax
+        page32({ 0x41, 0x0F, 0x2F, 0x82 }, CONST_MAX_PUNCH);                    // comiss xmm0, [max]
+        no_punch.push_back(punch.jump({ 0x0F, 0x87 }));                             // ja done
+        no_punch.push_back(punch.jump({ 0x0F, 0x8A }));                             // jp done (NaN)
+    }
+
+    for (int32_t a = 0; a < 3; a++) {
+        page32({ 0xF3, 0x41, 0x0F, 0x10, 0x82 }, DATA_PUNCH_SEEN + a * 4);      // movss xmm0, [r10 + seen]
+        page32({ 0xF3, 0x41, 0x0F, 0x59, 0x82 }, DATA_PUNCH_SCALE);             // mulss xmm0, [r10 + scale]
+        punch.put({ 0xF3, 0x41, 0x0F, 0x58, 0x83 }); punch.put32(VIEW_ANGLES + a * 4);  // addss xmm0, [r11 + view angles]
+        punch.put({ 0xF3, 0x0F, 0x11, 0x83 }); punch.put32(ANGLES + a * 4);             // movss [rbx + angles], xmm0
+    }
+    for (auto jump : no_punch)
+        punch.land(jump);
+    punch.put({ 0xC3 });                                    // ret
 
     // The spectator camera of the game, then our position over its own: rcx its services, rdx the origin, r8 the angles
     Code o;
@@ -408,7 +485,59 @@ bool Freecam::Install() {
     o.put({ 0x5B });                                    // pop rbx
     o.put({ 0xC3 });                                    // ret
 
-    if (STUB + c.size() > STUB_OBSERVER || STUB_OBSERVER + o.size() > TABLE) {
+    // Following in first person, called with rbx the view & r11 the target: their eyes & where they look the way the
+    // game shows them, moved between the ticks by the game in this very frame. What the view has is what it starts from
+    Code k;
+    {
+        const int32_t CAMERA = static_cast<int32_t>(offsets::view::m_pCameraServices);
+        auto page_rel_k = [&]() { k.put32(-static_cast<int32_t>(STUB_CALC + k.size() + 4)); };
+        std::vector<size_t> calc_off;
+        k.put({ 0x48, 0x83, 0xEC, 0x28 });                          // sub rsp, 0x28
+        k.put({ 0x4C, 0x8D, 0x15 }); page_rel_k();                  // lea r10, [page]
+        k.put({ 0x41, 0x8B, 0x82 }); k.put32(DATA_CALC_ON);         // mov eax, [r10 + calc on]
+        k.put({ 0x85, 0xC0 });                                      // test eax, eax
+        calc_off.push_back(k.jump({ 0x0F, 0x84 }));                 // jz done
+        k.put({ 0x49, 0x8B, 0x82 }); k.put32(PAGE_CALC_VIEW);       // mov rax, [r10 + CalcView]
+        k.put({ 0x48, 0x85, 0xC0 });                                // test rax, rax
+        calc_off.push_back(k.jump({ 0x0F, 0x84 }));                 // jz done
+        k.put({ 0x49, 0x8B, 0x8B }); k.put32(CAMERA);               // mov rcx, [r11 + camera services]
+        k.put({ 0x48, 0x85, 0xC9 });                                // test rcx, rcx
+        calc_off.push_back(k.jump({ 0x0F, 0x84 }));                 // jz done
+
+        k.put({ 0xF2, 0x0F, 0x10, 0x83 }); k.put32(ORIGIN);         // movsd xmm0, [rbx + origin]
+        k.put({ 0xF2, 0x41, 0x0F, 0x11, 0x82 }); k.put32(DATA_CALC_ORIGIN); // movsd [r10 + calc origin], xmm0
+        k.put({ 0x8B, 0x93 }); k.put32(ORIGIN + 8);                 // mov edx, [rbx + origin + 8]
+        k.put({ 0x41, 0x89, 0x92 }); k.put32(DATA_CALC_ORIGIN + 8); // mov [r10 + calc origin + 8], edx
+        k.put({ 0xF2, 0x0F, 0x10, 0x83 }); k.put32(ANGLES);         // movsd xmm0, [rbx + angles]
+        k.put({ 0xF2, 0x41, 0x0F, 0x11, 0x82 }); k.put32(DATA_CALC_ANGLES); // movsd [r10 + calc angles], xmm0
+        k.put({ 0x8B, 0x93 }); k.put32(ANGLES + 8);                 // mov edx, [rbx + angles + 8]
+        k.put({ 0x41, 0x89, 0x92 }); k.put32(DATA_CALC_ANGLES + 8); // mov [r10 + calc angles + 8], edx
+
+        // CalcView(services, &origin, &angles, &fov)
+        k.put({ 0x49, 0x8D, 0x92 }); k.put32(DATA_CALC_ORIGIN);     // lea rdx, [r10 + calc origin]
+        k.put({ 0x4D, 0x8D, 0x82 }); k.put32(DATA_CALC_ANGLES);     // lea r8, [r10 + calc angles]
+        k.put({ 0x4D, 0x8D, 0x8A }); k.put32(DATA_CALC_FOV);        // lea r9, [r10 + calc fov]
+        k.put({ 0xFF, 0xD0 });                                      // call rax
+        k.put({ 0x4C, 0x8D, 0x15 }); page_rel_k();                  // lea r10, [page]
+
+        for (int32_t a = 0; a < 3; a++) {
+            k.put({ 0xF3, 0x41, 0x0F, 0x10, 0x82 }); k.put32(DATA_CALC_ORIGIN + a * 4);  // movss xmm0, [r10 + calc origin]
+            k.put({ 0xF3, 0x41, 0x0F, 0x58, 0x42, static_cast<uint8_t>(DATA_ORIGIN + a * 4) }); // addss xmm0, [r10 + offset]
+            k.put({ 0xF3, 0x0F, 0x11, 0x83 }); k.put32(ORIGIN + a * 4);                  // movss [rbx + origin], xmm0
+        }
+        k.put({ 0xF2, 0x41, 0x0F, 0x10, 0x82 }); k.put32(DATA_CALC_ANGLES); // movsd xmm0, [r10 + calc angles]
+        k.put({ 0xF2, 0x0F, 0x11, 0x83 }); k.put32(ANGLES);         // movsd [rbx + angles], xmm0
+        k.put({ 0x41, 0x8B, 0x82 }); k.put32(DATA_CALC_ANGLES + 8); // mov eax, [r10 + calc angles + 8]
+        k.put({ 0x89, 0x83 }); k.put32(ANGLES + 8);                 // mov [rbx + angles + 8], eax
+
+        for (auto jump : calc_off)
+            k.land(jump);
+        k.put({ 0x48, 0x83, 0xC4, 0x28 });                          // add rsp, 0x28
+        k.put({ 0xC3 });                                            // ret
+    }
+
+    if (STUB + c.size() > STUB_OBSERVER || STUB_OBSERVER + o.size() > TABLE || STUB_PUNCH + punch.size() > STUB_CALC
+        || STUB_CALC + k.size() > DATA_CALC) {
         LOGF(WARNING, "Free cam stub too large");
         p->free_remote(this->page);
         this->page = 0;
@@ -423,8 +552,18 @@ bool Freecam::Install() {
     put64(PAGE_VTABLE, this->vtable);
     put64(PAGE_ORIGINAL, override_view);
     put64(PAGE_LOCAL_PAWN, offsets::camera::getLocalPawn ? client.base + offsets::camera::getLocalPawn : 0);
+    put64(PAGE_INPUT, offsets::input::dwCSGOInput ? client.base + offsets::input::dwCSGOInput : 0);
+    put64(PAGE_CALC_VIEW, offsets::camera::calcView ? client.base + offsets::camera::calcView : 0);
+    auto put_float = [&](uintptr_t at, float value) { std::memcpy(&data[at], &value, sizeof(value)); };
+    put_float(DATA_PUNCH_SCALE, 1.f);
+    put_float(CONST_180, 180.f);
+    put_float(CONST_MINUS_180, -180.f);
+    put_float(CONST_360, 360.f);
+    put_float(CONST_MAX_PUNCH, MAX_PUNCH);
     std::copy(c.bytes.begin(), c.bytes.end(), data.begin() + STUB);
     std::copy(o.bytes.begin(), o.bytes.end(), data.begin() + STUB_OBSERVER);
+    std::copy(punch.bytes.begin(), punch.bytes.end(), data.begin() + STUB_PUNCH);
+    std::copy(k.bytes.begin(), k.bytes.end(), data.begin() + STUB_CALC);
 
     // The spectator camera: what the call goes to now, or what our page from an earlier run it still goes to kept
     if (offsets::camera::observerViewCall) {
@@ -693,6 +832,7 @@ void Freecam::Update(float seconds) {
         BlockGameInput(false);
         UpdateDead(pawn, playing, seconds);
         WriteFov();
+        WritePunch(false);
         return;
     }
 
@@ -727,6 +867,32 @@ void Freecam::Update(float seconds) {
     }
 
     WriteFov();
+    WritePunch(alive && this->mode == Mode::Off);
+}
+
+void Freecam::WritePunch(bool alive) {
+    auto p = Engine::GetProcess();
+
+    // 100% is the game itself
+    bool on = alive && cfg::view::punch_enabled && cfg::view::punch_scale < 100.f && offsets::input::dwCSGOInput;
+    float scale = std::clamp(cfg::view::punch_scale, 0.f, 100.f) / 100.f;
+
+    if (on != this->punch_on || scale != this->punch_scale) {
+        p->write<float>(this->page + DATA_PUNCH_SCALE, scale);
+        p->write<uint32_t>(this->page + DATA_PUNCH_ON, on ? 1 : 0);
+        this->punch_on = on;
+        this->punch_scale = scale;
+    }
+
+    // What the camera kicked, now & then while it does: tells whether the kick is in the view the stub gets
+    auto now = std::chrono::steady_clock::now();
+    if (on && now >= this->punch_logged) {
+        auto seen = p->read<Vec3_t>(this->page + DATA_PUNCH_SEEN);
+        if (std::abs(seen.x) > 0.05f || std::abs(seen.y) > 0.05f) {
+            LOGF(VERBOSE, "View punch: kick ({:.2f}, {:.2f}, {:.2f}) shown at {:.0f}%", seen.x, seen.y, seen.z, scale * 100.f);
+            this->punch_logged = now + std::chrono::seconds(1);
+        }
+    }
 }
 
 void Freecam::WriteFov() {
@@ -834,6 +1000,8 @@ void Freecam::UpdateFollow(float seconds) {
         offset = Vec3_t(-forward.x * this->distance, -forward.y * this->distance, -forward.z * this->distance);
     }
     p->write<Vec3_t>(this->page + DATA_ORIGIN, offset);
+    // First person: the eyes & the turning of the game (CalcView), the ones above stay for the rest
+    p->write<uint32_t>(this->page + DATA_CALC_ON, this->first_person ? 1 : 0);
 }
 
 Vec3_t Freecam::SmoothAngles(const Vec3_t& raw) {
@@ -879,6 +1047,7 @@ void Freecam::Shutdown() {
 
     i.EndDead();
     p->write<uint32_t>(i.page + DATA_MODE, static_cast<uint32_t>(Mode::Off));
+    p->write<uint32_t>(i.page + DATA_PUNCH_ON, 0);
     i.mode = Mode::Off;
     i.blocking = false;
     i.BlockGameInput(false);

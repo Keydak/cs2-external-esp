@@ -782,7 +782,16 @@ std::string CustomModels::LoadStatus(const std::string& resource) {
 }
 
 // The game code it calls, found from SetModel & the interfaces. Then checked against the model we have on
+bool CustomModels::PrecacheResource(const std::string& resource) {
+    auto& i = GetInstance();
+    if (!IsAvailable())
+        return false;
+    std::lock_guard lock(i.call_mutex);
+    return i.Resolve() && i.CallPrecache(resource);
+}
+
 bool CustomModels::Resolve() {
+    std::lock_guard lock(this->call_mutex);
     if (this->resolved)
         return true;
     if (this->resolve_failed || !GameThread::Ensure())
@@ -973,6 +982,7 @@ bool CustomModels::Calibrate() {
 }
 
 bool CustomModels::CallPrecache(const std::string& resource) {
+    std::lock_guard lock(this->call_mutex);
     auto p = Engine::GetProcess();
     if (!BuildPage())
         return false;
@@ -994,6 +1004,7 @@ bool CustomModels::CallPrecache(const std::string& resource) {
 }
 
 bool CustomModels::CallGetModel(const std::string& resource, uintptr_t& binding) {
+    std::lock_guard lock(this->call_mutex);
     auto p = Engine::GetProcess();
     if (!BuildPage())
         return false;

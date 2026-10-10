@@ -50,6 +50,8 @@ public:
     Skins& operator=(Skins&&)      = delete;
 
     static bool Init();
+    // Starts loading the list of the items (internet or the copy on the disk) once, the game is not needed for it
+    static void FetchList();
 
     // Needs -insecure and the skin code of the game
     static bool IsAvailable();
@@ -138,6 +140,7 @@ private:
     std::vector<AgentInfo> agents;
     std::vector<MusicKitInfo> music_kits;
 
+    std::atomic<bool> list_started = false;
     std::atomic<bool> loaded = false;
     std::atomic<bool> failed = false;
 

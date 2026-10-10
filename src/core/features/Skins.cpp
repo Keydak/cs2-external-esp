@@ -198,6 +198,12 @@ bool Skins::Init() {
     return GetInstance().InitImpl();
 }
 
+void Skins::FetchList() {
+    auto& i = GetInstance();
+    if (!i.list_started.exchange(true))
+        std::thread(&Skins::Load, &i).detach();
+}
+
 bool Skins::IsAvailable() {
     return Engine::IsInsecure() && offsets::skins::updateWeaponSkin;
 }
@@ -264,8 +270,8 @@ bool Skins::IsKnife(int index) {
 }
 
 bool Skins::InitImpl() {
-    // The list is useful for the menu even without -insecure
-    std::thread(&Skins::Load, this).detach();
+    // The list is useful for the menu even without -insecure. The loader started it already
+    FetchList();
 
     if (!IsAvailable())
         return false;

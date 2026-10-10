@@ -1,4 +1,7 @@
 #include "Renderer.hpp"
+#include "core/features/AgentPreview.hpp"
+#include "gui/frontend/images/ImageCache.hpp"
+#include "core/engine/cache/Cache.hpp"
 #include "window/Window.hpp"
 
 #include "core/engine/Engine.hpp"
@@ -212,6 +215,13 @@ bool Renderer::HandleState() {
 
     bool should_toggle = !was_holding && (pressed_insert || pressed_rshift);
 
+    // Opens once the program is ready (the loading card is gone), closing always works. In a match there is no card:
+    // the pictures load in a corner, the agents wait for the main menu
+    auto snapshot = Cache::Current();
+    bool in_match = snapshot && snapshot->globals.in_match;
+    if (should_toggle && !this->isOpen && !in_match && !(AgentPreview::IsReady() && ImageCache::IsPrefetched()))
+        should_toggle = false;
+
     if (should_toggle || pressed_end) { // Toggle when pressing end to trigger the config save :v
         this->isOpen = !isOpen;
 
@@ -223,6 +233,7 @@ bool Renderer::HandleState() {
             SetForegroundWindow(Engine::GetProcess()->hwnd_);
 
         Window::SetClickthrough(Window::hwnd, !this->isOpen);
+
         LOGF(VERBOSE, "Captured global VK_INSERT or VK_RSHIFT, toggling menu state to {}", this->isOpen);
 
         // Not the best way, but wont bother the user

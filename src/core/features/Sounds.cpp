@@ -23,9 +23,10 @@
 #pragma comment(lib, "mfuuid.lib")
 
 namespace {
-    // Our sound repository, every sound in it whatever folder it is in
-    constexpr auto REPOSITORY_TREE = "https://api.github.com/repos/Keydak/Killsound-Hitsound-custom-cs2/git/trees/main?recursive=1";
-    constexpr auto REPOSITORY_FILES = "https://raw.githubusercontent.com/Keydak/Killsound-Hitsound-custom-cs2/main/";
+    // Our assets repository: the sounds are in its sounds folder (the agents of the preview in another)
+    constexpr auto REPOSITORY_TREE = "https://api.github.com/repos/Keydak/cs2-external-assets/git/trees/main?recursive=1";
+    constexpr auto REPOSITORY_FILES = "https://raw.githubusercontent.com/Keydak/cs2-external-assets/main/";
+    constexpr auto REPOSITORY_SOUNDS = "sounds/";
 
     const std::filesystem::path cache_dir = "cache/sounds";
 
@@ -904,7 +905,7 @@ void Sounds::DownloadThread() {
 
         auto repo_path = item.value("path", "");
         auto path = FromUtf8(repo_path);
-        if (repo_path.empty() || repo_path.find("..") != std::string::npos || !IsSound(path))
+        if (repo_path.empty() || repo_path.find("..") != std::string::npos || !repo_path.starts_with(REPOSITORY_SOUNDS) || !IsSound(path))
             continue;
 
         std::string url = REPOSITORY_FILES;

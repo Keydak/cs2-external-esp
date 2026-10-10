@@ -125,7 +125,8 @@
       <ForcedIncludeFiles>common.hpp</ForcedIncludeFiles>
     </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem>
+      <SubSystem>Windows</SubSystem>
+      <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>
@@ -167,7 +168,8 @@
       <ForcedIncludeFiles>common.hpp</ForcedIncludeFiles>
     </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem>
+      <SubSystem>Windows</SubSystem>
+      <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>
@@ -218,7 +220,6 @@
     <ClCompile Include="external\timer\timer.cpp" />
     <ClCompile Include="assets\images\Logo.cpp" />
     <ClCompile Include="assets\models\PlayerModels.cpp" />
-    <ClCompile Include="assets\models\PlayerPreviews.cpp" />
     <ClCompile Include="gui\frontend\esp\Esp.cpp" />
     <ClCompile Include="gui\frontend\esp\GameCrosshair.cpp" />
     <ClCompile Include="gui\frontend\menu\Menu.cpp" />
@@ -235,6 +236,9 @@
     <ClCompile Include="core\features\VoteEvents.cpp" />
     <ClCompile Include="core\features\CustomModels.cpp" />
     <ClCompile Include="core\features\ModBrowser.cpp" />
+    <ClCompile Include="core\features\MaterialChams.cpp" />
+    <ClCompile Include="core\features\AgentPreview.cpp" />
+    <ClCompile Include="core\features\KillEffect.cpp" />
     <ClCompile Include="core\features\HitEffects.cpp" />
     <ClCompile Include="core\features\Sounds.cpp" />
     <ClCompile Include="core\features\Subtick.cpp" />
@@ -245,14 +249,15 @@
     <ClCompile Include="core\engine\GameThread.cpp" />
     <ClCompile Include="core\features\Skins.cpp" />
     <ClCompile Include="gui\frontend\images\ImageCache.cpp" />
+    <ClCompile Include="gui\loader\Loader.cpp" />
     <ClCompile Include="gui\frontend\images\Avatars.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="assets\fonts\Inter.h" />
     <ClInclude Include="assets\fonts\Icons.h" />
     <ClInclude Include="assets\fonts\WeaponIcons.h" />
     <ClInclude Include="assets\images\Logo.h" />
     <ClInclude Include="assets\models\PlayerModels.h" />
-    <ClInclude Include="assets\models\PlayerPreviews.h" />
     <ClInclude Include="common.hpp" />
     <ClInclude Include="core\features\Movement.hpp" />
     <ClInclude Include="core\features\AutoAccept.hpp" />
@@ -260,6 +265,9 @@
     <ClInclude Include="core\features\VoteEvents.hpp" />
     <ClInclude Include="core\features\CustomModels.hpp" />
     <ClInclude Include="core\features\ModBrowser.hpp" />
+    <ClInclude Include="core\features\MaterialChams.hpp" />
+    <ClInclude Include="core\features\AgentPreview.hpp" />
+    <ClInclude Include="core\features\KillEffect.hpp" />
     <ClInclude Include="core\features\HitEffects.hpp" />
     <ClInclude Include="core\features\Sounds.hpp" />
     <ClInclude Include="core\features\Subtick.hpp" />
@@ -270,6 +278,7 @@
     <ClInclude Include="core\engine\GameThread.hpp" />
     <ClInclude Include="core\features\Skins.hpp" />
     <ClInclude Include="gui\frontend\images\ImageCache.hpp" />
+    <ClInclude Include="gui\loader\Loader.hpp" />
     <ClInclude Include="gui\frontend\images\Avatars.hpp" />
     <ClInclude Include="config\Config.hpp" />
     <ClInclude Include="config\Current.hpp" />

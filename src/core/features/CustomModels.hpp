@@ -59,6 +59,10 @@ public:
     // again after a map change (the game drops what no map needs). Skins thread only
     static bool Prepare(const std::string& resource);
 
+    // Asks the game to load any resource (a particle system of the kill effect...), like the models. False when the
+    // game could not be asked (not alive yet to check the code against our model, not in a match). Any thread
+    static bool PrecacheResource(const std::string& resource);
+
     // What Prepare got to for the model, for the menu
     static std::string LoadStatus(const std::string& resource);
 
@@ -119,6 +123,7 @@ private:
     std::unordered_map<std::string, Load> loads;
     std::mutex load_mutex;      // loads, read by the menu
 
+    std::recursive_mutex call_mutex;  // Resolve & the calls share the page: Skins & KillEffect threads
     bool resolved = false;
     bool resolve_failed = false;
     uintptr_t page = 0;             // Our code & its data, in the game. A new one after a call that did not finish in time

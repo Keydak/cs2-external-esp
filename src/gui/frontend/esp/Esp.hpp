@@ -24,7 +24,7 @@ public:
     };
 
     // Drawn exactly like on players, the menu preview uses these too
-    static void DrawBox(ImDrawList* d, Vec2_t min, Vec2_t max, const color_t& color);
+    static void DrawBox(ImDrawList* d, Vec2_t min, Vec2_t max, const color_t& color, int style = cfg::esp::BOX_FULL);
     static void DrawTracker(ImDrawList* d, Vec2_t head, float box_width, const color_t& color);
     // Head, chest or pelvis can be seen from our eyes, through neither the map nor a smoke
 

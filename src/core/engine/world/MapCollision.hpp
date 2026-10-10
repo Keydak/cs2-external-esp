@@ -47,6 +47,9 @@ public:
     // Is anything in the way, without where: stops at the first thing hit, way cheaper for line of sight
     static bool Blocked(const Vec3_t& start, const Vec3_t& end);
 
+    // Anything of the world or a box with its bounds in this box: the cheap check before tracing a thick thing
+    static bool Near(const Vec3_t& min, const Vec3_t& max);
+
 private:
     MapCollision() {};
 

@@ -25,6 +25,8 @@ public:
     static Status GetStatus();
     // The version of this build, the number in .github/status.json
     static int GetVersion() { return GetInstance().current_version; }
+    // The page of the project on GitHub
+    static std::string GetProjectUrl() { return GetInstance().project_url; }
 private:
     Updater() {};
 
@@ -40,7 +42,7 @@ private:
     Status status;
     bool isSetup = false;
     // This fork's own numbering, raise it with "current" in .github/status.json when a version is pushed
-    int current_version = 200;
+    int current_version = 210;
     std::string project_url = "https://github.com/Keydak/cs2-external-esp";
     std::string status_url = "https://raw.githubusercontent.com/Keydak/cs2-external-esp/main/.github/status.json";
 };

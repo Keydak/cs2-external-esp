@@ -69,6 +69,10 @@ private:
         bool landing_over = false;  // Landed, detonated or went off the predicted path
         size_t landing_from = 0;
         float landing_offset = -1.f; // Seconds the grenade had already flown when first seen
+
+        // A decoy lies where it landed until it goes off: its flight is over once it stays still
+        std::chrono::steady_clock::time_point still_since{};
+        bool rested = false;
     };
 
     // What an entity is to us: a grenade, or a solid thing that moves & is not in the map files (doors, cars,

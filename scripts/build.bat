@@ -35,7 +35,8 @@ set DEFINES=-D_CONSOLE -DIMGUI_DEFINE_MATH_OPERATORS -DCURL_STATICLIB -D_WIN32_W
 set LIBS=src/external/lib/libcurl.lib ^
          src/external/lib/zlib.lib ^
          -ld3d11 -ldxgi -ld3dcompiler_47 -ldwmapi -lgdi32 -luser32 -limm32 -lole32 ^
-         -lws2_32 -lwldap32 -lcrypt32 -lnormaliz -ladvapi32 -lbcrypt
+         -lws2_32 -lwldap32 -lcrypt32 -lnormaliz -ladvapi32 -lbcrypt -lshell32 -luuid ^
+         -lwinmm -lwindowscodecs -lshlwapi -lxaudio2_9 -lmfplat -lmfreadwrite -lmfuuid
 
 set SRCS=scripts\msvc\compatibility.cpp ^
          src/common.cpp ^
@@ -62,6 +63,17 @@ set SRCS=scripts\msvc\compatibility.cpp ^
          src/core/features/GameRadar.cpp ^
          src/core/engine/GameThread.cpp ^
          src/core/features/Skins.cpp ^
+         src/core/features/KillEffect.cpp ^
+         src/core/engine/resource/Resource.cpp ^
+         src/core/features/AgentPreview.cpp ^
+         src/core/features/CustomModels.cpp ^
+         src/core/features/Freecam.cpp ^
+         src/core/features/HitEffects.cpp ^
+         src/core/features/MaterialChams.cpp ^
+         src/core/features/ModBrowser.cpp ^
+         src/core/features/Sounds.cpp ^
+         src/core/features/Visuals.cpp ^
+         src/core/features/VoteEvents.cpp ^
          src/gui/frontend/images/ImageCache.cpp ^
          src/gui/frontend/images/Avatars.cpp ^
          src/core/logger/LogHelper.cpp ^
@@ -82,12 +94,12 @@ set SRCS=scripts\msvc\compatibility.cpp ^
          src/external/timer/timer.cpp ^
          src/assets/images/Logo.cpp ^
          src/assets/models/PlayerModels.cpp ^
-         src/assets/models/PlayerPreviews.cpp ^
          src/gui/frontend/esp/Esp.cpp ^
          src/gui/frontend/esp/GameCrosshair.cpp ^
          src/gui/frontend/menu/Menu.cpp ^
          src/gui/frontend/overlays/Overlays.cpp ^
          src/gui/renderer/Renderer.cpp ^
+         src/gui/loader/Loader.cpp ^
          src/gui/renderer/window/Window.cpp ^
          src/main.cpp ^
          src/updater/http/HttpHelper.cpp ^
@@ -99,7 +111,7 @@ echo compiling zstd
 zig cc -target %TARGET% -O3 -c src/external/zstd/zstddeclib.c -o %OUTDIR%\zstddeclib.o
 
 echo compiling project
-%CC% -target %TARGET% -std=c++20 -O3 -Wno-date-time -fno-autolink -include src/common.hpp %DEFINES% %INCLUDES% %SRCS% %OUTDIR%\zstddeclib.o -o %OUT% %LIBS% -Lsrc/external/lib
+%CC% -target %TARGET% -std=c++20 -O3 -Wno-date-time -fno-autolink -include src/common.hpp %DEFINES% %INCLUDES% %SRCS% %OUTDIR%\zstddeclib.o -o %OUT% %LIBS% -Lsrc/external/lib -Wl,--subsystem,windows
 
 if %ERRORLEVEL% EQU 0 (
     echo build successful: %OUT%

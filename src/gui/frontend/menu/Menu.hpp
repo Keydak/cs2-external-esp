@@ -43,6 +43,7 @@ private:
     bool InitImpl();
     void RenderImpl();
     void RenderStartupHelpImpl();
+    void RenderLoadingCard();
 
     void RenderBackground();
     void RenderSidebar();
@@ -53,6 +54,8 @@ private:
     void RenderBombPreview();
     void RenderProjectilesPreview();
     void RenderItemsPreview();
+    void RenderSkinPanel();             // Next to the menu on the skins pages: what is picked there
+    void SkinPanel();
 
     void RenderPlayersTab();
     void RenderBombTab();
@@ -73,9 +76,12 @@ private:
 
     Tab active_tab = Tab::PLAYERS;
 
+    // Pages the visuals & settings categories open on, the last seen
+    Tab last_visuals_tab = Tab::PLAYERS;
+    Tab last_settings_tab = Tab::SETTINGS;
+
     // Players tab
     int esp_group = 1; // Team, enemy
-    float model_yaw = -0.52f; // Preview model, radians, a bit turned with the rifle towards us
     float bomb_yaw = 0.6f;     // Cameras of the bomb & projectile previews
     float projectile_yaw = 1.1f;
     float items_yaw = 0.8f;
@@ -91,7 +97,7 @@ private:
 
     void OpenSkinPage(SkinPage page, int item = 0);
 
-    // Misc tab: camera, profile, interface
+    // Misc tab: camera, profile, interface, effects
     int misc_page = 0;
     float misc_page_progress = 1.f;
 

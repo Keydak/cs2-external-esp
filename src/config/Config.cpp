@@ -20,6 +20,7 @@ void Config::ReadGroup(const json& from, cfg::esp::group_t& group, const cfg::es
 
 	group.enabled = from.value("enabled", def.enabled);
 	group.box = from.value("box", def.box);
+	group.box_style = std::clamp(from.value("box_style", def.box_style), 0, cfg::esp::BOX_STYLE_COUNT - 1);
 	group.skeleton = from.value("skeleton", def.skeleton);
 	group.head_tracker = from.value("head_tracker", def.head_tracker);
 	group.tracers = from.value("tracers", def.tracers);
@@ -103,6 +104,7 @@ namespace {
 void Config::WriteGroup(json& to, const cfg::esp::group_t& group) {
 	to["enabled"] = group.enabled;
 	to["box"] = group.box;
+	to["box_style"] = group.box_style;
 	to["skeleton"] = group.skeleton;
 	to["head_tracker"] = group.head_tracker;
 	to["tracers"] = group.tracers;
@@ -263,6 +265,23 @@ void Config::ApplySettings(json data) {
 		hm::kill_color = JsonToColor(from, "kill_color", color_t(1.f, 0.27f, 0.27f, 1.f));
 	}
 
+	// kill effect
+	{
+		const auto& from = data["world"].contains("kill_effect") && data["world"]["kill_effect"].is_object() ? data["world"]["kill_effect"] : json::object();
+		cfg::world::kill_effect::enabled = from.value("enabled", false);
+		cfg::world::kill_effect::effect = std::max(0, from.value("effect", 0));
+		cfg::world::kill_effect::gravity = std::clamp(from.value("gravity", -0.5f), -1.f, 1.f);
+	}
+
+	// self effect
+	{
+		const auto& from = data["world"].contains("self_effect") && data["world"]["self_effect"].is_object() ? data["world"]["self_effect"] : json::object();
+		cfg::world::self_effect::enabled = from.value("enabled", false);
+		cfg::world::self_effect::effect = std::max(0, from.value("effect", 0));
+		cfg::world::self_effect::interval = std::clamp(from.value("interval", 1.f), 0.2f, 5.f);
+		cfg::world::self_effect::third_person_only = from.value("third_person_only", true);
+	}
+
 	// crosshair
 	cfg::world::crosshair::enabled = data["world"]["crosshair"].value("enabled", false);
 	cfg::world::crosshair::style = data["world"]["crosshair"].value("style", static_cast<int>(cfg::world::crosshair::STYLE_CLASSIC));
@@ -322,12 +341,55 @@ void Config::ApplySettings(json data) {
 
 		if (from.contains("chams")) {
 			const auto& chams = from["chams"];
-			vis::chams::enemies = chams.value("enemies", false);
-			vis::chams::team = chams.value("team", false);
+			// Replaced by the material chams, gone from the menu: off whatever a config says
+			vis::chams::enemies = false;
+			vis::chams::team = false;
 			vis::chams::enemy_type = std::clamp(chams.value("enemy_type", 0), 0, vis::chams::TYPE_COUNT - 1);
 			vis::chams::team_type = std::clamp(chams.value("team_type", 0), 0, vis::chams::TYPE_COUNT - 1);
 			vis::chams::enemy_color = JsonToColor(chams, "enemy_color", vis::chams::enemy_color);
 			vis::chams::team_color = JsonToColor(chams, "team_color", vis::chams::team_color);
+		}
+
+		if (from.contains("material_chams")) {
+			const auto& chams = from["material_chams"];
+			auto layer = [&](const char* name, vis::material_chams::layer_t& to) {
+				if (!chams.contains(name))
+					return;
+				const auto& at = chams[name];
+				to.enabled = at.value("enabled", false);
+				to.color = JsonToColor(at, "color", to.color);
+			};
+			// The material of the group, before: the one of its visible layer
+			auto material = [&](const char* name, const char* old_layer) {
+				int value = chams.contains(old_layer) ? chams[old_layer].value("material", 0) : 0;
+				return std::clamp(chams.value(name, value), 0, vis::material_chams::MATERIAL_COUNT - 1);
+			};
+			layer("enemy_visible", vis::material_chams::enemy.visible);
+			layer("enemy_hidden", vis::material_chams::enemy.hidden);
+			layer("team_visible", vis::material_chams::team.visible);
+			layer("team_hidden", vis::material_chams::team.hidden);
+			vis::material_chams::enemy.material = material("enemy_material", "enemy_visible");
+			vis::material_chams::team.material = material("team_material", "team_visible");
+
+			// The other groups: { visible, hidden, material } each
+			auto group = [&](const char* name, vis::material_chams::group_t& to, bool hidden) {
+				if (!chams.contains(name) || !chams[name].is_object())
+					return;
+				const auto& at = chams[name];
+				if (at.contains("visible")) {
+					to.visible.enabled = at["visible"].value("enabled", false);
+					to.visible.color = JsonToColor(at["visible"], "color", to.visible.color);
+				}
+				if (hidden && at.contains("hidden")) {
+					to.hidden.enabled = at["hidden"].value("enabled", false);
+					to.hidden.color = JsonToColor(at["hidden"], "color", to.hidden.color);
+				}
+				to.material = std::clamp(at.value("material", 0), 0, vis::material_chams::MATERIAL_COUNT - 1);
+			};
+			group("bomb", vis::material_chams::bomb, true);
+			group("items", vis::material_chams::items, true);
+			group("local", vis::material_chams::local, false);
+			group("weapon", vis::material_chams::weapon, false);
 		}
 
 		if (from.contains("glow")) {
@@ -362,6 +424,8 @@ void Config::ApplySettings(json data) {
 		cfg::view::third_person_mode = data["view"].value("third_person_mode", 0);
 		cfg::view::third_person_key = data["view"].value("third_person_key", VK_XBUTTON2);
 		cfg::view::third_person_scoped_off = data["view"].value("third_person_scoped_off", true);
+		cfg::view::punch_enabled = data["view"].value("punch_enabled", false);
+		cfg::view::punch_scale = std::clamp(data["view"].value("punch_scale", 0.f), 0.f, 100.f);
 		cfg::view::freecam = data["view"].value("freecam", false);
 		cfg::view::freecam_key = data["view"].value("freecam_key", VK_F6);
 		cfg::view::freecam_speed = std::clamp(data["view"].value("freecam_speed", 600.f), 100.f, 3000.f);
@@ -500,6 +564,15 @@ json Config::SettingsJson() {
 		ColorToJson(to, "kill_color", hm::kill_color);
 	}
 
+	// kill effect
+	data["world"]["kill_effect"]["enabled"] = cfg::world::kill_effect::enabled;
+	data["world"]["kill_effect"]["effect"] = cfg::world::kill_effect::effect;
+	data["world"]["kill_effect"]["gravity"] = cfg::world::kill_effect::gravity;
+	data["world"]["self_effect"]["enabled"] = cfg::world::self_effect::enabled;
+	data["world"]["self_effect"]["effect"] = cfg::world::self_effect::effect;
+	data["world"]["self_effect"]["interval"] = cfg::world::self_effect::interval;
+	data["world"]["self_effect"]["third_person_only"] = cfg::world::self_effect::third_person_only;
+
 	// crosshair
 	data["world"]["crosshair"]["enabled"] = cfg::world::crosshair::enabled;
 	data["world"]["crosshair"]["style"] = cfg::world::crosshair::style;
@@ -574,6 +647,34 @@ json Config::SettingsJson() {
 		ColorToJson(chams, "enemy_color", vis::chams::enemy_color);
 		ColorToJson(chams, "team_color", vis::chams::team_color);
 
+		auto& material_chams = to["material_chams"];
+		auto layer = [&](const char* name, const vis::material_chams::layer_t& from) {
+			auto& at = material_chams[name];
+			at["enabled"] = from.enabled;
+			ColorToJson(at, "color", from.color);
+		};
+		material_chams["enemy_material"] = vis::material_chams::enemy.material;
+		material_chams["team_material"] = vis::material_chams::team.material;
+		layer("enemy_visible", vis::material_chams::enemy.visible);
+		layer("enemy_hidden", vis::material_chams::enemy.hidden);
+		layer("team_visible", vis::material_chams::team.visible);
+		layer("team_hidden", vis::material_chams::team.hidden);
+
+		auto group = [&](const char* name, const vis::material_chams::group_t& from, bool hidden) {
+			auto& at = material_chams[name];
+			at["material"] = from.material;
+			at["visible"]["enabled"] = from.visible.enabled;
+			ColorToJson(at["visible"], "color", from.visible.color);
+			if (hidden) {
+				at["hidden"]["enabled"] = from.hidden.enabled;
+				ColorToJson(at["hidden"], "color", from.hidden.color);
+			}
+		};
+		group("bomb", vis::material_chams::bomb, true);
+		group("items", vis::material_chams::items, true);
+		group("local", vis::material_chams::local, false);
+		group("weapon", vis::material_chams::weapon, false);
+
 		auto& glow = to["glow"];
 		glow["enemies"] = vis::glow::enemies;
 		glow["team"] = vis::glow::team;
@@ -602,6 +703,8 @@ json Config::SettingsJson() {
 	data["view"]["third_person_mode"] = cfg::view::third_person_mode;
 	data["view"]["third_person_key"] = cfg::view::third_person_key;
 	data["view"]["third_person_scoped_off"] = cfg::view::third_person_scoped_off;
+	data["view"]["punch_enabled"] = cfg::view::punch_enabled;
+	data["view"]["punch_scale"] = cfg::view::punch_scale;
 	data["view"]["freecam"] = cfg::view::freecam;
 	data["view"]["freecam_key"] = cfg::view::freecam_key;
 	data["view"]["freecam_speed"] = cfg::view::freecam_speed;

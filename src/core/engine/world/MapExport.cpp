@@ -8,7 +8,7 @@ namespace {
 
     constexpr uint32_t VPK_SIGNATURE = 0x55AA1234;
     constexpr char TRI_MAGIC[4] = { 'C', 'S', '2', 'T' };
-    constexpr uint32_t TRI_VERSION = 1;
+    constexpr uint32_t TRI_VERSION = 2;
 
     // Collision layers grenades & bullets of sight pass through
     const char* IGNORED_LAYERS[] = { "playerclip", "npcclip", "sky" };
@@ -84,6 +84,14 @@ namespace {
     };
 
     bool BlocksSight(const Value& attribute) {
+        // Small props players walk through (hanging signs, boxes on walls): grenades fly through them too
+        for (const auto& layer : attribute["m_InteractExcludeStrings"].items) {
+            auto name = layer.s;
+            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (name == "player")
+                return false;
+        }
+
         for (const auto& layer : attribute["m_InteractAsStrings"].items) {
             auto name = layer.s;
             std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });

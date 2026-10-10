@@ -107,6 +107,7 @@ namespace {
 
             { offsets::visuals::m_flFlashMaxAlpha,              "C_CSPlayerPawnBase",                       "m_flFlashMaxAlpha" },
             { offsets::visuals::m_bGunGameImmunity,             "C_CSPlayerPawn",                           "m_bGunGameImmunity" },
+            { offsets::visuals::m_pClientsideRagdoll,           "C_CSPlayerPawn",                           "m_pClientsideRagdoll" },
             { offsets::visuals::m_bSmokeEffectSpawned,          "C_SmokeGrenadeProjectile",                 "m_bSmokeEffectSpawned" },
             { offsets::visuals::m_zoomLevel,                    "C_CSWeaponBaseGun",                        "m_zoomLevel" },
             { offsets::visuals::m_clrRender,                    "C_BaseModelEntity",                        "m_clrRender" },
@@ -510,6 +511,106 @@ bool Dumper::InitImpl() {
             LOGF(WARNING, "Could not find the precache of the resource system, custom player models are off");
     }
 
+    // Material chams, optional: DrawArray & its vtable entry in scenesystem, CreateMaterial, how the game loads KeyValues3
+    {
+        namespace mat = offsets::materials;
+        auto process = Engine::GetProcess();
+        auto scene = process->GetModule("scenesystem.dll");
+        auto materials = process->GetModule("materialsystem2.dll");
+
+        auto draw = scene.base ? ScanMemory(offsets::signatures::drawArray, scene.base, scene.base + scene.size) : std::vector<DWORD64>{};
+        auto create = materials.base ? ScanMemory(offsets::signatures::createMaterial, materials.base, materials.base + materials.size) : std::vector<DWORD64>{};
+        auto load = ScanMemory(offsets::signatures::kv3Load, client.base, client.base + client.size);
+
+        // The vtable entry: the one pointer to DrawArray in the module
+        std::vector<uintptr_t> entries;
+        if (draw.size() == 1) {
+            constexpr size_t CHUNK = 0x100000;
+            std::vector<uint8_t> buffer(CHUNK + 8);
+            for (uintptr_t at = scene.base; at < scene.base + scene.size; at += CHUNK) {
+                size_t size = std::min<size_t>(CHUNK + 8, scene.base + scene.size - at);
+                if (!process->read_raw(at, buffer.data(), size))
+                    continue;
+                for (size_t i = 0; i + 8 <= size && i < CHUNK; i += 8)
+                    if (*reinterpret_cast<uint64_t*>(&buffer[i]) == draw.at(0))
+                        entries.push_back(at + i);
+            }
+
+            // An earlier run that did not put it back: the entry points at the stub of our page, outside the module
+            for (uintptr_t at = scene.base; entries.empty() && at < scene.base + scene.size; at += CHUNK) {
+                size_t size = std::min<size_t>(CHUNK, scene.base + scene.size - at);
+                if (!process->read_raw(at, buffer.data(), size))
+                    continue;
+                for (size_t i = 0; i + 8 <= size; i += 8) {
+                    auto value = *reinterpret_cast<uint64_t*>(&buffer[i]);
+                    if ((value & 0xFFF) != (mat::stubOffset & 0xFFF) || value < 0x10000 || (value >= scene.base && value < scene.base + scene.size))
+                        continue;
+                    auto page = value - mat::stubOffset;
+                    if (process->read<uint64_t>(page) == mat::stubMagic && process->read<uint64_t>(page + 8) == draw.at(0)) {
+                        entries.push_back(at + i);
+                        LOGF(INFO, "The DrawArray entry still points at our stub from an earlier run");
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (draw.size() == 1 && entries.size() == 1 && create.size() == 1 && !load.empty()) {
+            auto at = load.at(0);
+            mat::fnDrawArray = draw.at(0) - scene.base;
+            mat::drawArrayEntry = entries.at(0) - scene.base;
+            mat::fnCreateMaterial = create.at(0) - materials.base;
+            mat::fnKv3Context = at + 24 + process->read<int32_t>(at + 20) - client.base;
+            mat::fnKv3Root = at + 36 + process->read<int32_t>(at + 32) - client.base;
+            mat::kv3IdGeneric = at + 48 + process->read<int32_t>(at + 44) - client.base;
+            LOGF(VERBOSE, "Found the material chams: DrawArray 0x{:X} (entry 0x{:X}), CreateMaterial 0x{:X}, KeyValues3 0x{:X} 0x{:X} 0x{:X}",
+                mat::fnDrawArray, mat::drawArrayEntry, mat::fnCreateMaterial, mat::fnKv3Context, mat::fnKv3Root, mat::kv3IdGeneric);
+        } else
+            Missing("Could not find the code for the material chams ({} {} {} {}), they are disabled",
+                draw.size(), entries.size(), create.size(), load.size());
+    }
+
+    // Agent preview, optional: RunScript of Panorama & where its engine keeps the JavaScript contexts
+    {
+        auto process = Engine::GetProcess();
+        auto panorama = process->GetModule("panorama.dll");
+        auto run = panorama.base ? ScanMemory(offsets::signatures::runScript, panorama.base, panorama.base + panorama.size) : std::vector<DWORD64>{};
+        auto destroyed = panorama.base ? ScanMemory(offsets::signatures::panelDestroyed, panorama.base, panorama.base + panorama.size) : std::vector<DWORD64>{};
+        auto frame = panorama.base ? ScanMemory(offsets::signatures::runFrame, panorama.base, panorama.base + panorama.size) : std::vector<DWORD64>{};
+
+        if (run.size() == 1 && destroyed.size() == 1 && frame.size() == 1) {
+            offsets::panorama::fnRunScript = run.at(0) - panorama.base;
+            offsets::panorama::contextMap = process->read<int32_t>(destroyed.at(0) + 17);
+            offsets::panorama::fnRunFrame = frame.at(0) - panorama.base;
+            LOGF(VERBOSE, "Found the agent preview: RunScript 0x{:X}, contexts 0x{:X}, RunFrame 0x{:X}",
+                offsets::panorama::fnRunScript, offsets::panorama::contextMap, offsets::panorama::fnRunFrame);
+        } else
+            LOGF(WARNING, "Could not find the code of Panorama ({} {} {}), the agent preview is a picture", run.size(), destroyed.size(), frame.size());
+    }
+
+    // Kill effect, optional: the particle manager of the game
+    {
+        auto manager = ScanMemory(offsets::signatures::particleManager, client.base, client.base + client.size);
+        auto create = ScanMemory(offsets::signatures::createEffectIndex, client.base, client.base + client.size);
+        auto control = ScanMemory(offsets::signatures::setControlPoint, client.base, client.base + client.size);
+
+        if (manager.size() == 1 && create.size() == 1 && control.size() == 1) {
+            offsets::particles::fnGetManager = manager.at(0) - client.base;
+            offsets::particles::fnCreateEffect = create.at(0) - client.base;
+            offsets::particles::fnSetControlPoint = control.at(0) - client.base;
+            LOGF(VERBOSE, "Found the particle manager: 0x{:X}, create 0x{:X}, control point 0x{:X}",
+                offsets::particles::fnGetManager, offsets::particles::fnCreateEffect, offsets::particles::fnSetControlPoint);
+        } else
+            LOGF(WARNING, "Could not find the particle manager ({} {} {}), the kill effect is disabled", manager.size(), create.size(), control.size());
+
+        // With a direction, for the blood burst. Without it the blood sprays the way the game picks
+        auto forward = ScanMemory(offsets::signatures::setControlPointForward, client.base, client.base + client.size);
+        if (forward.size() == 1)
+            offsets::particles::fnSetControlPointForward = forward.at(0) - client.base;
+        else
+            LOGF(WARNING, "Could not find the particle direction ({}), the blood sprays one way", forward.size());
+    }
+
     // Name, optional
     if (auto found = ScanMemory(offsets::signatures::updateName, client.base, client.base + client.size); !found.empty()) {
         offsets::controller::fnUpdateName = found.at(0) - client.base;
@@ -617,6 +718,13 @@ bool Dumper::InitImpl() {
     } else {
         Missing("Could not find the network delta tick, using 0x{:X}", offsets::network::deltaTick);
     }
+
+    // setinfo, optional: the name & tag only change for us without it
+    if (auto found = ScanMemory(offsets::signatures::setInfo, engine.base, engine.base + engine.size); found.size() == 1) {
+        offsets::controller::fnSetInfo = found.at(0) - engine.base;
+        LOGF(VERBOSE, "Found setinfo at 0x{:X}", offsets::controller::fnSetInfo);
+    } else
+        Missing("Could not find setinfo ({}), the name & tag are not sent to the server", found.size());
 
     LOGF(INFO, "Successfully dumped offsets...");
 
@@ -960,6 +1068,15 @@ bool Dumper::ResolveCamera(ProcessModule client) {
             LOGF(VERBOSE, "Found the spectator keys at 0x{:X}", offsets::camera::spectatorBinds);
         }
     }
+
+    // CalcView of a player, optional: without it following in first person turns with our own smoothing
+    auto calc = ScanMemory(offsets::signatures::calcView, client.base, client.base + client.size);
+    if (calc.size() == 1) {
+        offsets::camera::calcView = calc.at(0) - client.base;
+        LOGF(VERBOSE, "Found CalcView at 0x{:X}", offsets::camera::calcView);
+    }
+    else
+        LOGF(WARNING, "Could not find CalcView ({}), first person spectating uses its own smoothing", calc.size());
 
     // The spectator camera, optional: without it the camera stays the one of the game after death
     constexpr size_t OBSERVER_JUMP_AT = 26;

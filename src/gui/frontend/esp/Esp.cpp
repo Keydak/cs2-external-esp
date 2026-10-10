@@ -213,7 +213,7 @@ void Esp::RenderPlayer(const Player& local, const Player& player, const cfg::esp
 		return;
 
 	if (group.box)
-		DrawBox(d, bounds.first, bounds.second, visible ? group.box_visible : group.box_invisible);
+		DrawBox(d, bounds.first, bounds.second, visible ? group.box_visible : group.box_invisible, group.box_style);
 
 	if (group.skeleton)
 		RenderPlayerBones(player, visible, group.skeleton_visible, group.skeleton_invisible);
@@ -224,10 +224,43 @@ void Esp::RenderPlayer(const Player& local, const Player& player, const cfg::esp
 	DrawFlagsImpl(d, local, player, bounds.first, bounds.second, group, cfg::dev::force_show_flags, nullptr);
 }
 
-void Esp::DrawBox(ImDrawList* d, Vec2_t min, Vec2_t max, const color_t& color) {
+void Esp::DrawBox(ImDrawList* d, Vec2_t min, Vec2_t max, const color_t& color, int style) {
 	// Dark outline keeps the box readable on bright walls
-	d->AddRect(min - Vec2_t(1, 1), max + Vec2_t(1, 1), IM_COL32(0, 0, 0, static_cast<int>(color.a * 120)));
-	d->AddRect(min, max, ImColor(color));
+	auto shadow = IM_COL32(0, 0, 0, static_cast<int>(color.a * 120));
+	auto line = ImU32(ImColor(color));
+
+	switch (style) {
+	case cfg::esp::BOX_CORNERS: {
+		// A quarter of the shorter side at each corner, the outline under each line
+		float length = std::max(4.f, std::min(max.x - min.x, max.y - min.y) * 0.25f);
+		auto corner = [&](Vec2_t at, float dx, float dy) {
+			d->AddLine(at, Vec2_t(at.x + dx * length, at.y), shadow, 3.f);
+			d->AddLine(at, Vec2_t(at.x, at.y + dy * length), shadow, 3.f);
+			d->AddLine(at, Vec2_t(at.x + dx * length, at.y), line, 1.f);
+			d->AddLine(at, Vec2_t(at.x, at.y + dy * length), line, 1.f);
+		};
+		corner(min, 1.f, 1.f);
+		corner(Vec2_t(max.x, min.y), -1.f, 1.f);
+		corner(Vec2_t(min.x, max.y), 1.f, -1.f);
+		corner(max, -1.f, -1.f);
+		break;
+	}
+	case cfg::esp::BOX_ROUNDED: {
+		float rounding = std::clamp(std::min(max.x - min.x, max.y - min.y) * 0.12f, 2.f, 8.f);
+		d->AddRect(min - Vec2_t(1, 1), max + Vec2_t(1, 1), shadow, rounding + 1.f);
+		d->AddRect(min, max, line, rounding);
+		break;
+	}
+	case cfg::esp::BOX_FILLED:
+		d->AddRectFilled(min, max, ImColor(color.r, color.g, color.b, color.a * 0.16f));
+		d->AddRect(min - Vec2_t(1, 1), max + Vec2_t(1, 1), shadow);
+		d->AddRect(min, max, line);
+		break;
+	default:
+		d->AddRect(min - Vec2_t(1, 1), max + Vec2_t(1, 1), shadow);
+		d->AddRect(min, max, line);
+		break;
+	}
 }
 
 void Esp::DrawTracker(ImDrawList* d, Vec2_t head, float box_width, const color_t& color) {

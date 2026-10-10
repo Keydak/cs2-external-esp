@@ -34,11 +34,15 @@ namespace cfg {
 
 		enum side_t { SIDE_TOP, SIDE_BOTTOM, SIDE_LEFT, SIDE_RIGHT, SIDE_COUNT };
 
+		// How the box is drawn: all its sides, its corners only, round corners, its inside lightly filled
+		enum box_style_t { BOX_FULL, BOX_CORNERS, BOX_ROUNDED, BOX_FILLED, BOX_STYLE_COUNT };
+
 		// Settings of team mates or enemies
 		struct group_t {
 			bool enabled = true;
 
 			bool box = true;
+			int box_style = BOX_FULL;
 			bool skeleton = true;
 			bool head_tracker = true;
 			bool tracers = false;
@@ -203,6 +207,21 @@ namespace cfg {
 		}
 
 		// Marks of our hits: at the crosshair & on the player that was hit
+		// An enemy we kill: the body gone, an effect of the game in its place (-insecure)
+		namespace kill_effect {
+			inline bool enabled = false;
+			inline int effect = 0;				// KillEffect::GetNames()
+			inline float gravity = -0.5f;		// No gravity: times the normal gravity, below 0 the body rises
+		}
+
+		// An effect of the game on our own player, played again & again (-insecure)
+		namespace self_effect {
+			inline bool enabled = false;
+			inline int effect = 0;				// KillEffect::GetSelfNames()
+			inline float interval = 1.f;		// Seconds between two plays
+			inline bool third_person_only = true;	// In first person the effect is around the camera
+		}
+
 		namespace hitmarker {
 			inline bool crosshair = false;
 			inline bool world = false;
@@ -249,6 +268,10 @@ namespace cfg {
 		inline int third_person_mode = 0;               // Toggle, hold, always
 		inline int third_person_key = VK_XBUTTON2;
 		inline bool third_person_scoped_off = true;     // Back to first person while scoped
+
+		// How much the camera kicks when shooting or getting hit, 100 like the game. Where the bullets go stays
+		inline bool punch_enabled = false;
+		inline float punch_scale = 0.f;                 // Percent
 
 		// Free cam: the camera flies on its own while our player stands still, see Freecam
 		inline bool freecam = false;
@@ -335,6 +358,32 @@ namespace cfg {
 			inline int team_type = TYPE_TEXTURED;
 			inline color_t enemy_color{ 1.f, 0.2f, 0.6f, 1.f };
 			inline color_t team_color{ 0.2f, 0.6f, 1.f, 1.f };
+		}
+
+		// Players drawn again with materials we make: where they can be seen & behind walls, each its own material & color
+		namespace material_chams {
+			enum material_t { MATERIAL_FLAT, MATERIAL_GLOW, MATERIAL_HOLOGRAM, MATERIAL_METALLIC, MATERIAL_COUNT };
+
+			struct layer_t {
+				bool enabled = false;
+				color_t color;
+			};
+
+			// One material for both, each its own color
+			struct group_t {
+				int material = MATERIAL_FLAT;
+				layer_t visible;
+				layer_t hidden;			// Behind walls
+			};
+
+			inline group_t enemy{ MATERIAL_FLAT, { false, { 1.f, 0.3f, 0.45f, 1.f } }, { false, { 0.65f, 0.3f, 1.f, 1.f } } };
+			inline group_t team{ MATERIAL_FLAT, { false, { 0.3f, 0.75f, 1.f, 1.f } }, { false, { 0.3f, 1.f, 0.6f, 1.f } } };
+			inline group_t bomb{ MATERIAL_FLAT, { false, { 1.f, 0.84f, 0.f, 1.f } }, { false, { 1.f, 0.5f, 0.1f, 1.f } } };     // Planted C4
+			inline group_t items{ MATERIAL_FLAT, { false, { 0.85f, 0.85f, 0.95f, 1.f } }, { false, { 0.45f, 0.85f, 1.f, 1.f } } }; // On the ground
+			// Ours, never behind a wall: our agent in third person (& what it holds) with the first person hands, the
+			// first person weapon
+			inline group_t local{ MATERIAL_FLAT, { false, { 0.4f, 1.f, 0.6f, 1.f } }, {} };
+			inline group_t weapon{ MATERIAL_FLAT, { false, { 1.f, 0.6f, 0.9f, 1.f } }, {} };
 		}
 
 		namespace glow {

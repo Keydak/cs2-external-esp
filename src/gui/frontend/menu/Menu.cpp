@@ -7,6 +7,9 @@
 #include "core/features/Subtick.hpp"
 #include "core/features/View.hpp"
 #include "core/features/Freecam.hpp"
+#include "core/features/MaterialChams.hpp"
+#include "core/features/AgentPreview.hpp"
+#include "core/features/KillEffect.hpp"
 #include "core/features/Skins.hpp"
 #include "core/features/CustomModels.hpp"
 #include "core/features/ModBrowser.hpp"
@@ -14,9 +17,9 @@
 #include "core/features/ClanTag.hpp"
 #include "core/features/Visuals.hpp"
 #include "assets/fonts/WeaponIcons.h"
+#include "assets/fonts/Inter.h"
 #include "assets/images/Logo.h"
 #include "assets/models/PlayerModels.h"
-#include "assets/models/PlayerPreviews.h"
 #include "gui/frontend/images/ImageCache.hpp"
 #include "gui/frontend/images/Avatars.hpp"
 #include "updater/Updater.hpp"
@@ -33,33 +36,65 @@
 #include <imgui_internal.h>
 #include <shellapi.h>
 
+#include <fstream>
 #include <numbers>
 
 
 namespace {
 	// Palette
 	namespace col {
-		// Dark navy hues, a little see through: the game shows behind the window
-		constexpr ImU32 window = IM_COL32(15, 17, 23, 255);
-		constexpr ImU32 sidebar = IM_COL32(12, 14, 19, 240);		// Sidebar & header a little see through
-		constexpr ImU32 header = IM_COL32(17, 19, 26, 245);
-		constexpr ImU32 panel = IM_COL32(21, 26, 37, 255);		// Group boxes
-		constexpr ImU32 selected = IM_COL32(34, 44, 68, 170);	// Active tab
-		constexpr ImU32 border = IM_COL32(255, 255, 255, 14);
+		// Of the theme (Amoled, the only one), set by ApplyTheme(). The window is a little see through: the game shows behind it
+		inline ImU32 window = 0;
+		inline ImU32 sidebar = 0;        // A shade darker than the rest
+		inline ImU32 header = 0;
+		inline ImU32 panel = 0;          // Group boxes, lighter so they stand off the window
+		inline ImU32 panel_top = 0;      // Their title band
+		inline ImU32 selected = 0;       // Picked rows of lists
+		inline ImU32 track = 0;          // Fields & tracks, "frame inactive"
+		inline ImU32 track_hover = 0;    // "frame active"
+		inline ImU32 button = 0;
+		inline ImU32 button_hover = 0;
+		inline ImU32 text_label = 0;     // Labels of what is off
+		inline ImU32 text_dim = 0;
+
+		// The same in every theme
+		constexpr ImU32 border = IM_COL32(255, 255, 255, 13);
 		constexpr ImU32 border_hover = IM_COL32(255, 255, 255, 32);
-		constexpr ImU32 hover = IM_COL32(255, 255, 255, 5);
+		constexpr ImU32 highlight = IM_COL32(255, 255, 255, 16);    // Top edge of boxes, light from above
+		constexpr ImU32 hover = IM_COL32(255, 255, 255, 6);
 		constexpr ImU32 online = IM_COL32(126, 204, 142, 255);
-		constexpr ImU32 track = IM_COL32(27, 33, 47, 255);		// Fields & tracks, "frame inactive"
-		constexpr ImU32 track_hover = IM_COL32(38, 49, 74, 255);	// "frame active"
-		constexpr ImU32 button = IM_COL32(25, 28, 38, 255);
-		constexpr ImU32 button_hover = IM_COL32(33, 37, 49, 255);
 		constexpr ImU32 text = IM_COL32(255, 255, 255, 255);
-		constexpr ImU32 text_label = IM_COL32(145, 149, 160, 255);	// Labels of what is off
-		constexpr ImU32 text_dim = IM_COL32(145, 149, 160, 255);
-		constexpr ImU32 text_faint = IM_COL32(255, 255, 255, 128);	// Group & section titles
-		constexpr ImU32 on_accent = IM_COL32(6, 10, 18, 255);		// Text on accent fills
+		constexpr ImU32 text_faint = IM_COL32(255, 255, 255, 120);    // Group & section titles
+		constexpr ImU32 on_accent = IM_COL32(6, 10, 18, 255);        // Text on light accent fills
 		constexpr ImU32 knob = IM_COL32(255, 255, 255, 255);
 		constexpr ImU32 shadow = IM_COL32(0, 0, 0, 255);
+
+		// The theme: Amoled, almost black with dark grey boxes. The only one, not picked in the menu (user's choice)
+		struct Theme {
+			ImU32 window, sidebar, panel, panel_top, selected, track, track_hover, button, button_hover, text_label, text_dim;
+		};
+
+		constexpr Theme AMOLED = {
+			IM_COL32(8, 8, 10, 255), IM_COL32(5, 5, 6, 255), IM_COL32(19, 19, 22, 255), IM_COL32(24, 24, 28, 255), IM_COL32(40, 40, 48, 170),
+			IM_COL32(32, 32, 38, 255), IM_COL32(46, 46, 54, 255), IM_COL32(22, 22, 26, 255), IM_COL32(32, 32, 38, 255),
+			IM_COL32(150, 150, 158, 255), IM_COL32(134, 134, 142, 255),
+		};
+
+		void ApplyTheme() {
+			const auto& theme = AMOLED;
+			window = theme.window;
+			sidebar = theme.sidebar;
+			header = theme.window;
+			panel = theme.panel;
+			panel_top = theme.panel_top;
+			selected = theme.selected;
+			track = theme.track;
+			track_hover = theme.track_hover;
+			button = theme.button;
+			button_hover = theme.button_hover;
+			text_label = theme.text_label;
+			text_dim = theme.text_dim;
+		}
 
 		// How much of the window background covers the game, the group boxes stay solid. From the config like the accent
 		inline float backdrop = 0.86f;
@@ -79,7 +114,7 @@ namespace {
 		return value * ui_scale;
 	}
 
-	constexpr ImVec2 BASE_MENU_SIZE = ImVec2(820.f, 540.f);
+	constexpr ImVec2 BASE_MENU_SIZE = ImVec2(860.f, 580.f);
 
 	ImVec2 MENU_SIZE;
 	float WINDOW_ROUNDING;
@@ -89,6 +124,7 @@ namespace {
 	float COLUMN_SPACING;
 	float ROW_HEIGHT;
 	float PANEL_ROUNDING;
+	float PANEL_TITLE_HEIGHT;
 
 	ImVec2 TOGGLE_SIZE;
 	float SWATCH_SIZE;
@@ -107,15 +143,16 @@ namespace {
 		ui_scale = scale;
 
 		MENU_SIZE = S(BASE_MENU_SIZE);
-		WINDOW_ROUNDING = S(8.f);
-		SIDEBAR_WIDTH = S(190.f);
-		HEADER_HEIGHT = S(60.f);
+		WINDOW_ROUNDING = S(12.f);
+		SIDEBAR_WIDTH = S(176.f);
+		HEADER_HEIGHT = S(58.f);
 		CONTENT_PADDING = S(16.f);
-		COLUMN_SPACING = S(10.f);
-		ROW_HEIGHT = S(30.f);
-		PANEL_ROUNDING = S(6.f);
+		COLUMN_SPACING = S(12.f);
+		ROW_HEIGHT = S(28.f);
+		PANEL_ROUNDING = S(9.f);
+		PANEL_TITLE_HEIGHT = S(34.f);
 
-		TOGGLE_SIZE = S(ImVec2(30.f, 17.f));
+		TOGGLE_SIZE = S(ImVec2(32.f, 18.f));
 		SWATCH_SIZE = S(18.f);
 		SLIDER_WIDTH = S(116.f);
 		SLIDER_VALUE_WIDTH = S(54.f);
@@ -224,6 +261,29 @@ namespace {
 		}
 	}
 
+	// Text & marks on an accent fill: dark on light accents like the white default, white on dark ones
+	ImU32 OnAccent() {
+		auto accent = ImGui::ColorConvertU32ToFloat4(col::accent);
+		return accent.x * 0.299f + accent.y * 0.587f + accent.z * 0.114f > 0.6f ? col::on_accent : col::text;
+	}
+
+	// Soft light of a color around a shape: a few wider, fainter rounded strokes
+	void SoftGlow(ImDrawList* d, ImVec2 min, ImVec2 max, ImU32 color, float rounding, float strength = 1.f) {
+		for (int i = 1; i <= 4; i++) {
+			float grow = S(1.5f) * i;
+			d->AddRect(min - ImVec2(grow, grow), max + ImVec2(grow, grow), C(color, strength * 0.14f / i), rounding + grow, 0, S(1.5f));
+		}
+	}
+
+	// Shadow under a box, a little lower than it: the box lifts off what is behind
+	void SoftShadow(ImDrawList* d, ImVec2 min, ImVec2 max, float rounding) {
+		for (int i = 1; i <= 4; i++) {
+			float grow = S(2.f) * i;
+			auto drop = ImVec2(0.f, S(3.f));
+			d->AddRectFilled(min - ImVec2(grow, grow) + drop, max + ImVec2(grow, grow) + drop, C(col::shadow, 0.06f), rounding + grow);
+		}
+	}
+
 	// Columns & panels
 
 	void BeginColumn(int index) {
@@ -236,7 +296,7 @@ namespace {
 			index == 0 ? "##column_left" : "##column_right",
 			ImVec2(column_layout.w, column_layout.h),
 			ImGuiChildFlags_None,
-			ImGuiWindowFlags_NoBackground
+			ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar
 		);
 	}
 
@@ -244,16 +304,12 @@ namespace {
 		ImGui::EndChild();
 	}
 
-	// A group box: its title dim above it, then the navy box with a hairline border
+	// A group box: its title inside at the top over a line, lighter than the window with a shadow under it
 	void BeginPanel(const char* title) {
-		auto start = ImGui::GetCursorScreenPos();
-		ImGui::GetWindowDrawList()->AddText(ImVec2(start.x + S(10.f), start.y), C(col::text_faint), title, ImGui::FindRenderedTextEnd(title));
-		ImGui::Dummy(ImVec2(0, ImGui::GetTextLineHeight() + S(5.f)));
-
-		ImGui::PushStyleColor(ImGuiCol_ChildBg, col::panel);
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
 		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, PANEL_ROUNDING);
 		ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.f);
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(12.f), 0.f));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(14.f), 0.f));
 		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(S(8.f), 0.f));
 
 		ImGui::BeginChild(
@@ -263,7 +319,16 @@ namespace {
 			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
 		);
 
-		ImGui::Dummy(ImVec2(0, S(6.f)));
+		auto d = ImGui::GetWindowDrawList();
+		auto start = ImGui::GetCursorScreenPos();
+		float width = ImGui::GetContentRegionAvail().x;
+		const float title_size = S(11.5f);
+
+		d->AddText(font_bold, title_size, ImVec2(start.x, floorf(start.y + (PANEL_TITLE_HEIGHT - title_size) * 0.5f)), C(col::text_faint),
+			title, ImGui::FindRenderedTextEnd(title));
+		d->AddLine(ImVec2(start.x, start.y + PANEL_TITLE_HEIGHT), ImVec2(start.x + width, start.y + PANEL_TITLE_HEIGHT), C(col::border));
+
+		ImGui::Dummy(ImVec2(0, PANEL_TITLE_HEIGHT + S(5.f)));
 	}
 
 	void EndPanel() {
@@ -273,11 +338,43 @@ namespace {
 		ImGui::PopStyleVar(4);
 		ImGui::PopStyleColor();
 
+		// On the column, so under what the panel drew: child windows are drawn after their parent
 		auto min = ImGui::GetItemRectMin();
 		auto max = ImGui::GetItemRectMax();
-		ImGui::GetWindowDrawList()->AddRect(min, max, C(col::border), PANEL_ROUNDING, 0, 1.f);
+		auto d = ImGui::GetWindowDrawList();
 
-		ImGui::Dummy(ImVec2(0, S(12.f)));
+		SoftShadow(d, min, max, PANEL_ROUNDING);
+		d->AddRectFilled(min, max, C(col::panel), PANEL_ROUNDING);
+		d->AddRectFilled(min, ImVec2(max.x, min.y + PANEL_TITLE_HEIGHT), C(col::panel_top), PANEL_ROUNDING, ImDrawFlags_RoundCornersTop);
+		d->AddLine(ImVec2(min.x + PANEL_ROUNDING, min.y + 0.5f), ImVec2(max.x - PANEL_ROUNDING, min.y + 0.5f), C(col::highlight));
+		d->AddRect(min, max, C(col::border), PANEL_ROUNDING, 0, 1.f);
+
+		ImGui::Dummy(ImVec2(0, COLUMN_SPACING));
+	}
+
+	// The preview of the players sits on its window, no card under it (the agent of the game is seen through it): only
+	// the title & its line
+	void BeginPreview(const char* title) {
+		ImGui::PushID(title);
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(S(8.f), 0.f));
+		ImGui::BeginGroup();
+
+		auto d = ImGui::GetWindowDrawList();
+		auto start = ImGui::GetCursorScreenPos();
+		float width = ImGui::GetContentRegionAvail().x;
+		const float title_size = S(11.5f);
+
+		d->AddText(font_bold, title_size, ImVec2(start.x, floorf(start.y + (PANEL_TITLE_HEIGHT - title_size) * 0.5f)), C(col::text_faint),
+			title, ImGui::FindRenderedTextEnd(title));
+		d->AddLine(ImVec2(start.x, start.y + PANEL_TITLE_HEIGHT), ImVec2(start.x + width, start.y + PANEL_TITLE_HEIGHT), C(col::border));
+
+		ImGui::Dummy(ImVec2(0, PANEL_TITLE_HEIGHT + S(5.f)));
+	}
+
+	void EndPreview() {
+		ImGui::EndGroup();
+		ImGui::PopStyleVar();
+		ImGui::PopID();
 	}
 
 	// Rows, label on the left and widgets aligned to the right
@@ -364,15 +461,20 @@ namespace {
 		auto max = pos + TOGGLE_SIZE;
 		float radius = TOGGLE_SIZE.y * 0.5f;
 
-		// Track: dark & bordered when off, filled with the accent when on, so on & off never look alike
+		// Track: dark when off, the accent with a soft glow around it when on
 		d->AddRectFilled(pos, max, LerpColor(col::track, col::track_hover, hover * 0.6f), radius);
-		d->AddRectFilled(pos, max, C(col::accent, t), radius);
+		if (t > 0.01f) {
+			SoftGlow(d, pos, max, col::accent, radius, t);
+			d->AddRectFilled(pos, max, C(col::accent, t), radius);
+		}
 		d->AddRect(pos, max, LerpColor(col::border_hover, col::accent, t), radius);
 
-		// Knob: dim grey on the left when off, dark on the accent when on
-		float knob_radius = radius - S(2.5f);
+		// Knob: grey on the left when off, light off the accent when on, a small shadow under it
+		float knob_radius = radius - S(3.f);
 		float x = pos.x + radius + t * (TOGGLE_SIZE.x - TOGGLE_SIZE.y);
-		d->AddCircleFilled(ImVec2(x, pos.y + radius), knob_radius, LerpColor(LerpColor(col::text_faint, col::text_dim, hover), col::window, t), 24);
+		auto knob = ImVec2(x, pos.y + radius);
+		d->AddCircleFilled(knob + ImVec2(0.f, S(1.f)), knob_radius, C(col::shadow, 0.35f), 24);
+		d->AddCircleFilled(knob, knob_radius, LerpColor(LerpColor(col::text_dim, col::text, hover), OnAccent(), t), 24);
 
 		return pressed;
 	}
@@ -734,6 +836,17 @@ namespace {
 		const float item_height = S(28.f);
 		const float padding = S(6.f);
 
+		// As wide as its longest item wants, never over the label & its hint: a narrow column overlapped them
+		float longest = 0.f;
+		for (const char* item : items)
+			longest = std::max(longest, ImGui::CalcTextSize(item).x);
+		auto label_end = ImGui::FindRenderedTextEnd(label);
+		float label_width = ImGui::CalcTextSize(label, label_end).x + (tooltip ? S(26.f) : 0.f) + S(12.f);
+		width = std::max(width, longest + S(10.f) + S(26.f));
+		width = std::max(S(80.f), std::min(width, row.width - label_width));
+		// The list shows whole items, wider than the field when it has to be
+		float list_width = std::max(width, longest + S(10.f) + S(12.f) + padding * 2.f);
+
 		auto pos = RowSlot(row, ImVec2(width, height));
 		ImGui::SetCursorScreenPos(pos);
 
@@ -770,8 +883,10 @@ namespace {
 		float max_height = std::max(item_height * 3.f, up ? above : below);
 		float shown = std::min(list_height, max_height);
 
-		ImGui::SetNextWindowPos(up ? ImVec2(pos.x, pos.y - S(4.f) - shown) : ImVec2(pos.x, pos.y + height + S(4.f)));
-		ImGui::SetNextWindowSize(ImVec2(width, shown));
+		// Right edges lined up when the list is wider than the field
+		float list_x = pos.x + width - list_width;
+		ImGui::SetNextWindowPos(up ? ImVec2(list_x, pos.y - S(4.f) - shown) : ImVec2(list_x, pos.y + height + S(4.f)));
+		ImGui::SetNextWindowSize(ImVec2(list_width, shown));
 
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(padding, padding));
 		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, 0.f));
@@ -868,59 +983,148 @@ namespace {
 		return changed;
 	}
 
-	// Toggle with three dots after it: they open the activation & the key, which stay out of the panel
-	bool ToggleBind(const char* label, bool* value, int* mode, int* key, const char* tooltip = nullptr) {
-		ImGui::PushID(label);
+	// Three dots that open more of a row in a small window under them
+	ImVec2 DotsSize() {
+		return ImVec2(S(20.f), S(20.f));
+	}
 
-		row_lit = *value;
-		auto row = BeginRow(label, tooltip);
+	bool MoreDots(const char* popup, ImVec2 pos, const char* tooltip = nullptr) {
+		auto size = DotsSize();
 
-		// Slots go right to left: the dots at the edge, the toggle before them
-		const ImVec2 dots_size(S(20.f), S(20.f));
-		auto dots = RowSlot(row, dots_size);
-		bool changed = ToggleSwitch("##toggle", value, RowSlot(row, TOGGLE_SIZE));
+		ImGui::SetCursorScreenPos(pos);
+		if (ImGui::InvisibleButton("##dots", size))
+			ImGui::OpenPopup(popup);
 
-		ImGui::SetCursorScreenPos(dots);
-		if (ImGui::InvisibleButton("##bind_menu", dots_size))
-			ImGui::OpenPopup("##bind_popup");
-
-		bool open = ImGui::IsPopupOpen("##bind_popup");
+		bool open = ImGui::IsPopupOpen(popup);
 		bool hovered = ImGui::IsItemHovered();
 		float h = Animate(ImGui::GetItemID(), hovered || open ? 1.f : 0.f, 16.f);
 
-		int current = std::clamp(*mode, 0, static_cast<int>(ACTIVATION_MODES.size()) - 1);
-		if (hovered && !open) {
-			if (current == 2)
-				ShowTooltip("%s", ACTIVATION_MODES[current]);
-			else
-				ShowTooltip("%s: %s", ACTIVATION_MODES[current], KeyName(*key).c_str());
-		}
+		if (tooltip && hovered && !open)
+			ShowTooltip("%s", tooltip);
 
 		auto d = ImGui::GetWindowDrawList();
-		auto center = dots + dots_size * 0.5f;
+		if (h > 0.01f)
+			d->AddRectFilled(pos, pos + size, C(col::hover, h * 2.f), S(5.f));
+
+		auto center = pos + size * 0.5f;
 		auto color = open ? C(col::accent) : LerpColor(col::text_faint, col::text, h);
 		for (int i = -1; i <= 1; i++)
 			d->AddCircleFilled(center + ImVec2(i * S(4.5f), 0.f), S(1.7f), color, 8);
 
-		// Under the dots, its right edge on theirs
-		ImGui::SetNextWindowPos(ImVec2(dots.x + dots_size.x, dots.y + dots_size.y + S(4.f)), ImGuiCond_Appearing, ImVec2(1.f, 0.f));
-		ImGui::SetNextWindowSize(ImVec2(S(240.f), 0.f));
+		return open;
+	}
+
+	// Width of the next window of dots, 0 for the usual one
+	float next_more_width = 0.f;
+
+	// The window of the dots at pos, under them with its right edge on theirs. Call EndMore() only when it returns true
+	bool BeginMore(const char* popup, ImVec2 dots) {
+		float width = next_more_width > 0.f ? next_more_width : S(260.f);
+		next_more_width = 0.f;
+
+		auto size = DotsSize();
+		ImGui::SetNextWindowPos(ImVec2(dots.x + size.x, dots.y + size.y + S(4.f)), ImGuiCond_Appearing, ImVec2(1.f, 0.f));
+		ImGui::SetNextWindowSize(ImVec2(width, 0.f));
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(12.f), S(6.f)));
 		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(S(8.f), 0.f));
 
-		if (ImGui::BeginPopup("##bind_popup", ImGuiWindowFlags_NoMove)) {
-			DropdownRow("Activation", mode, ACTIVATION_MODES, ACTIVATION_DESCRIPTIONS, nullptr, S(110.f));
-			if (*mode != 2)
-				KeybindRow("Key", key);
-			ImGui::EndPopup();
-		}
+		if (ImGui::BeginPopup(popup, ImGuiWindowFlags_NoMove))
+			return true;
 
 		ImGui::PopStyleVar(2);
+		return false;
+	}
+
+	void EndMore() {
+		ImGui::EndPopup();
+		ImGui::PopStyleVar(2);
+	}
+
+	// Toggle with three dots before it, they open what else the feature has. Its colors go before the dots
+	template<typename Fn>
+	bool ToggleMore(const char* label, bool* value, const char* tooltip, Fn&& more, color_t* color = nullptr, const char* color_tooltip = nullptr,
+		color_t* second = nullptr, const char* second_tooltip = nullptr) {
+		ImGui::PushID(label);
+
+		row_lit = *value;
+		auto row = BeginRow(label, tooltip);
+		bool changed = ToggleSwitch("##toggle", value, RowSlot(row, TOGGLE_SIZE));
+		auto dots = RowSlot(row, DotsSize());
+
+		ImGui::BeginDisabled(!*value);
+		if (color)
+			ColorSwatch("##color", color, RowSlot(row, ImVec2(SWATCH_SIZE, SWATCH_SIZE)), color_tooltip);
+		if (second)
+			ColorSwatch("##second", second, RowSlot(row, ImVec2(SWATCH_SIZE, SWATCH_SIZE)), second_tooltip);
+		ImGui::EndDisabled();
+
+		MoreDots("##more", dots);
+		if (BeginMore("##more", dots)) {
+			more();
+			EndMore();
+		}
 
 		EndRow(row);
 		ImGui::PopID();
-
 		return changed;
+	}
+
+	// A row of settings only: its colors in the order given, then the dots with the rest
+	template<typename Fn>
+	void MoreRow(const char* label, const char* tooltip, Fn&& more, std::initializer_list<std::pair<color_t*, const char*>> colors = {}) {
+		ImGui::PushID(label);
+
+		auto row = BeginRow(label, tooltip);
+		auto dots = RowSlot(row, DotsSize());
+
+		// Slots go right to left, the last color first
+		for (size_t i = colors.size(); i-- > 0;) {
+			const auto& color = *(colors.begin() + i);
+			ImGui::PushID(static_cast<int>(i));
+			ColorSwatch("##color", color.first, RowSlot(row, ImVec2(SWATCH_SIZE, SWATCH_SIZE)), color.second);
+			ImGui::PopID();
+		}
+
+		MoreDots("##more", dots);
+		if (BeginMore("##more", dots)) {
+			more();
+			EndMore();
+		}
+
+		EndRow(row);
+		ImGui::PopID();
+	}
+
+	// Toggle with three dots before it: they open the activation & the key, then what else is passed
+	template<typename Fn>
+	bool ToggleBindMore(const char* label, bool* value, int* mode, int* key, const char* tooltip, Fn&& more) {
+		ImGui::PushID(label);
+
+		row_lit = *value;
+		auto row = BeginRow(label, tooltip);
+		bool changed = ToggleSwitch("##toggle", value, RowSlot(row, TOGGLE_SIZE));
+		auto dots = RowSlot(row, DotsSize());
+
+		int current = std::clamp(*mode, 0, static_cast<int>(ACTIVATION_MODES.size()) - 1);
+		auto hint = current == 2 ? std::string(ACTIVATION_MODES[current]) : std::format("{}: {}", ACTIVATION_MODES[current], KeyName(*key));
+		MoreDots("##bind_popup", dots, hint.c_str());
+
+		next_more_width = S(240.f);
+		if (BeginMore("##bind_popup", dots)) {
+			DropdownRow("Activation", mode, ACTIVATION_MODES, ACTIVATION_DESCRIPTIONS, nullptr, S(110.f));
+			if (*mode != 2)
+				KeybindRow("Key", key);
+			more();
+			EndMore();
+		}
+
+		EndRow(row);
+		ImGui::PopID();
+		return changed;
+	}
+
+	bool ToggleBind(const char* label, bool* value, int* mode, int* key, const char* tooltip = nullptr) {
+		return ToggleBindMore(label, value, mode, key, tooltip, [] {});
 	}
 
 	// Like DropdownRow, any number of items picked: a click flips one & the list stays open
@@ -1435,7 +1639,7 @@ namespace {
 
 	// Steam serves smaller versions of item pictures
 	std::string SmallImage(const std::string& url) {
-		return url.empty() ? url : url + "/256fx192f";
+		return ImageCache::Small(url);
 	}
 
 	// Picture of a weapon without a skin, for the ones the icon font has no glyph of. Already small, no SmallImage
@@ -1557,6 +1761,22 @@ namespace {
 		ImGui::Dummy(ImVec2(0.f, S(6.f)));
 	}
 
+	// The rest of the page, scrolled on its own: what is above it (back, search) stays
+	void BeginScrollArea(const char* id) {
+		ImGui::BeginChild(id, ImVec2(0.f, ImGui::GetContentRegionAvail().y), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+	}
+
+	void EndScrollArea() {
+		ImGui::EndChild();
+	}
+
+	// Large cards, this many a line whether the scrollbar shows or not, their height from the 4:3 pictures
+	Grid BeginFixedGrid(int columns) {
+		float width = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize;
+		float card_width = (width - CARD_GAP * (columns - 1)) / columns;
+		return BeginGrid((card_width - S(20.f)) * 3.f / 4.f + S(60.f), card_width - 1.f);
+	}
+
 	void SectionTitle(const char* text) {
 		ImGui::Dummy(ImVec2(0.f, S(4.f)));
 
@@ -1578,8 +1798,8 @@ namespace {
 		for (auto item : items)
 			total += ImGui::CalcTextSize(item).x + padding * 2.f;
 
-		d->AddRectFilled(pos, pos + ImVec2(total, height), C(col::button), S(4.f));
-		d->AddRect(pos, pos + ImVec2(total, height), C(col::border), S(4.f));
+		d->AddRectFilled(pos, pos + ImVec2(total, height), C(col::button), S(8.f));
+		d->AddRect(pos, pos + ImVec2(total, height), C(col::border), S(8.f));
 
 		float x = inset, selected_x = 0.f, selected_w = 0.f;
 		int index = 0;
@@ -1597,7 +1817,9 @@ namespace {
 
 		float slide_x = Animate(ImGui::GetID("##x"), selected_x, 16.f);
 		float slide_w = Animate(ImGui::GetID("##w"), selected_w, 16.f);
-		d->AddRectFilled(pos + ImVec2(slide_x, inset), pos + ImVec2(slide_x + slide_w, height - inset), C(col::track_hover), S(3.f));
+		auto slide_min = pos + ImVec2(slide_x, inset), slide_max = pos + ImVec2(slide_x + slide_w, height - inset);
+		SoftGlow(d, slide_min, slide_max, col::accent, S(6.f), 0.7f);
+		d->AddRectFilled(slide_min, slide_max, C(col::accent), S(6.f));
 
 		bool changed = false;
 		x = inset;
@@ -1616,7 +1838,7 @@ namespace {
 			}
 
 			float hover = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() ? 1.f : 0.f, 16.f);
-			auto color = index == *value ? C(col::text) : LerpColor(col::text_dim, col::text, hover * 0.6f);
+			auto color = index == *value ? C(OnAccent()) : LerpColor(col::text_dim, col::text, hover * 0.6f);
 			d->AddText(pos + ImVec2(x + padding, (height - text_size.y) * 0.5f), color, item);
 
 			ImGui::PopID();
@@ -1626,6 +1848,69 @@ namespace {
 
 		ImGui::PopID();
 		return changed;
+	}
+
+	float TabSwitchWidth(std::initializer_list<const char*> items) {
+		float total = S(3.f) * 2.f;
+		for (auto item : items)
+			total += ImGui::CalcTextSize(item).x + S(16.f) * 2.f;
+		return total;
+	}
+
+	// Pages of a category as pills, the lit one slides between them. The index clicked, -1 when none
+	int PagePills(const char* id, const std::vector<const char*>& items, int active, ImVec2 pos, float height) {
+		ImGui::PushID(id);
+
+		auto d = ImGui::GetWindowDrawList();
+		const float padding = S(15.f);
+		const float gap = S(4.f);
+		const float rounding = height * 0.5f;
+
+		float x = 0.f, selected_x = 0.f, selected_w = 0.f;
+		for (int i = 0; i < static_cast<int>(items.size()); i++) {
+			float w = ImGui::CalcTextSize(items[i]).x + padding * 2.f;
+			if (i == active) {
+				selected_x = x;
+				selected_w = w;
+			}
+			x += w + gap;
+		}
+
+		float slide_x = Animate(ImGui::GetID("##x"), selected_x, 16.f);
+		float slide_w = Animate(ImGui::GetID("##w"), selected_w, 16.f);
+		auto lit_min = pos + ImVec2(slide_x, 0.f), lit_max = pos + ImVec2(slide_x + slide_w, height);
+
+		SoftGlow(d, lit_min, lit_max, col::accent, rounding, 0.9f);
+		d->AddRectFilled(lit_min, lit_max, C(col::accent), rounding);
+
+		int clicked = -1;
+		x = 0.f;
+
+		for (int i = 0; i < static_cast<int>(items.size()); i++) {
+			auto text_size = ImGui::CalcTextSize(items[i]);
+			float w = text_size.x + padding * 2.f;
+			auto min = pos + ImVec2(x, 0.f);
+
+			ImGui::PushID(i);
+			ImGui::SetCursorScreenPos(min);
+			if (ImGui::InvisibleButton("##pill", ImVec2(w, height)) && i != active)
+				clicked = i;
+
+			float hover = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() && i != active ? 1.f : 0.f, 16.f);
+			float lit = Animate(ImGui::GetItemID() + 1, i == active ? 1.f : 0.f, 14.f);
+
+			if (hover > 0.01f)
+				d->AddRectFilled(min, min + ImVec2(w, height), C(col::hover, hover * 2.f), rounding);
+
+			auto color = LerpColor(LerpColor(col::text_dim, col::text, hover), OnAccent(), lit);
+			d->AddText(min + ImVec2(padding, (height - text_size.y) * 0.5f), color, items[i]);
+
+			ImGui::PopID();
+			x += w + gap;
+		}
+
+		ImGui::PopID();
+		return clicked;
 	}
 
 	// Rounded button with an arrow to the left, true when clicked
@@ -2374,133 +2659,197 @@ namespace {
 		draw();
 	}
 
-	// The player pre-rendered by scripts/render_player_previews.py: textured, holding the rifle, from FRAMES
-	// angles around. Drawing it is one image, the one of the angle it is turned to. False without the image.
-	// coat: the glow chams, the shape in that color over the model, its shading still showing through
-	bool DrawPlayerPicture(ImDrawList* d, bool terrorist, ImVec2 min, ImVec2 max, float yaw, ImU32 glow = 0, ImU32 tint = 0, ImU32 coat = 0) {
-		struct Picture {
-			bool tried = false;
-			ImTextureID texture = 0;
-			bool shape_tried = false;
-			ImTextureID shape = 0;	// All white, tinted for the glow
-		};
-		static Picture pictures[2];
+	// The pictures of the agents taken from the game (AgentPreview), loaded again when one was taken. The
+	// shape: all white, tinted for the glow, made once it is turned on
+	struct AgentPicture {
+		ImTextureID texture = 0;
+		ImTextureID shape = 0;
+		bool shape_tried = false;
+		float width = 0.f, height = 0.f;
+		std::string bytes;
+	};
 
-		auto load = [&](bool silhouette) {
-			return terrorist
-				? ImageCache::FromMemory(player_preview_t, player_preview_t_size, player_preview_t_alpha, player_preview_t_alpha_size, silhouette)
-				: ImageCache::FromMemory(player_preview_ct, player_preview_ct_size, player_preview_ct_alpha, player_preview_ct_alpha_size, silhouette);
-		};
+	AgentPicture* GetAgentPicture(bool terrorist, bool shape) {
+		static AgentPicture pictures[2];
+		static int generation = -1;
+
+		if (generation != AgentPreview::GetGeneration()) {
+			generation = AgentPreview::GetGeneration();
+			for (int team = 0; team < 2; team++) {
+				auto& picture = pictures[team];
+				for (auto texture : { picture.texture, picture.shape })
+					if (texture)
+						reinterpret_cast<ID3D11ShaderResourceView*>(texture)->Release();
+				picture = {};
+
+				std::ifstream file(AgentPreview::PicturePath(team == 0), std::ios::binary);
+				if (!file)
+					continue;
+				picture.bytes.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+				picture.texture = ImageCache::FromMemory(picture.bytes.data(), picture.bytes.size());
+
+				// Its size from the header of the PNG: width & height big endian at 16
+				if (picture.texture && picture.bytes.size() > 24) {
+					auto big = [&](size_t at) {
+						auto b = reinterpret_cast<const uint8_t*>(picture.bytes.data()) + at;
+						return static_cast<float>((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]);
+					};
+					picture.width = big(16);
+					picture.height = big(20);
+				}
+			}
+		}
 
 		auto& picture = pictures[terrorist ? 0 : 1];
-		if (!picture.tried) {
-			picture.tried = true;
-			picture.texture = load(false);
-		}
-
-		// Only made once the glow is turned on
-		if ((glow || coat) && !picture.shape_tried) {
+		if (!picture.texture || picture.width <= 0.f || picture.height <= 0.f)
+			return nullptr;
+		if (shape && !picture.shape_tried) {
 			picture.shape_tried = true;
-			picture.shape = load(true);
+			picture.shape = ImageCache::FromMemory(picture.bytes.data(), picture.bytes.size(), nullptr, 0, true);
 		}
+		return &picture;
+	}
 
-		if (!picture.texture)
-			return false;
+	// What is drawn after it is added over what is behind (like the hologram of the game), until
+	// ImDrawCallback_ResetRenderState
+	void AdditiveBlend(const ImDrawList*, const ImDrawCmd*) {
+		auto state = static_cast<ImGui_ImplDX11_RenderState*>(ImGui::GetPlatformIO().Renderer_RenderState);
+		static ID3D11BlendState* additive = nullptr;
+		if (!state)
+			return;
+		if (!additive) {
+			D3D11_BLEND_DESC desc{};
+			desc.RenderTarget[0].BlendEnable = TRUE;
+			desc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+			desc.RenderTarget[0].DestBlend = D3D11_BLEND_ONE;
+			desc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+			desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+			desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+			desc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+			desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+			if (FAILED(state->Device->CreateBlendState(&desc, &additive)))
+				return;
+		}
+		const float factor[4] = { 0.f, 0.f, 0.f, 0.f };
+		state->DeviceContext->OMSetBlendState(additive, factor, 0xFFFFFFFF);
+	}
 
-		namespace pp = player_preview;
-		constexpr int ROWS = (pp::FRAMES + pp::COLUMNS - 1) / pp::COLUMNS;
+	// A texture in a rect, its corners tinted each in their color: top left, top right, bottom right, bottom left
+	void AddImageCorners(ImDrawList* d, ImTextureID texture, ImVec2 min, ImVec2 max, ImU32 top_left, ImU32 top_right, ImU32 bottom_right, ImU32 bottom_left) {
+		if (!texture)
+			return;
+		d->PushTexture(ImTextureRef(texture));
+		d->PrimReserve(6, 4);
+		auto index = static_cast<ImDrawIdx>(d->_VtxCurrentIdx);
+		d->PrimWriteIdx(index); d->PrimWriteIdx(static_cast<ImDrawIdx>(index + 1)); d->PrimWriteIdx(static_cast<ImDrawIdx>(index + 2));
+		d->PrimWriteIdx(index); d->PrimWriteIdx(static_cast<ImDrawIdx>(index + 2)); d->PrimWriteIdx(static_cast<ImDrawIdx>(index + 3));
+		d->PrimWriteVtx(min, ImVec2(0.f, 0.f), top_left);
+		d->PrimWriteVtx(ImVec2(max.x, min.y), ImVec2(1.f, 0.f), top_right);
+		d->PrimWriteVtx(max, ImVec2(1.f, 1.f), bottom_right);
+		d->PrimWriteVtx(ImVec2(min.x, max.y), ImVec2(0.f, 1.f), bottom_left);
+		d->PopTexture();
+	}
 
-		// The angle nearest to the turn
-		constexpr float STEP = 2.f * std::numbers::pi_v<float> / pp::FRAMES;
-		int frame = static_cast<int>(roundf(yaw / STEP)) % pp::FRAMES;
-		if (frame < 0)
-			frame += pp::FRAMES;
+	// The picture of the agent: head to feet fills the rect, feet on its bottom. Gives the rect of the picture.
+	// material: of the material chams where it is seen (-1 none) in color, drawn about like the game draws it
+	ImRect DrawAgentPicture(ImDrawList* d, const AgentPicture& picture, ImVec2 min, ImVec2 max, ImU32 glow, int material, const color_t& color) {
+		namespace mc = cfg::visuals::material_chams;
 
-		ImVec2 uv_min(static_cast<float>(frame % pp::COLUMNS) / pp::COLUMNS, static_cast<float>(frame / pp::COLUMNS) / ROWS);
-		ImVec2 uv_max = uv_min + ImVec2(1.f / pp::COLUMNS, 1.f / ROWS);
+		float scale = (max.y - min.y) / picture.height;
+		float width = picture.width * scale;
+		ImVec2 image_min(floorf((min.x + max.x) * 0.5f - width * 0.5f), min.y);
+		ImVec2 image_max(image_min.x + width, max.y);
+		const ImVec2 uv_min(0.f, 0.f), uv_max(1.f, 1.f);
 
-		// Head to feet fills the rect, idle: breathing in & out from the feet
-		float breath = sinf(static_cast<float>(ImGui::GetTime()) * 2.2f);
-		float scale = (max.y - min.y) / (terrorist ? player_preview_t_height : player_preview_ct_height);
-		float scale_x = scale * (1.f + 0.004f * breath), scale_y = scale * (1.f + 0.006f * breath);
-
-		ImVec2 feet((min.x + max.x) * 0.5f, max.y);
-		ImVec2 image_min(feet.x - pp::FRAME_WIDTH * 0.5f * scale_x, feet.y - pp::FEET * scale_y);
-		ImVec2 image_max(image_min.x + pp::FRAME_WIDTH * scale_x, image_min.y + pp::FRAME_HEIGHT * scale_y);
+		auto image = [&](ImTextureID texture, ImU32 tint) {
+			if (texture)
+				d->AddImage(ImTextureRef(texture), image_min, image_max, uv_min, uv_max, tint);
+		};
+		auto in_color = [&](float alpha) { return ImGui::GetColorU32(ImVec4(color.r, color.g, color.b, color.a * alpha)); };
 
 		if (glow && picture.shape)
 			DrawGlowAround(glow, [&](ImVec2 offset, ImU32 shade) {
 				d->AddImage(ImTextureRef(picture.shape), image_min + offset, image_max + offset, uv_min, uv_max, shade);
 			});
 
-		// Chams multiply the colors of the model, like the tint of the image
-		d->AddImage(ImTextureRef(picture.texture), image_min, image_max, uv_min, uv_max, tint ? tint : C(IM_COL32_WHITE));
-
-		if (coat && picture.shape)
-			d->AddImage(ImTextureRef(picture.shape), image_min, image_max, uv_min, uv_max, coat);
-		return true;
+		switch (material) {
+		case mc::MATERIAL_FLAT:
+			// Unlit: the shape in the color, a trace of the model under it
+			image(picture.texture, C(IM_COL32_WHITE, 1.f - color.a));
+			image(picture.shape, in_color(1.f));
+			break;
+		case mc::MATERIAL_GLOW:
+			// The model, its edges lit in the color
+			image(picture.texture, C(IM_COL32_WHITE));
+			DrawGlowAround(in_color(0.8f), [&](ImVec2 offset, ImU32 shade) {
+				d->AddImage(ImTextureRef(picture.shape), image_min + offset, image_max + offset, uv_min, uv_max, shade);
+			});
+			image(picture.shape, in_color(0.25f));
+			break;
+		case mc::MATERIAL_HOLOGRAM:
+			// Unlit, no texture: the color added over what is behind, so it shows through. The faces behind are drawn
+			// too, about twice the color all over
+			d->AddCallback(AdditiveBlend, nullptr);
+			image(picture.shape, in_color(0.8f));
+			d->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
+			break;
+		case mc::MATERIAL_METALLIC: {
+			// White metal tinted in the color, its own glow keeps it the color: the body in the color, shaded by its
+			// form, the light of the map shining on it from above
+			image(picture.shape, in_color(1.f));
+			image(picture.texture, in_color(0.5f));
+			auto shine = [&](float a) { return ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, a * color.a)); };
+			d->AddCallback(AdditiveBlend, nullptr);
+			AddImageCorners(d, picture.shape, image_min, image_max, shine(0.35f), shine(0.18f), shine(0.f), shine(0.06f));
+			image(picture.shape, in_color(0.12f));
+			d->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
+			break;
+		}
+		default:
+			image(picture.texture, C(IM_COL32_WHITE));
+			break;
+		}
+		return ImRect(image_min, image_max);
 	}
 
-	// The skeleton of the pre-rendered player, its joints read off the pictures: pixels of a frame (x, y down from
-	// the top) & how far forward of the body. Turned frame by frame like the picture, placed like it on the rect.
-	// Gives where the head is, for the head tracker
-	ImVec2 DrawPreviewSkeleton(ImDrawList* d, bool terrorist, ImVec2 min, ImVec2 max, float yaw, const color_t* color) {
-		namespace pp = player_preview;
+	// The joints of the agents in their pictures, 0 - 1 of the picture from its top left: the pose of the game is the same
+	// every time it is taken. The arm & leg on the left of the picture first
+	enum AgentJoint {
+		JOINT_HEAD, JOINT_NECK, JOINT_CHEST, JOINT_SPINE, JOINT_PELVIS,
+		JOINT_SHOULDER_L, JOINT_ELBOW_L, JOINT_HAND_L, JOINT_SHOULDER_R, JOINT_ELBOW_R, JOINT_HAND_R,
+		JOINT_HIP_L, JOINT_KNEE_L, JOINT_FOOT_L, JOINT_HIP_R, JOINT_KNEE_R, JOINT_FOOT_R,
+		JOINT_COUNT
+	};
 
-		struct Joint {
-			float x, y, forward;
-		};
+	// Measured on agent_t_v2.png & agent_ct_v3.png (2026-10-10): pictures of a new version need them measured again
+	constexpr ImVec2 AGENT_JOINTS[2][JOINT_COUNT] = {
+		// Number K
+		{ { 0.41f, 0.065f }, { 0.42f, 0.14f }, { 0.43f, 0.22f }, { 0.44f, 0.32f }, { 0.45f, 0.45f },
+		  { 0.18f, 0.18f }, { 0.08f, 0.32f }, { 0.34f, 0.34f }, { 0.70f, 0.17f }, { 0.86f, 0.35f }, { 0.87f, 0.52f },
+		  { 0.36f, 0.49f }, { 0.30f, 0.70f }, { 0.34f, 0.95f }, { 0.57f, 0.49f }, { 0.71f, 0.70f }, { 0.82f, 0.94f } },
+		// SAS
+		{ { 0.34f, 0.08f }, { 0.38f, 0.15f }, { 0.42f, 0.24f }, { 0.44f, 0.33f }, { 0.45f, 0.46f },
+		  { 0.15f, 0.19f }, { 0.17f, 0.32f }, { 0.61f, 0.35f }, { 0.66f, 0.18f }, { 0.84f, 0.31f }, { 0.70f, 0.37f },
+		  { 0.32f, 0.51f }, { 0.30f, 0.69f }, { 0.30f, 0.95f }, { 0.60f, 0.51f }, { 0.70f, 0.69f }, { 0.79f, 0.95f } },
+	};
 
-		Joint joints[24]{};
-		auto set = [&](int bone, float x, float y, float forward) { joints[bone] = { x, y, forward }; };
+	constexpr int AGENT_BONES[][2] = {
+		{ JOINT_HEAD, JOINT_NECK }, { JOINT_NECK, JOINT_CHEST }, { JOINT_CHEST, JOINT_SPINE }, { JOINT_SPINE, JOINT_PELVIS },
+		{ JOINT_NECK, JOINT_SHOULDER_L }, { JOINT_SHOULDER_L, JOINT_ELBOW_L }, { JOINT_ELBOW_L, JOINT_HAND_L },
+		{ JOINT_NECK, JOINT_SHOULDER_R }, { JOINT_SHOULDER_R, JOINT_ELBOW_R }, { JOINT_ELBOW_R, JOINT_HAND_R },
+		{ JOINT_PELVIS, JOINT_HIP_L }, { JOINT_HIP_L, JOINT_KNEE_L }, { JOINT_KNEE_L, JOINT_FOOT_L },
+		{ JOINT_PELVIS, JOINT_HIP_R }, { JOINT_HIP_R, JOINT_KNEE_R }, { JOINT_KNEE_R, JOINT_FOOT_R },
+	};
 
-		set(head, 117.f, 32.f, 8.f);
-		set(neck, 120.f, 55.f, 2.f);
-		set(chest, 124.f, 72.f, -4.f);
-		set(spine_2, 125.f, 88.f, -8.f);
-		set(spine_1, 126.f, 110.f, -10.f);
-		set(pelvis, 126.f, 145.f, -7.f);
+	ImVec2 AgentJointAt(bool terrorist, int joint, const ImRect& image) {
+		auto at = AGENT_JOINTS[terrorist ? 0 : 1][joint];
+		return ImVec2(image.Min.x + at.x * image.GetWidth(), image.Min.y + at.y * image.GetHeight());
+	}
 
-		// Holding the rifle at us: the right hand on the grip, the left one under the barrel
-		set(shoulder_R, 95.f, 70.f, 0.f);
-		set(elbow_R, 78.f, 108.f, 25.f);
-		set(hand_R, 112.f, 92.f, 50.f);
-		set(shoulder_L, 150.f, 68.f, 0.f);
-		set(elbow_L, 138.f, 105.f, 50.f);
-		set(hand_L, 108.f, 82.f, 90.f);
-
-		// Left foot forward
-		set(hip_R, 110.f, 150.f, -8.f);
-		set(knee_R, 100.f, 225.f, -15.f);
-		set(foot_heel_R, 92.f, 300.f, -55.f);
-		set(hip_L, 140.f, 150.f, -5.f);
-		set(knee_L, 150.f, 218.f, 22.f);
-		set(foot_heel_L, 150.f, 300.f, 50.f);
-
-		// The angle of the frame shown, the same rounding as DrawPlayerPicture
-		constexpr float STEP = 2.f * std::numbers::pi_v<float> / pp::FRAMES;
-		int frame = static_cast<int>(roundf(yaw / STEP)) % pp::FRAMES;
-		if (frame < 0)
-			frame += pp::FRAMES;
-		float angle = frame * STEP;
-		float c = cosf(angle), s = sinf(angle);
-
-		float breath = sinf(static_cast<float>(ImGui::GetTime()) * 2.2f);
-		float scale = (max.y - min.y) / (terrorist ? player_preview_t_height : player_preview_ct_height);
-		float scale_x = scale * (1.f + 0.004f * breath), scale_y = scale * (1.f + 0.006f * breath);
-		ImVec2 feet((min.x + max.x) * 0.5f, max.y);
-
-		auto place = [&](int bone) {
-			const auto& j = joints[bone];
-			float side = j.x - pp::FRAME_WIDTH * 0.5f;
-			return ImVec2(feet.x + (side * c - j.forward * s) * scale_x, feet.y + (j.y - pp::FEET) * scale_y);
-		};
-
-		if (color)
-			for (const auto& bone : connections)
-				d->AddLine(place(bone[0]), place(bone[1]), ImColor(*color), 1.5f);
-
-		return place(head);
+	// The skeleton on the picture, lines like the ESP draws them
+	void DrawAgentSkeleton(ImDrawList* d, bool terrorist, const ImRect& image, const color_t& color) {
+		for (const auto& bone : AGENT_BONES)
+			d->AddLine(AgentJointAt(terrorist, bone[0], image), AgentJointAt(terrorist, bone[1], image), ImColor(color), 1.5f);
 	}
 
 	// Flat shaded, sorted back to front, standing on the bottom of the rect
@@ -2592,7 +2941,7 @@ namespace {
 		draw();
 	}
 
-	// Sidebar tab, the selection highlight is drawn separately so it can slide between tabs
+	// Category of the sidebar, lit with the accent & a soft glow when picked
 	bool SidebarItem(const char* icon, const char* label, bool active, ImVec2 pos, ImVec2 size) {
 		ImGui::PushID(label);
 
@@ -2604,12 +2953,14 @@ namespace {
 		float h = Animate(ImGui::GetItemID() + 1, hovered && !active ? 1.f : 0.f, 16.f);
 
 		auto d = ImGui::GetWindowDrawList();
+		const float rounding = S(8.f);
 
-		// The selected one in navy, fading in & out
-		if (t > 0.01f)
-			d->AddRectFilled(pos, pos + size, C(col::selected, t), S(5.f));
+		if (t > 0.01f) {
+			SoftGlow(d, pos, pos + size, col::accent, rounding, t * 0.9f);
+			d->AddRectFilled(pos, pos + size, C(col::accent, t), rounding);
+		}
 		if (h > 0.01f)
-			d->AddRectFilled(pos, pos + size, C(col::hover, h), S(5.f));
+			d->AddRectFilled(pos, pos + size, C(col::hover, h * 2.f), rounding);
 
 		auto text_y = pos.y + (size.y - ImGui::GetTextLineHeight()) * 0.5f;
 
@@ -2623,14 +2974,17 @@ namespace {
 			icon_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, icon);
 		}
 
-		auto icon_pos = ImVec2(pos.x + S(10.f) + (icon_box - icon_size.x) * 0.5f, pos.y + (size.y - icon_size.y) * 0.5f);
-		d->AddText(font, font_size, ImVec2(floorf(icon_pos.x), floorf(icon_pos.y)), C(col::accent, 0.55f + 0.45f * std::max(t, h)), icon);
-		d->AddText(ImVec2(pos.x + S(36.f), text_y), LerpColor(col::text_label, col::text, std::max(t, h)), label);
+		auto color = LerpColor(LerpColor(col::text_dim, col::text, h), OnAccent(), t);
+		auto icon_pos = ImVec2(pos.x + S(14.f) + (icon_box - icon_size.x) * 0.5f, pos.y + (size.y - icon_size.y) * 0.5f);
+		d->AddText(font, font_size, ImVec2(floorf(icon_pos.x), floorf(icon_pos.y)), color, icon);
+		d->AddText(ImVec2(pos.x + S(44.f), text_y), color, label);
 
 		ImGui::PopID();
 		return pressed;
 	}
 }
+
+static void RefreshTheme();
 
 bool Menu::Init() {
 	return GetInstance().InitImpl();
@@ -2675,6 +3029,7 @@ void Menu::RenderImpl() {
 
 	col::accent = ImGui::ColorConvertFloat4ToU32(ImVec4(cfg::settings::accent.r, cfg::settings::accent.g, cfg::settings::accent.b, 1.f));
 	col::backdrop = std::clamp(cfg::settings::menu_opacity, 0.3f, 1.f);
+	RefreshTheme();
 
 	auto& io = ImGui::GetIO();
 	bool open = Renderer::IsOpen();
@@ -2707,7 +3062,7 @@ void Menu::RenderImpl() {
 	ImGui::SetNextWindowPos(io.DisplaySize * 0.5f - MENU_SIZE * 0.5f, ImGuiCond_FirstUseEver);
 
 	// Text of the menu follows its scale, the fonts are made at the size they are used
-	ImGui::PushFont(font_regular, S(16.f));
+	ImGui::PushFont(font_regular, S(15.f));
 
 	ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
@@ -2781,7 +3136,10 @@ static bool HasPickedMod();
 void Menu::RenderPreviewPanel(float alpha) {
 	bool profile = active_tab == Tab::MISC && misc_page == 1;
 	bool mod = active_tab == Tab::SKINS && skin_page == SkinPage::MODEL_BROWSER && HasPickedMod();
-	if (active_tab != Tab::PLAYERS && active_tab != Tab::BOMB && active_tab != Tab::PROJECTILES && active_tab != Tab::ITEMS && !profile && !mod)
+	bool skin = active_tab == Tab::SKINS && (skin_page == SkinPage::SKINS || skin_page == SkinPage::GLOVES ||
+		skin_page == SkinPage::KNIVES || skin_page == SkinPage::AGENTS || skin_page == SkinPage::MUSIC_KITS);
+
+	if (active_tab != Tab::PLAYERS && active_tab != Tab::BOMB && active_tab != Tab::PROJECTILES && active_tab != Tab::ITEMS && !profile && !mod && !skin)
 		return;
 
 	auto& io = ImGui::GetIO();
@@ -2796,7 +3154,7 @@ void Menu::RenderPreviewPanel(float alpha) {
 	float tab = EaseOutCubic(tab_progress);
 	if (profile)
 		tab *= EaseOutCubic(misc_page_progress);	// Comes in with the page too
-	if (mod)
+	if (mod || skin)
 		tab *= EaseOutCubic(skin_page_progress);
 
 	ImGui::SetNextWindowPos(at, ImGuiCond_Always);
@@ -2807,7 +3165,7 @@ void Menu::RenderPreviewPanel(float alpha) {
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
 
 	auto flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-		ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings;
+		ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings;
 
 	// Closing, it is only fading out
 	if (!Renderer::IsOpen())
@@ -2835,7 +3193,7 @@ void Menu::RenderPreviewPanel(float alpha) {
 		case Tab::PROJECTILES:  RenderProjectilesPreview(); break;
 		case Tab::ITEMS:        RenderItemsPreview();       break;
 		case Tab::MISC:         ProfilePanel();             break;
-		case Tab::SKINS:        ModBrowserPanel();          break;
+		case Tab::SKINS:        RenderSkinPanel();          break;
 		default: break;
 		}
 
@@ -2855,12 +3213,12 @@ void Menu::RenderBackground() {
 	bg->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize, C(col::shadow, 0.2f));
 	Outline(bg, pos, max, WINDOW_ROUNDING);
 
-	// Sidebar, header band & content, the game a little visible through them
+	// Sidebar & content, the game a little visible through them. Light from above on the top edge
 	d->AddRectFilled(pos, ImVec2(pos.x + SIDEBAR_WIDTH, max.y), C(col::sidebar, col::backdrop), WINDOW_ROUNDING, ImDrawFlags_RoundCornersLeft);
-	d->AddRectFilled(ImVec2(pos.x + SIDEBAR_WIDTH, pos.y), ImVec2(max.x, pos.y + HEADER_HEIGHT), C(col::header, col::backdrop), WINDOW_ROUNDING, ImDrawFlags_RoundCornersTopRight);
-	d->AddRectFilled(ImVec2(pos.x + SIDEBAR_WIDTH, pos.y + HEADER_HEIGHT), max, C(col::window, col::backdrop), WINDOW_ROUNDING, ImDrawFlags_RoundCornersBottomRight);
+	d->AddRectFilled(ImVec2(pos.x + SIDEBAR_WIDTH, pos.y), max, C(col::window, col::backdrop), WINDOW_ROUNDING, ImDrawFlags_RoundCornersRight);
 
 	d->AddLine(ImVec2(pos.x + SIDEBAR_WIDTH, pos.y), ImVec2(pos.x + SIDEBAR_WIDTH, max.y), C(col::border));
+	d->AddLine(ImVec2(pos.x + WINDOW_ROUNDING, pos.y + 0.5f), ImVec2(max.x - WINDOW_ROUNDING, pos.y + 0.5f), C(col::highlight));
 	d->AddRect(pos, max, C(col::border), WINDOW_ROUNDING, 0, 1.f);
 }
 
@@ -2871,10 +3229,20 @@ void Menu::RenderSidebar() {
 	{
 		const float brand_size = S(24.f);
 		auto brand_width = font_bold->CalcTextSizeA(brand_size, FLT_MAX, 0.f, BRAND_TITLE).x;
-		auto brand_pos = ImVec2(floorf(pos.x + (SIDEBAR_WIDTH - brand_width) * 0.5f), pos.y + S(18.f));
+		auto brand_pos = ImVec2(floorf(pos.x + (SIDEBAR_WIDTH - brand_width) * 0.5f), pos.y + S(22.f));
 
 		d->AddText(font_bold, brand_size, brand_pos + ImVec2(1.f, 0.f), C(col::accent, 0.6f), BRAND_TITLE);
 		d->AddText(font_bold, brand_size, brand_pos, C(col::text), BRAND_TITLE);
+
+		// A short line of the accent under it, fading out at both ends
+		float line_y = brand_pos.y + brand_size + S(12.f);
+		float center = pos.x + SIDEBAR_WIDTH * 0.5f;
+		float half = S(34.f);
+		d->AddRectFilledMultiColor(ImVec2(center - half, line_y), ImVec2(center, line_y + S(2.f)),
+			C(col::accent, 0.f), C(col::accent), C(col::accent), C(col::accent, 0.f));
+		d->AddRectFilledMultiColor(ImVec2(center, line_y), ImVec2(center + half, line_y + S(2.f)),
+			C(col::accent), C(col::accent, 0.f), C(col::accent, 0.f), C(col::accent));
+
 	}
 
 	// Bottom: the author's GitHub picture, name & the version under a line. Clicked it opens the credits & the accent
@@ -3033,156 +3401,236 @@ void Menu::RenderSidebar() {
 		ImGui::PopStyleVar(2);
 	}
 
-	// Tabs
+	// Categories, the pages of one are pills in the header. Visuals & settings open on the page last seen
+	bool visuals = active_tab == Tab::PLAYERS || active_tab == Tab::ITEMS || active_tab == Tab::PROJECTILES || active_tab == Tab::BOMB;
+	bool settings = active_tab == Tab::SETTINGS || active_tab == Tab::CONFIGS;
+	if (visuals)
+		last_visuals_tab = active_tab;
+	if (settings)
+		last_settings_tab = active_tab;
+
 	struct Entry {
-		const char* caption; // Section title instead of a tab when set
-		Tab tab;
 		const char* label;
 		const char* icon;
+		Tab tab;
+		bool active;
 	};
 
 	const Entry entries[] = {
-		{ "Visuals", {}, nullptr, nullptr },
-		{ nullptr, Tab::PLAYERS, "Players", Icons::PEOPLE },
-		{ nullptr, Tab::BOMB, "Bomb", WeaponIcons::C4 },
-		{ nullptr, Tab::PROJECTILES, "Projectiles", WeaponIcons::SMOKEGRENADE },
-		{ nullptr, Tab::ITEMS, "Items", WeaponIcons::DEAGLE },
-		{ "Inventory", {}, nullptr, nullptr },
-		{ nullptr, Tab::SKINS, "Skins", WeaponIcons::AK47 },
-		{ "Common", {}, nullptr, nullptr },
-		{ nullptr, Tab::MOVEMENT, "Movement", Icons::PERSON },
-		{ nullptr, Tab::MISC, "Misc", Icons::GLOBE },
-		{ nullptr, Tab::CONFIGS, "Configs", Icons::RELOAD },
-		{ nullptr, Tab::SETTINGS, "Settings", Icons::SETTINGS },
+		{ "Visuals", Icons::PEOPLE, last_visuals_tab, visuals },
+		{ "Skins", WeaponIcons::AK47, Tab::SKINS, active_tab == Tab::SKINS },
+		{ "Movement", Icons::PERSON, Tab::MOVEMENT, active_tab == Tab::MOVEMENT },
+		{ "Misc", Icons::GLOBE, Tab::MISC, active_tab == Tab::MISC },
+		{ "Settings", Icons::SETTINGS, last_settings_tab, settings },
 	};
 
-	const float margin = S(10.f);
-	const ImVec2 item_size(SIDEBAR_WIDTH - margin * 2.f, S(30.f));
-
-	float y = pos.y + S(66.f);
-	bool first_caption = true;
+	const float margin = S(12.f);
+	const ImVec2 item_size(SIDEBAR_WIDTH - margin * 2.f, S(38.f));
+	float y = pos.y + S(80.f);
 
 	for (const auto& entry : entries) {
-		if (entry.caption) {
-			if (!first_caption)
-				y += S(10.f);
-			first_caption = false;
-
-			d->AddText(font_regular, S(14.f), ImVec2(pos.x + margin + S(10.f), y + S(4.f)), C(col::text_faint), entry.caption);
-			y += S(24.f);
-			continue;
-		}
-
-		if (SidebarItem(entry.icon, entry.label, active_tab == entry.tab, ImVec2(pos.x + margin, y), item_size) && active_tab != entry.tab) {
+		if (SidebarItem(entry.icon, entry.label, entry.active, ImVec2(pos.x + margin, y), item_size) && !entry.active) {
 			active_tab = entry.tab;
 			tab_progress = 0.f;
 		}
 
-		y += item_size.y + S(2.f);
+		y += item_size.y + S(6.f);
 	}
 }
 
 void Menu::RenderHeader() {
 	auto d = ImGui::GetWindowDrawList();
 
-	const char* title = "";
-
-	switch (active_tab) {
-	case Tab::PLAYERS:		title = "Players";		break;
-	case Tab::BOMB:			title = "Bomb";			break;
-	case Tab::ITEMS:		title = "Items";		break;
-	case Tab::PROJECTILES:	title = "Projectiles";	break;
-	case Tab::SKINS:		title = "Skins";		break;
-	case Tab::MOVEMENT:		title = "Movement";		break;
-	case Tab::MISC:			title = "Misc";			break;
-	case Tab::CONFIGS:		title = "Configs";		break;
-	case Tab::SETTINGS:		title = "Settings";		break;
-	}
-
-	// Title slides in with the content, in the middle of the header
 	float tab = EaseOutCubic(tab_progress);
 	float x = pos.x + SIDEBAR_WIDTH + CONTENT_PADDING;
-	float slide = (1.f - tab) * 10.f;
+	const float pill_height = S(30.f);
+	float pill_y = pos.y + (HEADER_HEIGHT - pill_height) * 0.5f;
 
-	d->AddText(font_bold, S(19.f), ImVec2(x + slide, pos.y + (HEADER_HEIGHT - S(19.f)) * 0.5f), C(col::text, tab), title);
+	bool visuals = active_tab == Tab::PLAYERS || active_tab == Tab::ITEMS || active_tab == Tab::PROJECTILES || active_tab == Tab::BOMB;
+	bool settings = active_tab == Tab::SETTINGS || active_tab == Tab::CONFIGS;
 
-	d->AddLine(
-		ImVec2(pos.x + SIDEBAR_WIDTH, pos.y + HEADER_HEIGHT),
-		ImVec2(pos.x + size.x, pos.y + HEADER_HEIGHT),
-		C(col::border)
-	);
+	// The pages of the category, its name when it has one page
+	if (visuals) {
+		static const std::vector<const char*> pages = { "Players", "Items", "Projectiles", "Bomb" };
+		const Tab tabs[] = { Tab::PLAYERS, Tab::ITEMS, Tab::PROJECTILES, Tab::BOMB };
 
-	// Right side: the DPI scale of the menu, then the notifications switch left of it
-	const float pill_height = S(28.f);
-	const float pill_y = pos.y + (HEADER_HEIGHT - pill_height) * 0.5f;
-	float right = pos.x + size.x - CONTENT_PADDING;
+		int current = 0;
+		for (int i = 0; i < IM_ARRAYSIZE(tabs); i++)
+			if (tabs[i] == active_tab)
+				current = i;
 
-	auto pill = [&](ImVec2 min, ImVec2 pill_size) {
-		d->AddRectFilled(min, min + pill_size, C(col::button), S(4.f));
-		d->AddRect(min, min + pill_size, C(col::border), S(4.f));
-	};
+		int clicked = PagePills("##visual_pages", pages, current, ImVec2(x, pill_y), pill_height);
+		if (clicked >= 0) {
+			active_tab = tabs[clicked];
+			tab_progress = 0.f;
+		}
+	}
+	else if (active_tab == Tab::MISC) {
+		static const std::vector<const char*> pages = { "Camera", "Profile", "Interface", "Effects" };
 
-	// DPI scale, steps of 5%. Applied the same way as before, once the mouse is let go
-	{
-		constexpr auto label = "DPI";
-		auto label_size = ImGui::CalcTextSize(label);
-		auto value = std::format("{:.0f}%", std::round(cfg::settings::ui_scale * 20.f) * 5.f);
-		auto value_size = ImGui::CalcTextSize("160%");
+		int clicked = PagePills("##misc_pages", pages, misc_page, ImVec2(x, pill_y), pill_height);
+		if (clicked >= 0) {
+			misc_page = clicked;
+			misc_page_progress = 0.f;
+		}
+	}
+	else if (settings) {
+		static const std::vector<const char*> pages = { "General", "Configs" };
 
-		const float button = S(20.f);
-		auto pill_size = ImVec2(S(14.f) + label_size.x + S(10.f) + button + S(6.f) + value_size.x + S(6.f) + button + S(5.f), pill_height);
-		auto min = ImVec2(right - pill_size.x, pill_y);
-		pill(min, pill_size);
-
-		float text_y = min.y + (pill_height - label_size.y) * 0.5f;
-		d->AddText(ImVec2(min.x + S(14.f), text_y), C(col::text_dim), label);
-
-		auto step_button = [&](const char* id, const char* sign, ImVec2 at, float delta) {
-			ImGui::SetCursorScreenPos(at);
-			bool pressed = ImGui::InvisibleButton(id, ImVec2(button, button));
-			float hover = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() ? 1.f : 0.f, 16.f);
-
-			auto center = at + ImVec2(button, button) * 0.5f;
-			d->AddRectFilled(center - ImVec2(button, button) * 0.5f, center + ImVec2(button, button) * 0.5f, LerpColor(col::track, col::track_hover, hover), S(3.f));
-
-			auto sign_size = ImGui::CalcTextSize(sign);
-			d->AddText(center - sign_size * 0.5f, C(LerpColor(col::text_dim, col::accent, hover)), sign);
-
-			if (pressed)
-				cfg::settings::ui_scale = std::clamp(std::round((cfg::settings::ui_scale + delta) * 20.f) / 20.f, 0.8f, 1.6f);
-		};
-
-		float x = min.x + S(14.f) + label_size.x + S(10.f);
-		float button_y = min.y + (pill_height - button) * 0.5f;
-		step_button("##scale_down", "-", ImVec2(x, button_y), -0.05f);
-
-		x += button + S(6.f);
-		auto shown_size = ImGui::CalcTextSize(value.c_str());
-		d->AddText(ImVec2(x + (value_size.x - shown_size.x) * 0.5f, text_y), C(col::text), value.c_str());
-
-		x += value_size.x + S(6.f);
-		step_button("##scale_up", "+", ImVec2(x, button_y), 0.05f);
-
-		right = min.x - S(8.f);
+		int clicked = PagePills("##settings_pages", pages, active_tab == Tab::CONFIGS ? 1 : 0, ImVec2(x, pill_y), pill_height);
+		if (clicked >= 0) {
+			active_tab = clicked == 1 ? Tab::CONFIGS : Tab::SETTINGS;
+			tab_progress = 0.f;
+		}
+	}
+	else {
+		// Slides in with the content
+		const char* title = active_tab == Tab::SKINS ? "Skins" : "Movement";
+		float slide = (1.f - tab) * 10.f;
+		d->AddText(font_bold, S(19.f), ImVec2(x + slide, pos.y + (HEADER_HEIGHT - S(19.f)) * 0.5f), C(col::text, tab), title);
 	}
 
-	// Notifications: map building, notices of the program, the ESP off message
-	{
-		constexpr auto label = "Notifications";
+	// Players: team or enemy, then the switch of that group at the right edge
+	if (active_tab == Tab::PLAYERS) {
+		auto& group = esp_group == 0 ? cfg::esp::team : cfg::esp::enemy;
+		float right = pos.x + size.x - CONTENT_PADDING;
+
+		auto switch_pos = ImVec2(right - TOGGLE_SIZE.x, pos.y + (HEADER_HEIGHT - TOGGLE_SIZE.y) * 0.5f);
+		ToggleSwitch("##group_enabled", &group.enabled, switch_pos);
+
+		constexpr auto label = "ESP";
 		auto label_size = ImGui::CalcTextSize(label);
+		float label_x = switch_pos.x - S(10.f) - label_size.x;
+		d->AddText(ImVec2(label_x, pos.y + (HEADER_HEIGHT - label_size.y) * 0.5f), C(group.enabled ? col::text : col::text_dim), label);
 
-		auto pill_size = ImVec2(TOGGLE_SIZE.x + label_size.x + S(44.f), pill_height);
-		auto min = ImVec2(right - pill_size.x, pill_y);
-		pill(min, pill_size);
+		float group_width = TabSwitchWidth({ "Team", "Enemy" });
+		TabSwitch("##esp_group", &esp_group, { "Team", "Enemy" }, ImVec2(label_x - S(16.f) - group_width, pill_y), pill_height);
+	}
+}
 
-		float on = Animate(ImGui::GetID("##notifications_state"), cfg::settings::notifications ? 1.f : 0.f, 10.f);
-		auto dot = ImVec2(min.x + S(15.f), min.y + pill_height * 0.5f);
+// The flags not placed on the preview: a button opens them by kind, clicked they go where they usually are, dragged next
+// to the box of the preview where they are dropped. A placed flag dragged on it is taken off
+static void AddFlagRow(cfg::esp::group_t& group, ImFont* title_font) {
+	auto d = ImGui::GetWindowDrawList();
+	auto payload = ImGui::GetDragDropPayload();
+	bool dragging = payload && payload->IsDataType(FLAG_PAYLOAD);
+	auto mouse = ImGui::GetIO().MousePos;
+	float width = ImGui::GetContentRegionAvail().x;
 
-		d->AddCircleFilled(dot, S(3.5f), LerpColor(col::text_faint, col::accent, on), 16);
-		d->AddText(ImVec2(dot.x + S(10.f), min.y + (pill_height - label_size.y) * 0.5f), LerpColor(col::text_dim, col::text, on), label);
+	std::vector<int> unused;
+	for (int flag = 0; flag < cfg::esp::FLAG_COUNT; flag++) {
+		if (flag == cfg::esp::FLAG_HEALTH)
+			continue;
 
-		auto switch_pos = ImVec2(min.x + pill_size.x - TOGGLE_SIZE.x - S(8.f), min.y + (pill_height - TOGGLE_SIZE.y) * 0.5f);
-		ToggleSwitch("##notifications", &cfg::settings::notifications, switch_pos);
+		bool placed = false;
+		for (const auto& side : group.layout)
+			placed |= std::find(side.begin(), side.end(), flag) != side.end();
+
+		if (!placed)
+			unused.push_back(flag);
+	}
+
+	auto row_min = ImGui::GetCursorScreenPos();
+	auto row_max = row_min + ImVec2(width, CHIP_HEIGHT + S(8.f));
+	std::optional<int> added, removed;
+
+	if (dragging) {
+		// Where a placed flag goes back
+		bool hovered = ImRect(row_min, row_max).Contains(mouse);
+		d->AddRectFilled(row_min, row_max, C(hovered ? col::track_hover : col::track), S(6.f));
+		d->AddRect(row_min, row_max, C(col::accent, hovered ? 0.8f : 0.35f), S(6.f));
+		const char* text = "Drop here to take it off";
+		auto text_size = ImGui::CalcTextSize(text);
+		d->AddText(ImVec2(floorf(row_min.x + (width - text_size.x) * 0.5f), floorf(row_min.y + (row_max.y - row_min.y - text_size.y) * 0.5f)), C(col::text_dim), text);
+	}
+	else {
+		auto label = unused.empty() ? std::string("Every flag is placed") : std::format("+  Add Flag  ({})", unused.size());
+		ImGui::BeginDisabled(unused.empty());
+		if (PillButton(label.c_str(), row_min, row_max - row_min, false, "The flags not on the preview yet: click one to add it, or drag it next to the box of the preview"))
+			ImGui::OpenPopup("##add_flag");
+		ImGui::EndDisabled();
+	}
+
+	if (ImGui::BeginDragDropTargetCustom(ImRect(row_min, row_max), ImGui::GetID("##flag_row"))) {
+		if (auto accepted = ImGui::AcceptDragDropPayload(FLAG_PAYLOAD))
+			removed = *static_cast<const int*>(accepted->Data);
+		ImGui::EndDragDropTarget();
+	}
+
+	// Under the row, as wide. Stays open while a flag is dragged out of it
+	ImGui::SetNextWindowPos(ImVec2(row_min.x, row_max.y + S(6.f)), ImGuiCond_Appearing);
+	ImGui::SetNextWindowSize(ImVec2(width, 0.f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(10.f), S(10.f)));
+	if (ImGui::BeginPopup("##add_flag", ImGuiWindowFlags_NoMove)) {
+		struct Kind {
+			const char* name;
+			std::vector<int> flags;
+		};
+		namespace e = cfg::esp;
+		const Kind kinds[] = {
+			{ "INFO", { e::FLAG_NAME, e::FLAG_HEALTH_BAR, e::FLAG_ARMOR_BAR, e::FLAG_MONEY, e::FLAG_PING, e::FLAG_WEAPON,
+				e::FLAG_WEAPON_NAME, e::FLAG_AMMO, e::FLAG_DISTANCE } },
+			{ "STATES", { e::FLAG_RELOADING_TEXT, e::FLAG_SCOPED_TEXT, e::FLAG_FLASHED_TEXT, e::FLAG_DEFUSING, e::FLAG_C4, e::FLAG_KIT } },
+			{ "ICONS", { e::FLAG_RELOADING, e::FLAG_SCOPED, e::FLAG_FLASHED } },
+		};
+
+		auto popup_draw = ImGui::GetWindowDrawList();
+		float inner = ImGui::GetContentRegionAvail().x;
+		bool any = false;
+		for (const auto& kind : kinds) {
+			std::vector<int> shown;
+			for (int flag : kind.flags)
+				if (std::find(unused.begin(), unused.end(), flag) != unused.end())
+					shown.push_back(flag);
+			if (shown.empty())
+				continue;
+
+			if (any)
+				ImGui::Dummy(ImVec2(0.f, S(8.f)));
+			any = true;
+
+			auto title_at = ImGui::GetCursorScreenPos();
+			popup_draw->AddText(title_font, S(11.f), title_at, C(col::text_faint), kind.name);
+			ImGui::Dummy(ImVec2(inner, S(16.f)));
+
+			auto chips_min = ImGui::GetCursorScreenPos();
+			auto positions = LayoutChips(shown, chips_min, chips_min + ImVec2(inner, 0.f), false);
+			float chips_height = CHIP_HEIGHT;
+			for (const auto& p : positions)
+				chips_height = std::max(chips_height, p.y + CHIP_HEIGHT - chips_min.y);
+
+			for (size_t i = 0; i < shown.size(); i++)
+				if (FlagChip(shown[i], positions[i], false) == 1)
+					added = shown[i];
+
+			ImGui::SetCursorScreenPos(chips_min);
+			ImGui::Dummy(ImVec2(inner, chips_height));
+		}
+
+		if (added || unused.empty())
+			ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+	ImGui::PopStyleVar();
+
+	ImGui::SetCursorScreenPos(ImVec2(row_min.x, row_max.y));
+	ImGui::Dummy(ImVec2(width, S(6.f)));
+
+	if (removed)
+		RemoveFlag(group, *removed);
+	else if (added) {
+		// Clicked, goes where it usually is
+		int flag = *added;
+		int side = cfg::esp::SIDE_RIGHT;
+
+		if (IsBarFlag(flag))
+			side = cfg::esp::SIDE_LEFT;
+		else if (flag == cfg::esp::FLAG_NAME)
+			side = cfg::esp::SIDE_TOP;
+		else if (flag == cfg::esp::FLAG_WEAPON || flag == cfg::esp::FLAG_WEAPON_NAME || flag == cfg::esp::FLAG_AMMO || flag == cfg::esp::FLAG_DISTANCE)
+			side = cfg::esp::SIDE_BOTTOM;
+
+		group.layout[side].push_back(flag);
 	}
 }
 
@@ -3192,18 +3640,18 @@ void Menu::RenderPlayersPreview() {
 	// The layout of the flags around a preview of the player
 	ImGui::BeginDisabled(!group.enabled);
 	{
-		BeginPanel("LAYOUT");
+		BeginPreview("LAYOUT");
 
 		auto d = ImGui::GetWindowDrawList();
 		auto preview_min = ImGui::GetCursorScreenPos();
-		auto preview_size = ImVec2(ImGui::GetContentRegionAvail().x, S(370.f));
+		auto preview_size = ImVec2(ImGui::GetContentRegionAvail().x, S(470.f));
 		auto preview_max = preview_min + preview_size;
 
 		d->AddRectFilled(preview_min, preview_max, C(col::window), S(8.f));
 
-		// Box in the middle, room around it for the flags
-		auto box_size = ImVec2(floorf(preview_size.x * 0.36f), floorf(preview_size.y * 0.66f));
-		auto box_min = ImVec2(floorf(preview_min.x + (preview_size.x - box_size.x) * 0.5f), floorf(preview_min.y + preview_size.y * 0.16f));
+		// Box in the middle, big like the agent in it, room around it for the flags
+		auto box_size = ImVec2(floorf(preview_size.x * 0.52f), floorf(preview_size.y * 0.84f));
+		auto box_min = ImVec2(floorf(preview_min.x + (preview_size.x - box_size.x) * 0.5f), floorf(preview_min.y + preview_size.y * 0.08f));
 		auto box_max = box_min + box_size;
 
 		auto payload = ImGui::GetDragDropPayload();
@@ -3212,62 +3660,55 @@ void Menu::RenderPlayersPreview() {
 
 		d->PushClipRect(preview_min, preview_max, true);
 
-		// Enemies are the other team of ours, T when we are not in a game
-		int local_team = Cache::Current()->local.team;
-		bool terrorist = esp_group == 0 ? local_team == 2 : local_team != 2;
+		// Always the same: enemies are T (Number K), the team is CT
+		bool terrorist = esp_group != 0;
 
-		// Stands idle facing us, drag to turn it
+		// The picture of the agent taken from the game when the program started
+		auto picture = GetAgentPicture(terrorist, false);
+
 		ImGui::SetCursorScreenPos(box_min);
 		ImGui::InvisibleButton("##model", box_size);
 
-		if (ImGui::IsItemActive())
-			model_yaw += ImGui::GetIO().MouseDelta.x * 0.012f;
-
-		if (ImGui::IsItemHovered() && !ImGui::IsItemActive() && !dragging)
-			ShowTooltip("Drag to turn the model");
-
-		// The pre-rendered picture, the plain model when the picture cannot be made, a figure without both
+		// The picture of the agent, the plain model without it (no -insecure yet to take it), a figure without both
 		auto model_min = box_min + ImVec2(0.f, box_size.y * 0.04f), model_max = box_max - ImVec2(0.f, box_size.y * 0.015f);
 		auto glow = esp_group == 0
 			? PreviewGlow(cfg::visuals::glow::team, cfg::visuals::glow::team_color)
 			: PreviewGlow(cfg::visuals::glow::enemies, cfg::visuals::glow::enemy_color);
 
-		// Textured chams multiply the model by the color. The glow of the game covers it in the color, about
-		// two thirds by the strength (the alpha), the shading still showing: tinted, then the color over it
-		bool chams = Visuals::IsAvailable() && (esp_group == 0 ? cfg::visuals::chams::team : cfg::visuals::chams::enemies);
-		const auto& chams_color = esp_group == 0 ? cfg::visuals::chams::team_color : cfg::visuals::chams::enemy_color;
-		int chams_type = Visuals::HasModelGlow()
-			? (esp_group == 0 ? cfg::visuals::chams::team_type : cfg::visuals::chams::enemy_type)
-			: cfg::visuals::chams::TYPE_TEXTURED;
-		namespace chams_cfg = cfg::visuals::chams;
-		bool chams_glow = chams && chams_type != chams_cfg::TYPE_TEXTURED;
-		ImU32 tint = 0;
-		if (chams && chams_type != chams_cfg::TYPE_GLOW)
-			tint = ImGui::GetColorU32(ImVec4(chams_color.r, chams_color.g, chams_color.b, 1.f));
-		float coat_alpha = 0.45f * chams_color.a;
-		ImU32 coat = chams_glow ? ImGui::GetColorU32(ImVec4(chams_color.r, chams_color.g, chams_color.b, coat_alpha)) : 0;
+		// No material chams on the preview (user's choice: they did not look like the game), the agent as it is
+		constexpr int material = -1;
+		const color_t material_color{};
 
-		if (!DrawPlayerPicture(d, terrorist, model_min, model_max, model_yaw, glow, tint, coat)) {
-			if (auto model = GetPreviewModel(terrorist ? "t" : "ct"))
-				DrawModel(d, *model, model_min, model_max, model_yaw, chams ? ImGui::ColorConvertFloat4ToU32(ImVec4(chams_color.r, chams_color.g, chams_color.b, 1.f)) : IM_COL32(205, 205, 212, 255), glow);
-			else {
-				auto figure_inset = ImVec2(box_size.x * 0.14f, box_size.y * 0.05f);
-				DrawFigure(d, box_min + figure_inset, box_max - figure_inset, C(col::text_faint, 0.9f));
-			}
+		std::optional<ImRect> image;
+		if (picture) {
+			GetAgentPicture(terrorist, glow || material >= 0);	// Its shape for the glow & the materials, made once needed
+			image = DrawAgentPicture(d, *picture, model_min, model_max, glow, material, material_color);
+		}
+		else if (auto model = GetPreviewModel(terrorist ? "t" : "ct"))
+			DrawModel(d, *model, model_min, model_max, 0.f, material >= 0
+				? ImGui::ColorConvertFloat4ToU32(ImVec4(material_color.r, material_color.g, material_color.b, 1.f))
+				: IM_COL32(205, 205, 212, 255), glow);
+		else {
+			auto figure_inset = ImVec2(box_size.x * 0.14f, box_size.y * 0.05f);
+			DrawFigure(d, box_min + figure_inset, box_max - figure_inset, C(col::text_faint, 0.9f));
 		}
 
 		// What the ESP draws on a player, with the same code
 		auto [preview_local, preview_player] = PreviewPlayers();
 
 		if (group.box)
-			Esp::DrawBox(d, box_min, box_max, group.box_visible);
+			Esp::DrawBox(d, box_min, box_max, group.box_visible, group.box_style);
 		else if (dragging)
 			d->AddRect(box_min, box_max, C(col::border_hover), 0.f, 0, 1.f);
 
-		// Skeleton on the model, the head tracker around its head about the size it has in the game
-		auto head_at = DrawPreviewSkeleton(d, terrorist, model_min, model_max, model_yaw, group.skeleton ? &group.skeleton_visible : nullptr);
+		// Skeleton on the agent, the head tracker around its head about the size it has in the game
+		if (image && group.skeleton)
+			DrawAgentSkeleton(d, terrorist, *image, group.skeleton_visible);
 		if (group.head_tracker) {
-			float head_radius = (model_max.y - model_min.y) * 0.04f;
+			auto head_at = image
+				? AgentJointAt(terrorist, JOINT_HEAD, *image)
+				: ImVec2((model_min.x + model_max.x) * 0.5f, model_min.y + (model_max.y - model_min.y) * 0.06f);
+			float head_radius = (model_max.y - model_min.y) * 0.045f;
 			Esp::DrawTracker(d, head_at, head_radius * 6.f, group.tracker_visible);
 		}
 
@@ -3377,58 +3818,6 @@ void Menu::RenderPlayersPreview() {
 		}
 
 		ImGui::SetCursorScreenPos(ImVec2(preview_min.x, preview_max.y));
-		ImGui::Dummy(ImVec2(preview_size.x, S(12.f)));
-
-		// Flags that are not placed, dropping one here removes it
-		auto palette_title = ImGui::GetCursorScreenPos();
-		d->AddText(font_bold, S(11.f), palette_title, C(col::text_faint), "AVAILABLE");
-		ImGui::Dummy(ImVec2(preview_size.x, S(18.f)));
-
-		std::vector<int> unused;
-		for (int flag = 0; flag < cfg::esp::FLAG_COUNT; flag++) {
-			if (flag == cfg::esp::FLAG_HEALTH)
-				continue;
-
-			bool placed = false;
-			for (const auto& side : group.layout)
-				placed |= std::find(side.begin(), side.end(), flag) != side.end();
-
-			if (!placed)
-				unused.push_back(flag);
-		}
-
-		auto palette_min = ImGui::GetCursorScreenPos();
-		auto palette_positions = LayoutChips(unused, palette_min - ImVec2(0.f, S(4.f)), palette_min + ImVec2(preview_size.x, 0.f), false);
-
-		float palette_height = CHIP_HEIGHT;
-		for (const auto& p : palette_positions)
-			palette_height = std::max(palette_height, p.y + CHIP_HEIGHT - palette_min.y);
-
-		auto palette_max = palette_min + ImVec2(preview_size.x, palette_height);
-		std::optional<int> added;
-
-		if (unused.empty()) {
-			auto text = "Every flag is placed";
-			auto text_size = ImGui::CalcTextSize(text);
-			d->AddText(ImVec2(palette_min.x + (preview_size.x - text_size.x) * 0.5f, palette_min.y + (CHIP_HEIGHT - text_size.y) * 0.5f), C(col::text_faint), text);
-		}
-
-		for (size_t i = 0; i < unused.size(); i++)
-			if (FlagChip(unused[i], palette_positions[i], false) == 1)
-				added = unused[i];
-
-		bool palette_hovered = dragging && ImRect(palette_min, palette_max).Contains(mouse);
-		if (palette_hovered)
-			d->AddRect(palette_min - ImVec2(S(4.f), S(4.f)), palette_max + ImVec2(S(4.f), S(4.f)), C(col::accent, 0.6f), S(6.f));
-
-		if (ImGui::BeginDragDropTargetCustom(ImRect(palette_min - ImVec2(S(4.f), S(4.f)), palette_max + ImVec2(S(4.f), S(4.f))), ImGui::GetID("##palette"))) {
-			if (auto accepted = ImGui::AcceptDragDropPayload(FLAG_PAYLOAD))
-				removed = *static_cast<const int*>(accepted->Data);
-
-			ImGui::EndDragDropTarget();
-		}
-
-		ImGui::SetCursorScreenPos(ImVec2(palette_min.x, palette_max.y));
 		ImGui::Dummy(ImVec2(preview_size.x, S(4.f)));
 
 		// Changes after drawing, the lists were in use
@@ -3447,131 +3836,124 @@ void Menu::RenderPlayersPreview() {
 		else if (removed) {
 			RemoveFlag(group, *removed);
 		}
-		else if (added) {
-			// Clicked, goes where it usually is
-			int flag = *added;
-			int side = cfg::esp::SIDE_RIGHT;
 
-			if (IsBarFlag(flag))
-				side = cfg::esp::SIDE_LEFT;
-			else if (flag == cfg::esp::FLAG_NAME)
-				side = cfg::esp::SIDE_TOP;
-			else if (flag == cfg::esp::FLAG_WEAPON || flag == cfg::esp::FLAG_WEAPON_NAME || flag == cfg::esp::FLAG_AMMO || flag == cfg::esp::FLAG_DISTANCE)
-				side = cfg::esp::SIDE_BOTTOM;
-
-			group.layout[side].push_back(flag);
-		}
-
-		EndPanel();
+		EndPreview();
 	}
 	ImGui::EndDisabled();
 }
 
-void Menu::RenderPlayersTab() {
-	auto& group = esp_group == 0 ? cfg::esp::team : cfg::esp::enemy;
+// Rows of one group of the material chams: where it is seen, behind walls (null: never behind one), the material
+static void MaterialChamsRows(cfg::visuals::material_chams::group_t& chams, const char* visible_note, const char* hidden_note,
+	const char* visible_label = "Visible") {
+	constexpr auto unavailable = "Only available when the game is launched with -insecure";
+	static const std::vector<const char*> materials = { "Flat", "Glow", "Hologram", "Metallic" };
+	static const char* material_descriptions[] = {
+		"One color, no light or texture",
+		"Only the edges of the model lit in the color",
+		"See through, its color added over what is behind (black adds nothing: invisible)",
+		"Shiny metal in the color, lit by the map",
+	};
+	const char* missing = Engine::IsInsecure()
+		? "The drawing code of the game was not found in this game version"
+		: unavailable;
+	bool available = MaterialChams::IsAvailable();
 
-	// The whole content area, like the skins tab
-	auto origin = ImVec2(column_layout.x, column_layout.y);
-	auto region = ImVec2(column_layout.w * 2.f + COLUMN_SPACING, column_layout.h);
-	auto toolbar = ImGui::GetWindowPos() + origin;
-	const float toolbar_height = S(46.f);
-
-	// Toolbar: group tabs on the left, the switch of the group on the right
-	TabSwitch("##esp_group", &esp_group, { "Team", "Enemy" }, toolbar);
-
-	{
-		auto label = esp_group == 0 ? "Team ESP" : "Enemy ESP";
-		auto label_size = ImGui::CalcTextSize(label);
-		auto switch_pos = ImVec2(toolbar.x + region.x - TOGGLE_SIZE.x - S(2.f), toolbar.y + (S(32.f) - TOGGLE_SIZE.y) * 0.5f);
-
-		ToggleSwitch("##group_enabled", &group.enabled, switch_pos);
-
-		ImGui::GetWindowDrawList()->AddText(
-			ImVec2(switch_pos.x - label_size.x - S(10.f), toolbar.y + (S(32.f) - label_size.y) * 0.5f),
-			C(group.enabled ? col::text : col::text_dim),
-			label
-		);
+	ImGui::BeginDisabled(!available);
+	Toggle(visible_label, &chams.visible.enabled, available ? visible_note : missing, nullptr, &chams.visible.color);
+	if (hidden_note) {
+		bool behind_walls = MaterialChams::HasBehindWalls(chams.material);
+		ImGui::BeginDisabled(!behind_walls);
+		Toggle("Behind Walls", &chams.hidden.enabled, !available
+			? missing
+			: behind_walls
+			? hidden_note
+			: "Only with Flat & Glow", nullptr, &chams.hidden.color);
+		ImGui::EndDisabled();
 	}
 
-	// Options in two columns under the toolbar, the preview is in the panel next to the menu
-	auto columns = column_layout;
-	column_layout.y += toolbar_height;
-	column_layout.h -= toolbar_height;
+	// Always there, so the panel keeps its size
+	ImGui::BeginDisabled(!chams.visible.enabled && !chams.hidden.enabled);
+	DropdownRow("Material", &chams.material, materials, material_descriptions,
+		material_descriptions[std::clamp(chams.material, 0, cfg::visuals::material_chams::MATERIAL_COUNT - 1)]);
+	ImGui::EndDisabled();
+	ImGui::EndDisabled();
 
-	// Left: what is drawn
+	if (auto status = MaterialChams::GetStatus(); !status.empty() && (chams.visible.enabled || chams.hidden.enabled))
+		TextBlock(("Not working yet: " + status).c_str());
+}
+
+void Menu::RenderPlayersTab() {
+	auto& group = esp_group == 0 ? cfg::esp::team : cfg::esp::enemy;
+	const bool writes = Visuals::IsAvailable();
+	constexpr auto unavailable = "Only available when the game is launched with -insecure";
+
+	// Two columns, team or enemy & the switch of the group are in the header. The preview is in the panel next to the menu
 	BeginColumn(0);
 	ImGui::BeginDisabled(!group.enabled);
 	{
 		BeginPanel("ESP");
-		ToggleColors("Box", &group.box, nullptr, &group.box_visible, &group.box_invisible);
+		static const std::vector<const char*> box_styles = { "Full", "Corners", "Rounded", "Filled" };
+		static const char* box_style_descriptions[] = {
+			"All four sides",
+			"Only its corners",
+			"All four sides, round corners",
+			"All four sides, the inside lightly filled",
+		};
+		ToggleMore("Box", &group.box, nullptr, [&] {
+			DropdownRow("Style", &group.box_style, box_styles, box_style_descriptions, "How the box is drawn");
+		}, &group.box_visible, "Visible", &group.box_invisible, "Behind a wall");
 		ToggleColors("Skeleton", &group.skeleton, nullptr, &group.skeleton_visible, &group.skeleton_invisible);
 		ToggleColors("Head Tracker", &group.head_tracker, nullptr, &group.tracker_visible, &group.tracker_invisible);
 		ToggleColors("Tracers", &group.tracers, nullptr, &group.tracer_visible, &group.tracer_invisible);
-
-		// Written into the game
-		ImGui::BeginDisabled(!Visuals::IsAvailable());
-		Toggle("Outline Glow", esp_group == 0 ? &cfg::visuals::glow::team : &cfg::visuals::glow::enemies,
-			Visuals::IsAvailable() ? nullptr : "Only available when the game is launched with -insecure",
-			nullptr, esp_group == 0 ? &cfg::visuals::glow::team_color : &cfg::visuals::glow::enemy_color);
-		Toggle("Chams", esp_group == 0 ? &cfg::visuals::chams::team : &cfg::visuals::chams::enemies,
-			Visuals::IsAvailable()
-				? "The model colored by the game itself, where it can be seen.\nThe color mixes with the model, light colors show best. Behind walls: the outline glow"
-				: "Only available when the game is launched with -insecure",
-			nullptr, esp_group == 0 ? &cfg::visuals::chams::team_color : &cfg::visuals::chams::enemy_color);
-		if (esp_group == 0 ? cfg::visuals::chams::team : cfg::visuals::chams::enemies) {
-			static const std::vector<const char*> chams_types = { "Textured", "Glow", "Textured + Glow" };
-			static const char* chams_descriptions[] = {
-				"The model in the color, mixed with its textures",
-				"The spawn protection shader of the game in the color, at half: the model still shows",
-				"Both: the model in the color with the glow over it",
-			};
-
-			// Glow needs code of the game that might not be found
-			ImGui::BeginDisabled(!Visuals::HasModelGlow());
-			int* type = esp_group == 0 ? &cfg::visuals::chams::team_type : &cfg::visuals::chams::enemy_type;
-			DropdownRow("Chams Type", type, chams_types, chams_descriptions, Visuals::HasModelGlow()
-				? chams_descriptions[std::clamp(*type, 0, cfg::visuals::chams::TYPE_COUNT - 1)]
-				: "Only textured: the code of the game for the glow was not found");
-			ImGui::EndDisabled();
-		}
-		ImGui::EndDisabled();
 		Toggle("Visible Only", &group.visible_only);
+		MoreRow("Bar Numbers", "The health & armor as numbers on their bars", [&] {
+			Toggle("Health Number", &group.health_number);
+			Toggle("Armor Number", &group.armor_number);
+		});
 
 		if (esp_group == 0 && Cache::Current()->game.deathmatch)
 			TextBlock("Deathmatch: everyone is an enemy, the Enemy ESP is used for all players");
 		EndPanel();
 
-		BeginPanel("BARS");
-		Toggle("Health Number", &group.health_number);
-		Toggle("Armor Number", &group.armor_number);
+		// Size & color of each kind of flag, the sizes behind the dots
+		BeginPanel("FLAGS");
+		AddFlagRow(group, font_bold);
+		MoreRow("Text", "Name, weapon, ping, money...", [&] {
+			SliderFloat("Size", &group.text_size, 8.f, 24.f, "%.0f px");
+		}, { { &group.text, "Color" } });
+		MoreRow("Icons", "Weapon, kit, C4 & the other icons", [&] {
+			SliderFloat("Size", &group.icon_size, 8.f, 28.f, "%.0f px");
+		}, { { &group.icon, "Flashed, reloading, scoped & kit icons" } });
+		MoreRow("States", "FLASHED, RELOADING, SCOPED & DEFUSING", [&] {
+			SliderFloat("Size", &group.state_size, 8.f, 24.f, "%.0f px");
+		}, { { &group.flashed, "Flashed" }, { &group.reloading, "Reloading" }, { &group.scoped, "Scoped" }, { &group.defusing, "Defusing" } });
 		EndPanel();
 	}
 	ImGui::EndDisabled();
 	EndColumn();
 
-	// Right: sizes & colors of the flags
 	BeginColumn(1);
 	ImGui::BeginDisabled(!group.enabled);
 	{
-		BeginPanel("FLAG SIZES");
-		SliderFloat("Text", &group.text_size, 8.f, 24.f, "%.0f px", "Name, weapon, ping, money...");
-		SliderFloat("States", &group.state_size, 8.f, 24.f, "%.0f px", "FLASHED, RELOADING, SCOPED & DEFUSING");
-		SliderFloat("Icons", &group.icon_size, 8.f, 28.f, "%.0f px", "Weapon, kit, C4 & the other icons");
+		// Written into the game
+		BeginPanel("GAME");
+		ImGui::BeginDisabled(!writes);
+		Toggle("Outline Glow", esp_group == 0 ? &cfg::visuals::glow::team : &cfg::visuals::glow::enemies,
+			writes ? nullptr : unavailable,
+			nullptr, esp_group == 0 ? &cfg::visuals::glow::team_color : &cfg::visuals::glow::enemy_color);
+
+		ImGui::EndDisabled();
 		EndPanel();
 
-		BeginPanel("FLAG COLORS");
-		ColorRow("Text", &group.text, "Name, weapon, ping, money...");
-		ColorRow("Icons", &group.icon, "Flashed, reloading, scoped & kit icons");
-		ColorRow("Flashed", &group.flashed);
-		ColorRow("Reloading", &group.reloading);
-		ColorRow("Scoped", &group.scoped);
-		ColorRow("Defusing", &group.defusing);
+		// Our own materials drawn by the game, where the player is seen & behind walls
+		BeginPanel("MATERIAL CHAMS");
+		MaterialChamsRows(esp_group == 0 ? cfg::visuals::material_chams::team : cfg::visuals::material_chams::enemy,
+			"The player in our material where they can be seen",
+			"The player in our material through walls & smokes. A player partly behind a wall is split where the wall is");
 		EndPanel();
 	}
 	ImGui::EndDisabled();
 	EndColumn();
-
-	column_layout = columns;
 }
 
 void Menu::RenderBombPreview() {
@@ -3639,6 +4021,12 @@ void Menu::RenderBombTab() {
 			? "Outline of the game around the planted bomb, seen through walls.\nThe dropped bomb: in the items tab"
 			: "Only available when the game is launched with -insecure", nullptr, &cfg::visuals::glow::bomb_color);
 		ImGui::EndDisabled();
+		EndPanel();
+
+		BeginPanel("MATERIAL CHAMS");
+		MaterialChamsRows(cfg::visuals::material_chams::bomb,
+			"The planted bomb in our material where it can be seen.\nThe dropped bomb: in the items tab",
+			"The planted bomb in our material through walls & smokes");
 		EndPanel();
 	}
 	EndColumn();
@@ -3731,47 +4119,47 @@ void Menu::RenderProjectilesPreview() {
 }
 
 void Menu::RenderProjectilesTab() {
+	namespace gr = cfg::esp::grenades;
+	namespace gc = cfg::esp::colors::grenades;
+	const bool writes = Visuals::IsAvailable();
+
 	// What is drawn, the preview is in the panel next to the menu
 	BeginColumn(0);
 	{
 		BeginPanel("GRENADES");
-		Toggle("Grenade ESP", &cfg::esp::grenades::enabled);
-		ImGui::BeginDisabled(!cfg::esp::grenades::enabled);
-		Toggle("Trails", &cfg::esp::grenades::trails, nullptr, nullptr, &cfg::esp::colors::grenades::trail);
-		ImGui::BeginDisabled(!cfg::esp::grenades::trails);
-		Toggle("Grenade Color Trails", &cfg::esp::grenades::trail_type_color, "Color each trail like its grenade instead of using the trail color");
-		ImGui::EndDisabled();
-		Toggle("Throw Preview", &cfg::esp::grenades::prediction, "Path, bounces & landing spot of the grenade in your hand\nUses the map collision, built from the game files the first time a map is played");
-		Toggle("Landing Prediction", &cfg::esp::grenades::landing, "Where grenades in the air are going to land or explode, thrown by anyone\nUses the map collision too");
+		ToggleMore("Grenade ESP", &gr::enabled, nullptr, [&] {
+			SliderFloat("Text Size", &gr::text_size, 8.f, 28.f, "%.0f px");
+		});
+
+		ImGui::BeginDisabled(!gr::enabled);
+		ToggleMore("Trails", &gr::trails, nullptr, [&] {
+			Toggle("Grenade Colors", &gr::trail_type_color, "Color each trail like its grenade instead of using the trail color");
+		}, &gc::trail, "Trail color");
+		Toggle("Throw Preview", &gr::prediction, "Path, bounces & landing spot of the grenade in your hand\nUses the map collision, built from the game files the first time a map is played");
+		Toggle("Landing Prediction", &gr::landing, "Where grenades in the air are going to land or explode, thrown by anyone\nUses the map collision too");
 		ImGui::EndDisabled();
 
-		ImGui::BeginDisabled(!Visuals::IsAvailable());
-		Toggle("Outline Glow", &cfg::visuals::glow::thrown, Visuals::IsAvailable()
+		ImGui::BeginDisabled(!writes);
+		ToggleMore("Outline Glow", &cfg::visuals::glow::thrown, writes
 			? "Outline of the game around grenades in the air, seen through walls.\nGrenades on the ground: in the items tab"
-			: "Only available when the game is launched with -insecure");
-		if (cfg::visuals::glow::thrown) {
+			: "Only available when the game is launched with -insecure", [&] {
 			namespace thrown = cfg::visuals::glow::thrown_colors;
-			ColorRow("Smoke Glow", &thrown::smoke);
-			ColorRow("Molotov Glow", &thrown::molotov, "Also the incendiary");
-			ColorRow("Flash Glow", &thrown::flash);
-			ColorRow("HE Glow", &thrown::he);
-			ColorRow("Decoy Glow", &thrown::decoy);
-		}
+			ColorRow("Smoke", &thrown::smoke);
+			ColorRow("Molotov", &thrown::molotov, "Also the incendiary");
+			ColorRow("Flash", &thrown::flash);
+			ColorRow("HE", &thrown::he);
+			ColorRow("Decoy", &thrown::decoy);
+		});
 		ImGui::EndDisabled();
 		EndPanel();
 
-		BeginPanel("LOOK");
-		ImGui::BeginDisabled(!cfg::esp::grenades::enabled);
-		Toggle("Smoke Area", &cfg::esp::grenades::smoke_area, "Outline & fill of a popped smoke on the ground.\nIts icon & timer stay");
-		Toggle("Fire Area", &cfg::esp::grenades::fire_area, "Outline & fill of a molotov or incendiary fire on the ground.\nIts icon & timer stay");
-		Toggle("Glow", &cfg::esp::grenades::glow, "Popped smokes & burning fires glow on the ground");
-		Toggle("Icons", &cfg::esp::grenades::icons);
-		Toggle("Names", &cfg::esp::grenades::names);
-		Toggle("Timers", &cfg::esp::grenades::timers);
-		ImGui::BeginDisabled(!cfg::esp::grenades::timers);
-		Toggle("Timer Bars", &cfg::esp::grenades::timer_bars);
-		ImGui::EndDisabled();
-		SliderFloat("Text Size", &cfg::esp::grenades::text_size, 8.f, 28.f, "%.0f px");
+		BeginPanel("COLORS");
+		ImGui::BeginDisabled(!gr::enabled);
+		ColorRow("Smoke", &gc::smoke);
+		ColorRow("Molotov", &gc::molotov, "Also used for the fire area");
+		ColorRow("Flash", &gc::flash);
+		ColorRow("HE", &gc::he);
+		ColorRow("Decoy", &gc::decoy);
 		ImGui::EndDisabled();
 		EndPanel();
 	}
@@ -3779,13 +4167,16 @@ void Menu::RenderProjectilesTab() {
 
 	BeginColumn(1);
 	{
-		BeginPanel("COLORS");
-		ImGui::BeginDisabled(!cfg::esp::grenades::enabled);
-		ColorRow("Smoke", &cfg::esp::colors::grenades::smoke);
-		ColorRow("Molotov", &cfg::esp::colors::grenades::molotov, "Also used for the fire area");
-		ColorRow("Flash", &cfg::esp::colors::grenades::flash);
-		ColorRow("HE", &cfg::esp::colors::grenades::he);
-		ColorRow("Decoy", &cfg::esp::colors::grenades::decoy);
+		BeginPanel("LOOK");
+		ImGui::BeginDisabled(!gr::enabled);
+		Toggle("Smoke Area", &gr::smoke_area, "Outline & fill of a popped smoke on the ground.\nIts icon & timer stay");
+		Toggle("Fire Area", &gr::fire_area, "Outline & fill of a molotov or incendiary fire on the ground.\nIts icon & timer stay");
+		Toggle("Glow", &gr::glow, "Popped smokes & burning fires glow on the ground");
+		Toggle("Icons", &gr::icons);
+		Toggle("Names", &gr::names);
+		ToggleMore("Timers", &gr::timers, nullptr, [&] {
+			Toggle("Timer Bars", &gr::timer_bars);
+		});
 		ImGui::EndDisabled();
 		EndPanel();
 	}
@@ -3848,59 +4239,61 @@ void Menu::RenderItemsPreview() {
 
 void Menu::RenderItemsTab() {
 	namespace it = cfg::esp::items;
+	const bool writes = Visuals::IsAvailable();
+	constexpr auto unavailable = "Only available when the game is launched with -insecure";
 
-	// What is drawn, the preview is in the panel next to the menu
-	auto category_panel = [&](const char* title, const char* label, it::category_t& category, bool has_ammo) {
-		BeginPanel(title);
-		ImGui::PushID(title);
-		Toggle(label, &category.enabled, nullptr, nullptr, &category.color);
-		ImGui::BeginDisabled(!category.enabled);
-		Toggle("Icon", &category.icon);
-		Toggle("Name", &category.name, "Always shown when the icon is off");
-		if (has_ammo)
-			Toggle("Ammo", &category.ammo);
-		Toggle("Distance", &category.distance);
-		ImGui::EndDisabled();
-		ImGui::PopID();
-		EndPanel();
+	// A kind of item: on & its color, what is shown of it behind the dots
+	auto kind_row = [&](const char* label, it::category_t& category, bool has_ammo) {
+		ToggleMore(label, &category.enabled, nullptr, [&] {
+			Toggle("Icon", &category.icon);
+			Toggle("Name", &category.name, "Always shown when the icon is off");
+			if (has_ammo)
+				Toggle("Ammo", &category.ammo);
+			Toggle("Distance", &category.distance);
+		}, &category.color, "Color");
 	};
 
+	// What is drawn, the preview is in the panel next to the menu
 	BeginColumn(0);
 	{
 		BeginPanel("ITEMS");
-		Toggle("Item ESP", &it::enabled, "Weapons, grenades, the bomb & defuse kits nobody holds");
-		ImGui::BeginDisabled(!it::enabled);
-		SliderFloat("Max Distance", &it::max_distance, 5.f, 200.f, "%.0f m");
-		SliderFloat("Text Size", &it::text_size, 8.f, 24.f, "%.0f px");
-		SliderFloat("Icon Size", &it::icon_size, 8.f, 28.f, "%.0f px");
-		ImGui::EndDisabled();
+		ToggleMore("Item ESP", &it::enabled, "Weapons, grenades, the bomb & defuse kits nobody holds", [&] {
+			SliderFloat("Max Distance", &it::max_distance, 5.f, 200.f, "%.0f m");
+			SliderFloat("Text Size", &it::text_size, 8.f, 24.f, "%.0f px");
+			SliderFloat("Icon Size", &it::icon_size, 8.f, 28.f, "%.0f px");
+		});
 
-		ImGui::BeginDisabled(!Visuals::IsAvailable());
-		Toggle("Weapon Outline Glow", &cfg::visuals::glow::items, Visuals::IsAvailable()
-			? "Outline of the game around weapons & defuse kits on the ground, seen through walls"
-			: "Only available when the game is launched with -insecure", nullptr, &cfg::visuals::glow::item_color);
-		Toggle("Utility Outline Glow", &cfg::visuals::glow::utility, Visuals::IsAvailable()
-			? "Outline of the game around grenades on the ground, seen through walls.\nThrown grenades: in the projectiles tab"
-			: "Only available when the game is launched with -insecure", nullptr, &cfg::visuals::glow::utility_color);
-		Toggle("Bomb Outline Glow", &cfg::visuals::glow::dropped_bomb, Visuals::IsAvailable()
-			? "Outline of the game around the dropped bomb, seen through walls.\nThe planted bomb: in the bomb tab"
-			: "Only available when the game is launched with -insecure", nullptr, &cfg::visuals::glow::dropped_bomb_color);
+		ImGui::BeginDisabled(!it::enabled);
+		kind_row("Weapons", it::weapons, true);
+		kind_row("Grenades", it::utility, false);
+		kind_row("Dropped Bomb", it::bomb, false);
+		kind_row("Defuse Kits", it::kits, false);
 		ImGui::EndDisabled();
 		EndPanel();
-
-		ImGui::BeginDisabled(!it::enabled);
-		category_panel("WEAPONS", "Weapons", it::weapons, true);
-		ImGui::EndDisabled();
 	}
 	EndColumn();
 
 	BeginColumn(1);
 	{
-		ImGui::BeginDisabled(!it::enabled);
-		category_panel("UTILITY", "Grenades", it::utility, false);
-		category_panel("BOMB", "Dropped Bomb", it::bomb, false);
-		category_panel("KITS", "Defuse Kits", it::kits, false);
+		BeginPanel("OUTLINE GLOW");
+		ImGui::BeginDisabled(!writes);
+		Toggle("Weapons", &cfg::visuals::glow::items, writes
+			? "Outline of the game around weapons & defuse kits on the ground, seen through walls"
+			: unavailable, nullptr, &cfg::visuals::glow::item_color);
+		Toggle("Grenades", &cfg::visuals::glow::utility, writes
+			? "Outline of the game around grenades on the ground, seen through walls.\nThrown grenades: in the projectiles tab"
+			: unavailable, nullptr, &cfg::visuals::glow::utility_color);
+		Toggle("Dropped Bomb", &cfg::visuals::glow::dropped_bomb, writes
+			? "Outline of the game around the dropped bomb, seen through walls.\nThe planted bomb: in the bomb tab"
+			: unavailable, nullptr, &cfg::visuals::glow::dropped_bomb_color);
 		ImGui::EndDisabled();
+		EndPanel();
+
+		BeginPanel("MATERIAL CHAMS");
+		MaterialChamsRows(cfg::visuals::material_chams::items,
+			"Weapons, grenades, the dropped bomb & defuse kits on the ground in our material where they can be seen",
+			"The same through walls & smokes");
+		EndPanel();
 	}
 	EndColumn();
 }
@@ -3936,7 +4329,9 @@ static bool CustomModelTools(cfg::skins::loadout_t& loadout, const std::vector<C
 		status = picked != models.end() ? CustomModels::LoadStatus(loadout.custom_model) : std::string("Not in the folder anymore");
 
 	auto pos = ImGui::GetCursorScreenPos();
-	auto size = ImVec2(S(110.f), S(28.f));
+	auto size = ImVec2(std::min(S(110.f), (ImGui::GetContentRegionAvail().x - S(12.f)) / 3.f), S(28.f));
+	const float row_x = pos.x;
+	float status_height = 0.f;
 
 	bool browse = PillButton("Download##custom_browse", pos, size, true, "Player models of GameBanana, put in the game with one click");
 	pos.x += size.x + S(6.f);
@@ -3958,6 +4353,11 @@ static bool CustomModelTools(cfg::skins::loadout_t& loadout, const std::vector<C
 	if (!status.empty()) {
 		auto at = pos + ImVec2((size.x + S(6.f)) * 2.f + S(4.f), 0.f);
 		float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+		// No room next to the buttons: under them
+		if (right - at.x < S(100.f)) {
+			at = ImVec2(row_x, pos.y + size.y + S(4.f));
+			status_height = size.y + S(4.f);
+		}
 		// Cut with "..." where it does not fit, whole in the tooltip
 		std::string shown = status;
 		bool cut = false;
@@ -3981,8 +4381,8 @@ static bool CustomModelTools(cfg::skins::loadout_t& loadout, const std::vector<C
 			ShowTooltip("%s", status.c_str());
 	}
 
-	ImGui::SetCursorScreenPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetCursorStartPos().x, pos.y));
-	ImGui::Dummy(ImVec2(0.f, size.y + S(6.f)));
+	ImGui::SetCursorScreenPos(ImVec2(row_x, pos.y));
+	ImGui::Dummy(ImVec2(0.f, size.y + status_height + S(6.f)));
 	return browse;
 }
 
@@ -4222,6 +4622,50 @@ static std::string CustomModelName(const std::string& resource) {
 	return name.ends_with(".vmdl") ? name.substr(0, name.size() - 5) : name;
 }
 
+// The knife under the mouse on the knives page, shown in the window next to the menu
+static int knife_hovered = 0;
+
+// The picture of what is picked over the whole width of the window next to the menu, the glow of its rarity behind
+static void SkinPreview(const std::string& image, const char* icon, ImU32 rarity) {
+	auto d = ImGui::GetWindowDrawList();
+	auto pos = ImGui::GetCursorScreenPos();
+	auto size = ImVec2(ImGui::GetContentRegionAvail().x, S(210.f));
+	auto center = pos + size * 0.5f;
+
+	d->AddRectFilled(pos, pos + size, C(col::window), S(8.f));
+	d->AddCircleFilled(center, S(90.f), C(rarity, 0.12f), 48);
+
+	auto texture = image.empty() ? ImTextureID{} : ImageCache::Get(image);
+	if (texture) {
+		float fit_w = std::min(size.x - S(20.f), (size.y - S(20.f)) * 4.f / 3.f);
+		auto fit = ImVec2(fit_w, fit_w * 3.f / 4.f);
+		d->AddImage(texture, center - fit * 0.5f, center + fit * 0.5f, ImVec2(0, 0), ImVec2(1, 1), C(IM_COL32_WHITE));
+	}
+	else if (icon) {
+		auto extent = font_regular->CalcTextSizeA(S(64.f), FLT_MAX, 0.f, icon);
+		d->AddText(font_regular, S(64.f), center - extent * 0.5f, C(col::text_faint), icon);
+	}
+
+	ImGui::Dummy(size);
+}
+
+// Name & a second line under the picture, a stripe of the rarity when it has one
+static void SkinCaption(const std::string& title, const std::string& subtitle, std::optional<ImU32> rarity = std::nullopt) {
+	ImGui::Dummy(ImVec2(0.f, S(4.f)));
+	auto d = ImGui::GetWindowDrawList();
+	auto at = ImGui::GetCursorScreenPos();
+	float width = ImGui::GetContentRegionAvail().x;
+
+	d->PushClipRect(at, at + ImVec2(width, S(46.f)), true);
+	d->AddText(font_bold, S(15.f), at, C(col::text), title.c_str());
+	d->AddText(font_regular, S(12.f), at + ImVec2(0.f, S(20.f)), C(col::text_dim), subtitle.c_str());
+	d->PopClipRect();
+	if (rarity)
+		d->AddRectFilled(at + ImVec2(0.f, S(38.f)), at + ImVec2(S(40.f), S(40.f)), C(*rarity), 1.f);
+
+	ImGui::Dummy(ImVec2(0.f, S(46.f)));
+}
+
 void Menu::OpenSkinPage(SkinPage page, int item) {
 	skin_page = page;
 	selected_item = item;
@@ -4295,7 +4739,8 @@ void Menu::RenderSkinsTab() {
 	// Page below, slides in like the tabs
 	ImGui::SetCursorPos(origin + ImVec2(0.f, toolbar_height + (1.f - page) * TAB_SLIDE));
 	ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * page);
-	ImGui::BeginChild("##skins_page", ImVec2(region.x, region.y - toolbar_height), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+	ImGui::BeginChild("##skins_page", ImVec2(region.x, region.y - toolbar_height), ImGuiChildFlags_None,
+		ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
 	// When a change shows up in the game
 	{
@@ -4319,6 +4764,7 @@ void Menu::RenderSkinsTab() {
 
 	switch (skin_page) {
 	case SkinPage::ITEMS: {
+		BeginScrollArea("##items_scroll");
 		if (!loaded)
 			TextBlock(Skins::HasFailed()
 				? "Could not download the skin list. Hold a weapon in game and set its paint kit id by hand"
@@ -4429,6 +4875,7 @@ void Menu::RenderSkinsTab() {
 			}
 		}
 		EndGrid(grid);
+		EndScrollArea();
 
 		break;
 	}
@@ -4437,13 +4884,11 @@ void Menu::RenderSkinsTab() {
 		if (BackButton("Loadout", ImGui::GetCursorScreenPos()))
 			go_to = SkinPage::ITEMS;
 
+		// The one equipped & the third person switch in the window next to the menu
 		ImGui::Dummy(ImVec2(0.f, S(4.f)));
-		Toggle("Hide In Third Person", &cfg::skins::glove_hide_third_person,
-			"Keeps the new gloves in first person only\nFor player models with gloves built in, they would show both in third person");
+		BeginScrollArea("##gloves_scroll");
 
-		SectionTitle("GLOVE TYPE");
-
-		auto grid = BeginGrid();
+		auto grid = BeginFixedGrid(4);
 		NextCard(grid);
 
 		if (ItemCard("##default", grid.card, "", nullptr, "Default", "From the player model", col::border_hover, loadout.glove == 0))
@@ -4472,6 +4917,7 @@ void Menu::RenderSkinsTab() {
 		}
 
 		EndGrid(grid);
+		EndScrollArea();
 		break;
 	}
 
@@ -4479,60 +4925,22 @@ void Menu::RenderSkinsTab() {
 		if (BackButton("Loadout", ImGui::GetCursorScreenPos()))
 			go_to = SkinPage::ITEMS;
 
+		// The knife under the mouse (else the one equipped) big in the window next to the menu
 		ImGui::Dummy(ImVec2(0.f, S(4.f)));
-
-		// Big preview on top: the knife under the mouse, else the one equipped
-		static int knife_hovered = 0;
-		{
-			int shown_index = knife_hovered ? knife_hovered : loadout.knife;
-			auto shown = shown_index ? Skins::FindItem(shown_index) : nullptr;
-			auto shown_skin = shown && shown_index == loadout.knife ? assigned_skin(*shown) : nullptr;
-			auto image = shown_skin ? shown_skin->image : (shown ? shown->image : "");
-			auto rarity = shown_skin ? RarityColor(shown_skin->rarity_color) : col::border_hover;
-
-			auto d = ImGui::GetWindowDrawList();
-			auto pos = ImGui::GetCursorScreenPos();
-			auto size = ImVec2(ImGui::GetContentRegionAvail().x, S(190.f));
-			auto center = pos + size * 0.5f;
-
-			d->AddRectFilled(pos, pos + size, C(col::panel), S(10.f));
-			d->AddCircleFilled(center, size.y * 0.42f, C(rarity, 0.12f), 48);
-
-			auto texture = image.empty() ? ImTextureID{} : ImageCache::Get(image);
-			if (texture) {
-				float h = size.y - S(30.f);
-				auto fit = ImVec2(h * 4.f / 3.f, h);
-				d->AddImage(texture, center - fit * 0.5f, center + fit * 0.5f, ImVec2(0, 0), ImVec2(1, 1), C(IM_COL32_WHITE));
-			}
-			else {
-				auto icon = Weapon::IconFor(shown_index ? shown_index : (skin_team == cfg::skins::TERRORIST ? 59 : 42));
-				auto extent = font_regular->CalcTextSizeA(S(64.f), FLT_MAX, 0.f, icon);
-				d->AddText(font_regular, S(64.f), center - extent * 0.5f, C(col::text_faint), icon);
-			}
-
-			auto name = shown ? shown->name : std::string("Default knife");
-			if (shown_skin)
-				name += " | " + shown_skin->name;
-			d->AddText(font_bold, S(15.f), pos + ImVec2(S(14.f), S(12.f)), C(col::text), name.c_str());
-			d->AddText(font_regular, S(12.f), pos + ImVec2(S(14.f), S(32.f)), C(col::text_dim),
-				knife_hovered && knife_hovered != loadout.knife ? "Click to equip" : "Equipped");
-			d->AddRect(pos, pos + size, C(col::border), S(10.f));
-
-			ImGui::Dummy(size);
-		}
-
-		SectionTitle("KNIFE TYPE");
+		SearchBox("##knife_search", skin_search, sizeof(skin_search));
+		BeginScrollArea("##knives_scroll");
 
 		int hovered_now = 0;
 
-		auto grid = BeginGrid();
-		NextCard(grid);
-
-		if (ItemCard("##default", grid.card, "", Weapon::IconFor(skin_team == cfg::skins::TERRORIST ? 59 : 42), "Default", "From the game", col::border_hover, loadout.knife == 0))
-			loadout.knife = 0;
+		auto grid = BeginFixedGrid(4);
+		if (!*skin_search) {
+			NextCard(grid);
+			if (ItemCard("##default", grid.card, "", Weapon::IconFor(skin_team == cfg::skins::TERRORIST ? 59 : 42), "Default", "From the game", col::border_hover, loadout.knife == 0))
+				loadout.knife = 0;
+		}
 
 		for (const auto& item : all_items) {
-			if (item.category != "Knives")
+			if (item.category != "Knives" || !ContainsInsensitive(item.name, skin_search))
 				continue;
 
 			NextCard(grid);
@@ -4561,6 +4969,7 @@ void Menu::RenderSkinsTab() {
 		knife_hovered = hovered_now;
 
 		EndGrid(grid);
+		EndScrollArea();
 		break;
 	}
 
@@ -4568,21 +4977,21 @@ void Menu::RenderSkinsTab() {
 		if (BackButton("Loadout", ImGui::GetCursorScreenPos()))
 			go_to = SkinPage::ITEMS;
 
+		// One pick for the team: the game's model, a custom model or an agent. The one picked & the tools of the
+		// custom models in the window next to the menu
 		ImGui::Dummy(ImVec2(0.f, S(4.f)));
-
-		// One pick for the team: the game's model, a custom model or an agent
-		auto models = CustomModels::IsAvailable() ? CustomModels::List() : std::vector<CustomModel>{};
-		if (CustomModelTools(loadout, models))
-			go_to = SkinPage::MODEL_BROWSER;
 		SearchBox("##agent_search", skin_search, sizeof(skin_search));
+		BeginScrollArea("##agents_scroll");
 
+		auto models = CustomModels::IsAvailable() ? CustomModels::List() : std::vector<CustomModel>{};
 		bool custom = !loadout.custom_model.empty();
-		auto grid = BeginGrid(S(150.f));
-		NextCard(grid);
-
-		if (ItemCard("##default", grid.card, "", nullptr, "Default", "From the game", col::border_hover, !custom && loadout.agent == 0, false, true)) {
-			loadout.agent = 0;
-			loadout.custom_model.clear();
+		auto grid = BeginFixedGrid(4);
+		if (!*skin_search) {
+			NextCard(grid);
+			if (ItemCard("##default", grid.card, "", nullptr, "Default", "From the game", col::border_hover, !custom && loadout.agent == 0, false, true)) {
+				loadout.agent = 0;
+				loadout.custom_model.clear();
+			}
 		}
 
 		for (const auto& model : models) {
@@ -4626,6 +5035,7 @@ void Menu::RenderSkinsTab() {
 		}
 
 		EndGrid(grid);
+		EndScrollArea();
 		break;
 	}
 
@@ -4687,9 +5097,10 @@ void Menu::RenderSkinsTab() {
 		}
 
 		SearchBox("##mod_search", skin_search, sizeof(skin_search));
+		BeginScrollArea("##mods_scroll");
 
 		// Large cards, the picture is what tells them apart
-		auto grid = BeginGrid(0.f, S(250.f));
+		auto grid = BeginFixedGrid(3);
 		grid.card.y = grid.card.x * 9.f / 16.f + S(50.f);
 
 		for (size_t index = 0; index < mods.size(); index++) {
@@ -4754,6 +5165,7 @@ void Menu::RenderSkinsTab() {
 		}
 
 		EndGrid(grid);
+		EndScrollArea();
 		break;
 	}
 
@@ -4761,15 +5173,17 @@ void Menu::RenderSkinsTab() {
 		if (BackButton("Loadout", ImGui::GetCursorScreenPos()))
 			go_to = SkinPage::ITEMS;
 
+		// The one picked & what it is for in the window next to the menu
 		ImGui::Dummy(ImVec2(0.f, S(4.f)));
-		TextBlock("For both teams, plays in the menu, at the start & end of rounds and as your MVP anthem");
 		SearchBox("##music_search", skin_search, sizeof(skin_search));
+		BeginScrollArea("##music_scroll");
 
-		auto grid = BeginGrid();
-		NextCard(grid);
-
-		if (ItemCard("##default", grid.card, "", nullptr, "Default", "From the game", col::border_hover, cfg::skins::music_kit == 0))
-			cfg::skins::music_kit = 0;
+		auto grid = BeginFixedGrid(4);
+		if (!*skin_search) {
+			NextCard(grid);
+			if (ItemCard("##default", grid.card, "", nullptr, "Default", "From the game", col::border_hover, cfg::skins::music_kit == 0))
+				cfg::skins::music_kit = 0;
+		}
 
 		for (const auto& kit : Skins::GetMusicKits()) {
 			if (!ContainsInsensitive(kit.name, skin_search))
@@ -4789,6 +5203,7 @@ void Menu::RenderSkinsTab() {
 		}
 
 		EndGrid(grid);
+		EndScrollArea();
 		break;
 	}
 
@@ -4797,6 +5212,7 @@ void Menu::RenderSkinsTab() {
 			go_to = SkinPage::ITEMS;
 
 		ImGui::Dummy(ImVec2(0.f, S(10.f)));
+		BeginScrollArea("##presets_scroll");
 
 		// Half the width, the list does not need more
 		ImGui::BeginChild("##skin_presets", ImVec2(std::min(ImGui::GetContentRegionAvail().x, S(460.f)), 0.f),
@@ -4806,6 +5222,8 @@ void Menu::RenderSkinsTab() {
 		PresetList(Config::Preset::SKINS, skin_presets);
 		EndPanel();
 		ImGui::EndChild();
+
+		EndScrollArea();
 		break;
 	}
 
@@ -4826,20 +5244,18 @@ void Menu::RenderSkinsTab() {
 
 		ImGui::SetCursorScreenPos(header + ImVec2(0.f, S(40.f)));
 
-		const float properties_width = S(272.f);
-		auto available_size = ImGui::GetContentRegionAvail();
+		// The search stays on top, only the cards scroll under it
+		if (info) {
+			ImGui::SetCursorPosY(ImGui::GetCursorPosY() - S(4.f));
+			SearchBox("##skin_search", skin_search, sizeof(skin_search));
+		}
 
-		// Skins
-		ImGui::BeginChild("##skin_grid", ImVec2(available_size.x - properties_width - S(14.f), available_size.y), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+		// Skins, their wear & seed in the window next to the menu
+		BeginScrollArea("##skin_grid");
 		{
-			if (info) {
-				ImGui::SetCursorPosY(ImGui::GetCursorPosY() - S(4.f));
-				SearchBox("##skin_search", skin_search, sizeof(skin_search));
-			}
-
 			bool equipped = is_glove ? loadout.glove == selected_item : is_knife ? loadout.knife == selected_item : true;
 
-			auto grid = BeginGrid();
+			auto grid = BeginFixedGrid(4);
 			NextCard(grid);
 
 			// Knives: the plain knife, still equipped
@@ -4874,63 +5290,7 @@ void Menu::RenderSkinsTab() {
 
 			EndGrid(grid);
 		}
-		ImGui::EndChild();
-
-		ImGui::SameLine(0.f, S(14.f));
-
-		// Properties of the picked skin
-		ImGui::BeginChild("##skin_properties", ImVec2(properties_width, available_size.y), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
-		{
-			auto skin = info ? info->FindSkin(entry.paint_kit) : nullptr;
-
-			BeginPanel(skin ? ToUpper(skin->name).c_str() : "DEFAULT");
-			{
-				// Big preview
-				auto d = ImGui::GetWindowDrawList();
-				auto pos = ImGui::GetCursorScreenPos();
-				auto size = ImVec2(ImGui::GetContentRegionAvail().x, S(150.f));
-				auto center = pos + size * 0.5f;
-
-				d->AddRectFilled(pos, pos + size, C(col::window), S(8.f));
-				d->AddCircleFilled(center, S(64.f), C(skin ? RarityColor(skin->rarity_color) : col::border_hover, 0.12f), 48);
-
-				auto base_image = BaseImage(selected_item);
-				auto texture = skin ? ImageCache::Get(SmallImage(skin->image)) : base_image.empty() ? ImTextureID{} : ImageCache::Get(base_image);
-				if (texture) {
-					auto fit = ImVec2(size.y * 4.f / 3.f, size.y);
-					d->AddImage(texture, center - fit * 0.5f, center + fit * 0.5f, ImVec2(0, 0), ImVec2(1, 1), C(IM_COL32_WHITE));
-				}
-				else if (!is_glove) {
-					auto icon = Weapon::IconFor(selected_item);
-					auto extent = font_regular->CalcTextSizeA(S(56.f), FLT_MAX, 0.f, icon);
-					d->AddText(font_regular, S(56.f), center - extent * 0.5f, C(col::text_faint), icon);
-				}
-
-				ImGui::Dummy(size);
-				ImGui::Dummy(ImVec2(0.f, S(6.f)));
-
-				ImGui::BeginDisabled(!entry.paint_kit);
-				{
-					float min_wear = std::max(skin ? skin->min_float : 0.f, 0.0001f);
-					float max_wear = skin ? skin->max_float : 1.f;
-
-					SliderFloat("Wear", &entry.wear, min_wear, max_wear, "%.4f", "Float value, lower is cleaner");
-					SliderInt("Seed", &entry.seed, 0, 1000, "%d", "Pattern seed, moves the pattern on skins like Case Hardened or Fade");
-				}
-				ImGui::EndDisabled();
-
-				if (InputIntRow("Paint Kit ID", &entry.paint_kit, "Set the paint kit by hand, 0 for the default look", S(80.f)) && entry.paint_kit > 0) {
-					if (is_glove)
-						loadout.glove = selected_item;
-					if (is_knife)
-						loadout.knife = selected_item;
-				}
-
-				entry.paint_kit = std::max(entry.paint_kit, 0);
-			}
-			EndPanel();
-		}
-		ImGui::EndChild();
+		EndScrollArea();
 
 		// Dont keep empty entries around in the config
 		if (!entry.paint_kit) {
@@ -4949,6 +5309,165 @@ void Menu::RenderSkinsTab() {
 	if (go_to) {
 		int item = selected_item;
 		OpenSkinPage(*go_to, *go_to == SkinPage::SKINS ? item : 0);
+	}
+}
+
+// The window next to the menu on the skins pages: what is picked there big, with what goes with it (the wear, seed &
+// paint kit of a skin, the third person switch of gloves, the tools of the custom models...)
+void Menu::RenderSkinPanel() {
+	if (skin_page == SkinPage::MODEL_BROWSER) {
+		ModBrowserPanel();
+		return;
+	}
+
+	std::optional<SkinPage> go_to;
+	{
+		std::lock_guard<std::mutex> lock(cfg::skins::mutex);
+		auto& loadout = cfg::skins::loadouts[skin_team];
+		auto assigned_skin = [&](const ItemInfo& item) -> const SkinInfo* {
+			auto it = loadout.items.find(item.definition_index);
+			return it != loadout.items.end() && it->second.paint_kit ? item.FindSkin(it->second.paint_kit) : nullptr;
+		};
+		const int default_knife = skin_team == cfg::skins::TERRORIST ? 59 : 42;
+
+		switch (skin_page) {
+		case SkinPage::GLOVES: {
+			auto glove = loadout.glove ? Skins::FindItem(loadout.glove) : nullptr;
+			auto skin = glove ? assigned_skin(*glove) : nullptr;
+
+			BeginPanel("GLOVES");
+			SkinPreview(skin ? SmallImage(skin->image) : "", nullptr, skin ? RarityColor(skin->rarity_color) : col::border_hover);
+			if (skin)
+				SkinCaption(glove->name, skin->name, RarityColor(skin->rarity_color));
+			else
+				SkinCaption(glove ? glove->name : "Default", glove ? "No skin picked" : "From the player model");
+			Toggle("Hide In Third Person", &cfg::skins::glove_hide_third_person,
+				"Keeps the new gloves in first person only\nFor player models with gloves built in, they would show both in third person");
+			EndPanel();
+			break;
+		}
+
+		case SkinPage::KNIVES: {
+			int shown_index = knife_hovered ? knife_hovered : loadout.knife;
+			auto shown = shown_index ? Skins::FindItem(shown_index) : nullptr;
+			auto skin = shown && shown_index == loadout.knife ? assigned_skin(*shown) : nullptr;
+			auto image = skin ? skin->image : (shown ? shown->image : "");
+
+			BeginPanel("KNIFE");
+			SkinPreview(image.empty() ? "" : SmallImage(image), Weapon::IconFor(shown_index ? shown_index : default_knife),
+				skin ? RarityColor(skin->rarity_color) : col::border_hover);
+			auto name = shown ? shown->name : std::string("Default knife");
+			if (skin)
+				name += " | " + skin->name;
+			SkinCaption(name, knife_hovered && knife_hovered != loadout.knife ? "Click to equip" : "Equipped");
+			EndPanel();
+			break;
+		}
+
+		case SkinPage::AGENTS: {
+			bool custom = !loadout.custom_model.empty();
+			auto agent = !custom && loadout.agent ? Skins::FindAgent(loadout.agent) : nullptr;
+
+			BeginPanel("AGENT");
+			SkinPreview(agent ? SmallImage(agent->image) : "", nullptr,
+				custom ? col::accent : agent ? RarityColor(agent->rarity_color) : col::border_hover);
+			if (custom)
+				SkinCaption(CustomModelName(loadout.custom_model), "Custom model", col::accent);
+			else if (agent)
+				SkinCaption(agent->name, agent->group, RarityColor(agent->rarity_color));
+			else
+				SkinCaption("Default", "From the game");
+			EndPanel();
+
+			if (CustomModels::IsAvailable()) {
+				auto models = CustomModels::List();
+				BeginPanel("CUSTOM MODELS");
+				if (CustomModelTools(loadout, models))
+					go_to = SkinPage::MODEL_BROWSER;
+				EndPanel();
+			}
+			break;
+		}
+
+		case SkinPage::MUSIC_KITS: {
+			auto kit = cfg::skins::music_kit ? Skins::FindMusicKit(cfg::skins::music_kit) : nullptr;
+
+			BeginPanel("MUSIC KIT");
+			SkinPreview(kit ? kit->image : "", nullptr, kit ? RarityColor(kit->rarity_color) : col::border_hover);
+			if (kit) {
+				// "Artist, Name" on two lines
+				auto comma = kit->name.find(", ");
+				auto title = comma != std::string::npos ? kit->name.substr(comma + 2) : kit->name;
+				auto artist = comma != std::string::npos ? kit->name.substr(0, comma) : std::string();
+				SkinCaption(title, artist, RarityColor(kit->rarity_color));
+			}
+			else
+				SkinCaption(cfg::skins::music_kit ? "Custom" : "Default", "From the game");
+			TextBlock("For both teams, plays in the menu, at the start & end of rounds and as your MVP anthem");
+			EndPanel();
+			break;
+		}
+
+		case SkinPage::SKINS:
+			SkinPanel();
+			break;
+
+		default:
+			break;
+		}
+	}
+
+	if (go_to)
+		OpenSkinPage(*go_to);
+}
+
+// The picked skin of the item of the skins page big, its wear, seed & paint kit
+void Menu::SkinPanel() {
+	auto& loadout = cfg::skins::loadouts[skin_team];      // Locked by RenderSkinPanel
+	auto info = Skins::FindItem(selected_item);
+	bool is_glove = Skins::IsGlove(selected_item);
+	bool is_knife = Skins::IsKnife(selected_item);
+	auto& entry = loadout.items[selected_item];
+	auto skin = info ? info->FindSkin(entry.paint_kit) : nullptr;
+
+	BeginPanel("SKIN");
+	{
+		auto base_image = is_knife && info && !info->image.empty() ? SmallImage(info->image) : BaseImage(selected_item);
+		SkinPreview(skin ? SmallImage(skin->image) : base_image, is_glove ? nullptr : Weapon::IconFor(selected_item),
+			skin ? RarityColor(skin->rarity_color) : col::border_hover);
+
+		auto item_name = info ? info->name : std::format("Item #{}", selected_item);
+		if (skin)
+			SkinCaption(skin->name, item_name, RarityColor(skin->rarity_color));
+		else
+			SkinCaption(is_knife ? "Vanilla" : "Default", item_name);
+
+		ImGui::BeginDisabled(!entry.paint_kit);
+		{
+			float min_wear = std::max(skin ? skin->min_float : 0.f, 0.0001f);
+			float max_wear = skin ? skin->max_float : 1.f;
+
+			SliderFloat("Wear", &entry.wear, min_wear, max_wear, "%.4f", "Float value, lower is cleaner");
+			SliderInt("Seed", &entry.seed, 0, 1000, "%d", "Pattern seed, moves the pattern on skins like Case Hardened or Fade");
+		}
+		ImGui::EndDisabled();
+
+		if (InputIntRow("Paint Kit ID", &entry.paint_kit, "Set the paint kit by hand, 0 for the default look", S(80.f)) && entry.paint_kit > 0) {
+			if (is_glove)
+				loadout.glove = selected_item;
+			if (is_knife)
+				loadout.knife = selected_item;
+		}
+
+		entry.paint_kit = std::max(entry.paint_kit, 0);
+	}
+	EndPanel();
+
+	// Dont keep empty entries around in the config
+	if (!entry.paint_kit) {
+		loadout.items.erase(selected_item);
+		if (is_glove && loadout.glove == selected_item)
+			loadout.glove = 0;
 	}
 }
 
@@ -5147,8 +5666,8 @@ static void MatchPlayersPanel() {
 
 	auto selected = SelectedPlayer(players);
 	auto d = ImGui::GetWindowDrawList();
-	const float row_height = S(40.f);
-	const float avatar = S(26.f);
+	const float row_height = S(34.f);
+	const float avatar = S(24.f);
 
 	int last_team = -1;
 	for (const auto& player : players) {
@@ -5335,51 +5854,48 @@ static void ProfilePanel() {
 	EndPanel();
 }
 
-// A sound of the sound folder: on & off, which file (heard when picked) & its volume (heard when let go)
+// A sound of the sound folder: on & off, behind the dots which file (heard when picked) & its volume (heard when let go)
 static void SoundRows(const char* label, bool* enabled, std::string& file, int* volume, const char* tooltip) {
-	ImGui::PushID(label);
-	if (Toggle(label, enabled, tooltip) && *enabled)
-		Sounds::Preload(file);
-
-	if (*enabled) {
+	bool changed = ToggleMore(label, enabled, tooltip, [&] {
 		auto files = Sounds::List();
 
 		if (files.empty()) {
-			auto text = std::format("No sounds in the {} folder yet, download them below or put .vsnd_c, .wav or .mp3 files in it",
+			auto text = std::format("No sounds in the {} folder yet, download them or put .vsnd_c, .wav or .mp3 files in it",
 				Sounds::Folder().string());
 			TextBlock(text.c_str());
+			return;
 		}
-		else {
-			auto found = std::find(files.begin(), files.end(), file);
-			if (found == files.end()) {
-				file = files.front();
-				found = files.begin();
-			}
 
-			// Shown without the file extension
-			std::vector<std::string> shown;
-			for (const auto& name : files) {
-				auto dot = name.find_last_of('.');
-				shown.push_back(dot == std::string::npos || dot == 0 ? name : name.substr(0, dot));
-			}
-
-			std::vector<const char*> names;
-			for (const auto& name : shown)
-				names.push_back(name.c_str());
-
-			int index = static_cast<int>(found - files.begin());
-			if (DropdownRow("Sound", &index, names, nullptr, nullptr, S(150.f))) {
-				file = files[index];
-				Sounds::Play(file, *volume);
-			}
-
-			SliderInt("Volume", volume, 0, 100, "%d%%");
-			if (slider_released)
-				Sounds::Play(file, *volume);
+		auto found = std::find(files.begin(), files.end(), file);
+		if (found == files.end()) {
+			file = files.front();
+			found = files.begin();
 		}
-	}
 
-	ImGui::PopID();
+		// Shown without the file extension
+		std::vector<std::string> shown;
+		for (const auto& name : files) {
+			auto dot = name.find_last_of('.');
+			shown.push_back(dot == std::string::npos || dot == 0 ? name : name.substr(0, dot));
+		}
+
+		std::vector<const char*> names;
+		for (const auto& name : shown)
+			names.push_back(name.c_str());
+
+		int index = static_cast<int>(found - files.begin());
+		if (DropdownRow("Sound", &index, names, nullptr, nullptr, S(150.f))) {
+			file = files[index];
+			Sounds::Play(file, *volume);
+		}
+
+		SliderInt("Volume", volume, 0, 100, "%d%%");
+		if (slider_released)
+			Sounds::Play(file, *volume);
+	});
+
+	if (changed && *enabled)
+		Sounds::Preload(file);
 }
 
 void Menu::RenderMiscTab() {
@@ -5388,56 +5904,53 @@ void Menu::RenderMiscTab() {
 	misc_page_progress = std::min(1.f, misc_page_progress + ImGui::GetIO().DeltaTime * TAB_SWITCH_SPEED);
 	float page = EaseOutCubic(misc_page_progress);
 
-	// Pages in a toolbar like the players tab, two columns of panels below
-	auto toolbar = ImGui::GetWindowPos() + ImVec2(column_layout.x, column_layout.y);
-	const float toolbar_height = S(46.f);
-
-	if (TabSwitch("##misc_page", &misc_page, { "Camera", "Profile", "Interface", "Visuals" }, toolbar))
-		misc_page_progress = 0.f;
-
+	// The pages are pills in the header, two columns of panels here sliding in after a switch
 	auto columns = column_layout;
-	column_layout.y += toolbar_height + (1.f - page) * TAB_SLIDE;
-	column_layout.h -= toolbar_height;
+	column_layout.y += (1.f - page) * TAB_SLIDE;
 	ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * page);
 
 	switch (misc_page) {
 	case 0: {
+		const char* camera_missing = View::IsAvailable()
+			? "The camera code was not found in this game version"
+			: unavailable;
+
 		BeginColumn(0);
 		{
-			BeginPanel("FIELD OF VIEW");
+			BeginPanel("VIEW");
 			ImGui::BeginDisabled(!View::IsAvailable());
-			Toggle("FOV Override", &cfg::view::fov_enabled, View::IsAvailable()
+			ToggleMore("FOV Override", &cfg::view::fov_enabled, View::IsAvailable()
 				? "Camera field of view, scoped weapons keep their zoom"
-				: unavailable);
-			if (cfg::view::fov_enabled)
+				: unavailable, [&] {
 				SliderInt("FOV", &cfg::view::fov, 60, 140, "%d");
+			});
 			ImGui::EndDisabled();
-			EndPanel();
 
-			BeginPanel("THIRD PERSON");
 			ImGui::BeginDisabled(!View::IsThirdPersonAvailable());
-			ToggleBind("Third Person", &cfg::view::third_person, &cfg::view::third_person_mode, &cfg::view::third_person_key,
+			ToggleBindMore("Third Person", &cfg::view::third_person, &cfg::view::third_person_mode, &cfg::view::third_person_key,
 				View::IsThirdPersonAvailable()
 					? nullptr
 					: View::IsAvailable()
 						? "The third person code was not found in this game version"
-						: unavailable);
-			if (cfg::view::third_person)
+						: unavailable, [&] {
 				Toggle("Off While Scoped", &cfg::view::third_person_scoped_off);
+			});
 			ImGui::EndDisabled();
-			EndPanel();
-		}
-		EndColumn();
 
-		BeginColumn(1);
-		{
+			ImGui::BeginDisabled(!Freecam::IsAvailable());
+			ToggleMore("View Punch", &cfg::view::punch_enabled, Freecam::IsAvailable()
+				? "How much the camera kicks when you shoot or get hit, 100% is the game\n"
+				  "Only what you see: where the bullets go stays the same"
+				: camera_missing, [&] {
+				SliderFloat("Amount", &cfg::view::punch_scale, 0.f, 100.f, "%.0f%%", "0% keeps the camera still");
+			});
+			ImGui::EndDisabled();
+
 			// The console variables of the game, so the same limits
-			BeginPanel("VIEWMODEL");
 			ImGui::BeginDisabled(!View::IsAvailable());
-			Toggle("Viewmodel Override", &cfg::view::viewmodel_enabled, View::IsAvailable()
+			ToggleMore("Viewmodel", &cfg::view::viewmodel_enabled, View::IsAvailable()
 				? "Position & field of view of the weapon in your hands, like viewmodel_fov & viewmodel_offset_x/y/z in the console\nYour own values come back when turned off"
-				: unavailable);
-			if (cfg::view::viewmodel_enabled) {
+				: unavailable, [&] {
 				SliderFloat("FOV", &cfg::view::viewmodel_fov, 40.f, 120.f, "%.0f", "The game allows 60 - 68");
 				SliderFloat("Offset X", &cfg::view::viewmodel_x, -20.f, 20.f, "%.1f", "Left & right, the game allows -2 - 2.5");
 				SliderFloat("Offset Y", &cfg::view::viewmodel_y, -20.f, 20.f, "%.1f", "Forward & back, the game allows -2 - 2");
@@ -5445,40 +5958,51 @@ void Menu::RenderMiscTab() {
 
 				if (!View::IsViewmodelAvailable())
 					TextBlock("Looking for the viewmodel settings of the game...");
-			}
+			});
 			ImGui::EndDisabled();
 			EndPanel();
+		}
+		EndColumn();
 
-			const char* camera_missing = View::IsAvailable()
-				? "The camera code was not found in this game version"
-				: unavailable;
-
-			BeginPanel("FREE CAM");
+		BeginColumn(1);
+		{
+			BeginPanel("CAMERA");
 			ImGui::BeginDisabled(!Freecam::IsAvailable());
-			Toggle("Free Cam", &cfg::view::freecam, Freecam::IsAvailable()
+			ToggleMore("Free Cam", &cfg::view::freecam, Freecam::IsAvailable()
 				? "The camera flies on its own while your player stands still, only while alive\n"
 				  "The mouse looks around, W A S D fly where you look, space up, left ctrl down, left shift faster\n"
 				  "Your player gets none of it: no turning, walking, shooting or scoping"
-				: camera_missing);
-			if (cfg::view::freecam) {
+				: camera_missing, [&] {
 				KeybindRow("Key", &cfg::view::freecam_key);
 				SliderFloat("Speed", &cfg::view::freecam_speed, 100.f, 3000.f, "%.0f", "Units per second, three times faster with shift");
 				SliderFloat("Sensitivity", &cfg::view::freecam_sensitivity, 0.1f, 5.f, "%.2fx", "Turning with the mouse, times your sensitivity in the game");
-			}
+			});
 			ImGui::EndDisabled();
-			EndPanel();
 
-			BeginPanel("AFTER DEATH");
 			ImGui::BeginDisabled(!Freecam::IsDeadAvailable());
-			Toggle("Casual Spectate", &cfg::view::dead_spectate, Freecam::IsDeadAvailable()
+			ToggleMore("Casual Spectate", &cfg::view::dead_spectate, Freecam::IsDeadAvailable()
 				? "Once you die, watch anyone like in casual, enemies too, no key needed\n"
 				  "Left & right click switch the player, space goes first person, third person, free cam"
 				: Freecam::IsAvailable()
 					? "The spectator camera was not found in this game version"
-					: camera_missing);
-			if (cfg::view::dead_spectate)
+					: camera_missing, [&] {
 				SliderFloat("Distance", &cfg::view::spectate_distance, 40.f, 300.f, "%.0f", "Behind them in third person, W & S change it");
+			});
 			ImGui::EndDisabled();
+			EndPanel();
+
+			// Our agent & hands, our weapon in our material: always seen, one switch each
+			BeginPanel("LOCAL CHAMS");
+			{
+				static int part = 0;
+				SegmentRow("Part", &part, { "Agent & Hands", "Weapon" },
+					"Agent & Hands: your player in third person & what it holds, your arms & gloves in first person\n"
+					"Weapon: the weapon in your hands in first person");
+				namespace chams = cfg::visuals::material_chams;
+				MaterialChamsRows(part == 0 ? chams::local : chams::weapon, part == 0
+					? "Your player in third person & your arms in first person in our material"
+					: "The weapon in your hands in our material", nullptr, "Chams");
+			}
 			EndPanel();
 		}
 		EndColumn();
@@ -5490,11 +6014,11 @@ void Menu::RenderMiscTab() {
 		{
 			BeginPanel("CLAN TAG");
 			ImGui::BeginDisabled(!ClanTag::IsAvailable());
-			Toggle("Clan Tag", &cfg::misc::clantag, ClanTag::IsAvailable()
-				? "Animated tag, as the game shows it to you"
-				: unavailable);
-
-			if (cfg::misc::clantag) {
+			next_more_width = S(360.f);
+			ToggleMore("Clan Tag", &cfg::misc::clantag, ClanTag::IsAvailable()
+				? "Animated tag, sent to the server: everyone there sees it.\n"
+				  "There it changes at most once a second"
+				: unavailable, [&] {
 				SegmentRow("Text", &cfg::misc::clantag_source, { "Custom", "Players" },
 					"Custom: the text below\nPlayers: the names of everyone in the match take turns");
 
@@ -5523,20 +6047,20 @@ void Menu::RenderMiscTab() {
 				DropdownRow("Animation", &cfg::misc::clantag_mode, modes, descriptions, descriptions[mode]);
 
 				SliderFloat("Speed", &cfg::misc::clantag_speed, 100.f, 1500.f, "%.0f ms", "Time of each step of the animation (Static: 8 steps per text)");
-			}
+			});
 			ImGui::EndDisabled();
 			EndPanel();
 
 			BeginPanel("NAME");
 			ImGui::BeginDisabled(!ClanTag::IsNameAvailable());
 			Toggle("Change Name", &cfg::misc::name_change, ClanTag::IsNameAvailable()
-				? "Your whole name in the scoreboard & kill feed, as the game shows it to you.\nEmpty keeps your real name"
+				? "Your whole name in the scoreboard & kill feed, sent to the server: everyone there sees it.\n"
+				  "Empty keeps your real name, turned off your real name goes back"
 				: unavailable);
 			if (cfg::misc::name_change)
 				TextField("##name_text", "Name...", cfg::misc::name_text, sizeof(cfg::misc::name_text));
 			ImGui::EndDisabled();
 			EndPanel();
-
 		}
 		EndColumn();
 
@@ -5547,72 +6071,65 @@ void Menu::RenderMiscTab() {
 	}
 
 	default: {
+		// The radar of the game needs memory writes
+		if (!GameRadar::IsAvailable())
+			cfg::world::radar::mode = cfg::world::radar::MODE_OVERLAY;
+
 		BeginColumn(0);
 		{
-			BeginPanel("RADAR");
-			Toggle("Radar", &cfg::world::radar::enabled);
-
-			// The radar of the game needs memory writes
-			if (!GameRadar::IsAvailable())
-				cfg::world::radar::mode = cfg::world::radar::MODE_OVERLAY;
-
-			if (cfg::world::radar::enabled) {
+			BeginPanel("OVERLAYS");
+			ToggleMore("Radar", &cfg::world::radar::enabled, nullptr, [&] {
 				ImGui::BeginDisabled(!GameRadar::IsAvailable());
 				SegmentRow("Type", &cfg::world::radar::mode, { "External", "Internal" }, GameRadar::IsAvailable()
 					? "External: our own radar window\nInternal: enemies show up on the radar of the game, even when nobody sees them"
 					: "Internal is only available when the game is launched with -insecure");
 				ImGui::EndDisabled();
 
-				if (cfg::world::radar::mode == cfg::world::radar::MODE_OVERLAY) {
-					Toggle("Disable Rotation", &cfg::world::radar::no_rotate);
-					SliderFloat("Range", &cfg::world::radar::range, 100.f, 8000.f, "%.0f u");
-				}
-			}
-			EndPanel();
+				// Only our own window turns & has a range
+				ImGui::BeginDisabled(cfg::world::radar::mode != cfg::world::radar::MODE_OVERLAY);
+				Toggle("Disable Rotation", &cfg::world::radar::no_rotate);
+				SliderFloat("Range", &cfg::world::radar::range, 100.f, 8000.f, "%.0f u");
+				ImGui::EndDisabled();
+			});
 
-			BeginPanel("SPECTATORS");
-			Toggle("Spectator List", &cfg::world::spectators::enabled);
-			if (cfg::world::spectators::enabled) {
+			ToggleMore("Spectator List", &cfg::world::spectators::enabled, nullptr, [&] {
 				Toggle("Detailed", &cfg::world::spectators::detailed);
 				Toggle("Only Self", &cfg::world::spectators::self_only);
-			}
-			EndPanel();
+			});
 
-			BeginPanel("VOTES");
-			Toggle("Vote List", &cfg::world::votes::enabled,
+			ToggleMore("Vote List", &cfg::world::votes::enabled,
 				"Shows the vote going on (kick, surrender, timeout...) of your team or the enemy with its yes & no.\n"
-				"Only you see it. Who called it, on whom & who voted what needs Voter Names");
-			if (cfg::world::votes::enabled)
+				"Only you see it. Who called it, on whom & who voted what needs Voter Names", [&] {
 				Toggle("Voter Names", &cfg::world::votes::names,
 					"Experimental: who voted yes or no with their profile picture, heard from inside the game.\n"
 					"Needs -insecure. Turn it off if the game crashes");
-			EndPanel();
+			});
 
-			BeginPanel("KEYBINDS");
 			Toggle("Keybind List", &cfg::world::keybinds::enabled,
 				"Shows the features turned on by a key while they are on: third person, free cam, bunny hop, air strafe, jump bug.\n"
 				"With the menu open it shows them all & can be dragged");
+
+		#ifdef _DEBUG // Part of the velocity graph for developers
+			ToggleMore("Velocity Graph", &cfg::world::velocity::enabled, nullptr, [&] {
+				SliderInt("Sample Rate", &cfg::world::velocity::sample_rate, 1, 100, "%d");
+				SliderFloat("Sample Length", &cfg::world::velocity::sample_length, 1.f, 20.f, "%.1f s");
+			});
+		#else
+			Toggle("Velocity Graph", &cfg::world::velocity::enabled);
+		#endif
 			EndPanel();
 		}
 		EndColumn();
 
 		BeginColumn(1);
 		{
-			BeginPanel("OVERLAY");
-			Toggle("Sniper Crosshair", &cfg::world::crosshair::enabled, "Draws a crosshair while holding an unscoped sniper");
-			if (cfg::world::crosshair::enabled) {
+			BeginPanel("CROSSHAIR");
+			ToggleMore("Sniper Crosshair", &cfg::world::crosshair::enabled, "Draws a crosshair while holding an unscoped sniper", [&] {
 				SegmentRow("Style", &cfg::world::crosshair::style, { "Classic", "CS2" },
 					"Classic: small white cross\nCS2: your crosshair from the game settings (size, gap, color, outline, dot)");
 				if (cfg::world::crosshair::style == cfg::world::crosshair::STYLE_GAME && !GameCrosshair::Get().found)
 					TextBlock("No CS2 settings found in the Steam userdata, using the default crosshair");
-			}
-			Toggle("Velocity Graph", &cfg::world::velocity::enabled);
-		#ifdef _DEBUG // Part of the velocity graph for developers
-			if (cfg::world::velocity::enabled) {
-				SliderInt("Sample Rate", &cfg::world::velocity::sample_rate, 1, 100, "%d");
-				SliderFloat("Sample Length", &cfg::world::velocity::sample_length, 1.f, 20.f, "%.1f s");
-			}
-		#endif
+			});
 			EndPanel();
 
 			BeginPanel("MATCHMAKING");
@@ -5628,34 +6145,31 @@ void Menu::RenderMiscTab() {
 
 	case 3: {
 		namespace vis = cfg::visuals;
+		namespace hm = cfg::world::hitmarker;
 		const bool writes = Visuals::IsAvailable();
 
 		BeginColumn(0);
 		{
 			BeginPanel("REMOVALS");
 			ImGui::BeginDisabled(!writes);
-			Toggle("No Flash", &vis::no_flash, writes ? nullptr : unavailable);
-			if (vis::no_flash)
+			ToggleMore("No Flash", &vis::no_flash, writes ? nullptr : unavailable, [&] {
 				SliderFloat("Flash Strength", &vis::flash_alpha, 0.f, 255.f, "%.0f", "0 is no white at all, 255 is the game");
-
+			});
 			Toggle("No Smoke", &vis::no_smoke, writes
 				? "Smokes are not drawn. The smoke ESP still shows where they are"
 				: unavailable);
 			ImGui::EndDisabled();
 			EndPanel();
 
-			namespace hm = cfg::world::hitmarker;
 			BeginPanel("HITMARKER");
 			Toggle("Crosshair", &hm::crosshair);
-			Toggle("World", &hm::world, "An X on the player you hit, at their bone nearest to your crosshair");
-			if (hm::world)
+			ToggleMore("World", &hm::world, "An X on the player you hit, at their bone nearest to your crosshair", [&] {
 				Toggle("Damage", &hm::damage);
-			if (hm::crosshair || hm::world) {
+			});
+			MoreRow("Look", "How long & how big the hitmarkers are, their colors", [&] {
 				SliderFloat("Duration", &hm::duration, 0.2f, 2.f, "%.1f s");
 				SliderFloat("Size", &hm::size, 3.f, 16.f, "%.0f");
-				ColorRow("Color", &hm::color);
-				ColorRow("Kill Color", &hm::kill_color);
-			}
+			}, { { &hm::color, "Color" }, { &hm::kill_color, "Kill color" } });
 			EndPanel();
 		}
 		EndColumn();
@@ -5683,6 +6197,91 @@ void Menu::RenderMiscTab() {
 			auto status = Sounds::GetStatus();
 			if (!status.empty())
 				TextBlock(status.c_str());
+			EndPanel();
+
+			// An effect of the game where an enemy we killed was, the body gone
+			BeginPanel("KILL EFFECT");
+			{
+				namespace ke = cfg::world::kill_effect;
+				bool available = KillEffect::IsAvailable();
+				const char* why = Engine::IsInsecure()
+					? "The particle code of the game was not found in this game version"
+					: "Only available when the game is launched with -insecure";
+				static const char* effect_descriptions[] = {
+					"The body burns to ashes",
+					"A blast where it was",
+					"The body bursts into blood",
+					"The body stays, shocked all over by the zeus",
+					"Big lightning strikes where the body was, drawn over the game",
+					"A black hole opens & pulls the body in, drawn over the game",
+					"The body turns to glass & shatters, drawn over the game",
+					"The body breaks up into glitching pixels, drawn over the game",
+					"A beam of light from above, the body rises in it as light, drawn over the game",
+					"The body freezes to ice, cracks & crumbles, drawn over the game",
+					"A blade of light cuts the body in two, drawn over the game",
+					"The body falls apart into blocks that bounce on the ground, drawn over the game",
+					"A fireball falls from the sky & hits the body, drawn over the game",
+					"A whirlwind takes the body up, drawn over the game",
+					"The body is switched off like an old television, drawn over the game",
+					"The body falls into a star that explodes, drawn over the game",
+					"The body floats away instead of falling",
+				};
+
+				ImGui::BeginDisabled(!available);
+				Toggle("Enabled", &ke::enabled, available
+					? "An enemy you kill: its body is gone at once & an effect of the game plays in its place"
+					: why);
+				ImGui::BeginDisabled(!ke::enabled);
+				const auto& names = KillEffect::GetNames();
+				ke::effect = std::clamp(ke::effect, 0, static_cast<int>(names.size()) - 1);
+				DropdownRow("Effect", &ke::effect, names, effect_descriptions, effect_descriptions[ke::effect]);
+				if (KillEffect::Floats(ke::effect))
+					SliderFloat("Gravity", &ke::gravity, -1.f, 1.f, "%.2fx",
+						"Times the normal gravity: below 0 the body rises, 0 it hangs where it died. Every body floats while this is picked, not only your kills");
+				ImGui::EndDisabled();
+				ImGui::EndDisabled();
+			}
+			EndPanel();
+
+			// An effect of the game on our own player
+			BeginPanel("SELF EFFECT");
+			{
+				namespace se = cfg::world::self_effect;
+				bool available = KillEffect::IsAvailable();
+				const char* why = Engine::IsInsecure()
+					? "The particle code of the game was not found in this game version"
+					: "Only available when the game is launched with -insecure";
+				static const char* self_descriptions[] = {
+					"Zeus sparks running over your body",
+					"Ashes coming off your body",
+					"Small lightning jumping over & out of your body, drawn over the game",
+					"Three little black holes going round you, drawn over the game",
+					"A gold halo over your head & sparkles rising, drawn over the game",
+					"Ice crystals going round you & snow falling, drawn over the game",
+					"Two neon rings turning around you, drawn over the game",
+					"Fireflies wandering around you, drawn over the game",
+					"Sakura petals falling & turning around you, drawn over the game",
+					"Six blades of light going round you, drawn over the game",
+					"Green code raining down around you, drawn over the game",
+					"A dome of energy around you, waves going over it, drawn over the game",
+					"A ribbon of light behind you as you move, drawn over the game",
+				};
+
+				ImGui::BeginDisabled(!available);
+				Toggle("Enabled", &se::enabled, available
+					? "An effect of the game on your own player, played again & again.\nOnly you see it"
+					: why);
+				ImGui::BeginDisabled(!se::enabled);
+				const auto& names = KillEffect::GetSelfNames();
+				se::effect = std::clamp(se::effect, 0, static_cast<int>(names.size()) - 1);
+				DropdownRow("Effect", &se::effect, names, self_descriptions, self_descriptions[se::effect]);
+				if (KillEffect::SelfUsesInterval(se::effect))
+					SliderFloat("Interval", &se::interval, 0.2f, 5.f, "%.1f s", "Time between two plays: lower is denser");
+				Toggle("Third Person Only", &se::third_person_only,
+					"In first person the effect is all around the camera & covers the view");
+				ImGui::EndDisabled();
+				ImGui::EndDisabled();
+			}
 			EndPanel();
 		}
 		EndColumn();
@@ -5728,6 +6327,15 @@ void Menu::RenderSettingsTab() {
 			);
 		}
 
+		Toggle("Notifications", &cfg::settings::notifications, "Map building, notices of the program & the ESP off message");
+
+
+
+
+		// Steps of 5%, taken once the mouse is let go
+		int percent = static_cast<int>(std::round(cfg::settings::ui_scale * 20.f)) * 5;
+		if (SliderInt("Menu Scale", &percent, 80, 160, "%d%%"))
+			cfg::settings::ui_scale = std::round(percent / 5.f) * 5.f / 100.f;
 		EndPanel();
 
 	#ifdef _DEBUG
@@ -5738,9 +6346,7 @@ void Menu::RenderSettingsTab() {
 		SliderInt("Cache Refresh", &cfg::dev::cache_refresh_rate, 0, 100, "%d ms");
 		Toggle("Force Show Flags", &cfg::dev::force_show_flags);
 		EndPanel();
-	#endif
 
-	#ifdef _DEBUG
 		// Warnings, errors & info lines always show
 		BeginPanel("DEBUG LOG");
 		namespace logs = cfg::settings::logs;
@@ -5767,7 +6373,8 @@ void Menu::RenderSettingsTab() {
 	EndColumn();
 }
 
-void Menu::SetupStyles() {
+// Colors of ImGui itself (popups, inputs, the overlay windows) from the palette
+static void ApplyStyleColors() {
 	ImGuiStyle& style = ImGui::GetStyle();
 
 	auto c = [](ImU32 color) { return ImGui::ColorConvertU32ToFloat4(color); };
@@ -5779,7 +6386,7 @@ void Menu::SetupStyles() {
 
 	style.Colors[ImGuiCol_WindowBg] = c(col::window);
 	style.Colors[ImGuiCol_ChildBg] = c(col::panel);
-	style.Colors[ImGuiCol_PopupBg] = c(IM_COL32(23, 27, 38, 248));
+	style.Colors[ImGuiCol_PopupBg] = c(col::panel_top);
 	style.Colors[ImGuiCol_Border] = c(col::border);
 	style.Colors[ImGuiCol_BorderShadow] = ImVec4(0.f, 0.f, 0.f, 0.f);
 
@@ -5825,6 +6432,22 @@ void Menu::SetupStyles() {
 	style.Colors[ImGuiCol_DragDropTarget] = c(col::accent);
 	style.Colors[ImGuiCol_NavCursor] = c(col::accent);
 	style.Colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.f, 0.f, 0.f, 0.45f);
+}
+
+// The theme, applied once
+static void RefreshTheme() {
+	static bool applied = false;
+	if (applied)
+		return;
+
+	applied = true;
+	col::ApplyTheme();
+	ApplyStyleColors();
+}
+
+void Menu::SetupStyles() {
+	RefreshTheme();
+	ImGuiStyle& style = ImGui::GetStyle();
 
 	style.WindowBorderSize = 1.f;
 	style.ChildBorderSize = 1.f;
@@ -5834,16 +6457,16 @@ void Menu::SetupStyles() {
 	style.WindowRounding = WINDOW_ROUNDING;
 	style.ChildRounding = PANEL_ROUNDING;
 	style.FrameRounding = 3.f;
-	style.PopupRounding = 4.f;
+	style.PopupRounding = 8.f;
 	style.GrabRounding = 3.f;
 	style.ScrollbarRounding = 3.f;
-	style.ScrollbarSize = 6.f;
+	style.ScrollbarSize = 4.f;
 
 	style.WindowPadding = ImVec2(10.f, 10.f);
 	style.FramePadding = ImVec2(8.f, 4.f);
 	style.ItemSpacing = ImVec2(8.f, 6.f);
 
-	// Fonts
+	// Fonts: Inter is in the program, letters it does not have (other alphabets in names) come from Segoe UI
 	auto& io = ImGui::GetIO();
 	io.Fonts->Clear();
 
@@ -5851,10 +6474,13 @@ void Menu::SetupStyles() {
 		return std::filesystem::exists(preferred) ? preferred : fallback;
 	};
 
-	font_regular = io.Fonts->AddFontFromFileTTF(
-		font_path("C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\arial.ttf"),
-		16.0f
-	);
+	ImFontConfig text_cfg{};
+	text_cfg.FontDataOwnedByAtlas = false;
+
+	ImFontConfig fallback_cfg{};
+	fallback_cfg.MergeMode = true;
+
+	font_regular = io.Fonts->AddFontFromMemoryTTF(inter_medium_font, inter_medium_font_len, 16.0f, &text_cfg);
 
 	ImFontConfig merge_icon_cfg{};
 	merge_icon_cfg.FontDataOwnedByAtlas = false;
@@ -5865,7 +6491,6 @@ void Menu::SetupStyles() {
 	static const ImWchar icon_ranges[] = { 0xE100, 0xE108, 0 };
 	io.Fonts->AddFontFromMemoryTTF(icons_font, icons_font_len, 18.f, &merge_icon_cfg, icon_ranges);
 
-	// Semibold reads cleaner than bold for titles
 	// Weapon silhouettes, used as tab icon
 	ImFontConfig merge_weapon_cfg{};
 	merge_weapon_cfg.FontDataOwnedByAtlas = false;
@@ -5875,18 +6500,192 @@ void Menu::SetupStyles() {
 	static const ImWchar weapon_ranges[] = { 0xE000, 0xE046, 0 };
 	io.Fonts->AddFontFromMemoryTTF(weapon_icon_font, weapon_icon_font_len, 13.f, &merge_weapon_cfg, weapon_ranges);
 
-	font_bold = io.Fonts->AddFontFromFileTTF(
+	io.Fonts->AddFontFromFileTTF(font_path("C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\arial.ttf"), 16.0f, &fallback_cfg);
+
+	// Titles
+	font_bold = io.Fonts->AddFontFromMemoryTTF(inter_bold_font, inter_bold_font_len, 16.0f, &text_cfg);
+	io.Fonts->AddFontFromFileTTF(
 		font_path("C:\\Windows\\Fonts\\seguisb.ttf",
 			font_path("C:\\Windows\\Fonts\\segoeuib.ttf", "C:\\Windows\\Fonts\\arialbd.ttf")),
-		16.0f
+		16.0f,
+		&fallback_cfg
 	);
+}
+
+// In a match, while the pictures of the items load: small, at the bottom left, the game not covered
+static void RenderLoadingCorner(bool show, ImFont* bold, ImFont* regular) {
+	static float fade = 0.f;
+	auto& io = ImGui::GetIO();
+	fade = std::clamp(fade + io.DeltaTime * (show ? 4.f : -4.f), 0.f, 1.f);
+	if (fade <= 0.f)
+		return;
+
+	auto d = ImGui::GetForegroundDrawList();
+	float alpha = EaseOutCubic(fade);
+	auto with_alpha = [&](ImU32 color, float a = 1.f) { return ImGui::GetColorU32(color, a * alpha); };
+
+	const float padding = S(12.f);
+	auto size = ImVec2(S(240.f), S(54.f));
+	auto min = ImVec2(S(16.f) - (1.f - alpha) * S(10.f), io.DisplaySize.y - S(16.f) - size.y);
+	auto max = min + size;
+
+	SoftShadow(d, min, max, WINDOW_ROUNDING);
+	d->AddRectFilled(min, max, with_alpha(col::window), WINDOW_ROUNDING);
+	d->AddRect(min, max, with_alpha(col::border), WINDOW_ROUNDING, 0, 1.f);
+
+	d->AddText(bold, S(13.f), min + ImVec2(padding, padding - S(1.f)), with_alpha(col::text), "Loading item pictures");
+	auto progress = ImageCache::GetPrefetchProgress();
+	if (progress.rfind("Loading ", 0) == 0)
+		progress = progress.substr(8);
+	auto progress_width = regular->CalcTextSizeA(S(12.f), FLT_MAX, 0.f, progress.c_str()).x;
+	d->AddText(regular, S(12.f), ImVec2(max.x - padding - progress_width, min.y + padding), with_alpha(col::text_dim), progress.c_str());
+
+	float percent = ImageCache::GetPrefetchPercent();
+	auto bar_min = ImVec2(min.x + padding, max.y - padding - S(4.f)), bar_max = ImVec2(max.x - padding, max.y - padding);
+	d->AddRectFilled(bar_min, bar_max, with_alpha(col::track), S(2.f));
+	if (percent > 0.001f)
+		d->AddRectFilled(bar_min, ImVec2(bar_min.x + (bar_max.x - bar_min.x) * percent, bar_max.y), with_alpha(col::accent), S(2.f));
+}
+
+// While the program gets ready: a box in the middle, the percent in a ring, the name, Loading & a bar. The agents of the
+// preview are taken from the game under its top part (the overlay is left out of the capture), not said
+void Menu::RenderLoadingCard() {
+	static float fade = 0.f;
+	static float shown = 0.f;
+	auto& io = ImGui::GetIO();
+	bool agents_ready = AgentPreview::IsReady();
+	bool pictures_ready = ImageCache::IsPrefetched();
+
+	// In a match the game is not covered: the pictures of the items load in a corner, the agents are taken once in the
+	// main menu
+	auto snapshot = Cache::Current();
+	bool in_match = snapshot && snapshot->globals.in_match;
+	RenderLoadingCorner(in_match && !pictures_ready, font_bold, font_regular);
+
+	bool ready = (agents_ready && pictures_ready) || in_match;
+	if (ready && fade <= 0.f)
+		return;
+	fade = std::clamp(fade + io.DeltaTime * (ready && (shown >= 0.999f || in_match) ? -4.f : 4.f), 0.f, 1.f);
+	if (fade <= 0.f)
+		return;
+
+	// The percent goes up smoothly to where it is: the pictures of the items, with the agents when they had to be
+	// taken when it started
+	static const bool agents_part = !agents_ready;
+	float target = agents_part
+		? (AgentPreview::GetPercent() + ImageCache::GetPrefetchPercent()) * 0.5f
+		: ImageCache::GetPrefetchPercent();
+	if (agents_ready && pictures_ready)
+		target = 1.f;
+	shown = target < shown ? target : shown + (target - shown) * std::min(1.f, io.DeltaTime * (ready ? 10.f : 4.f));
+	if (target - shown < 0.001f)
+		shown = target;
+
+	auto d = ImGui::GetForegroundDrawList();
+	float alpha = EaseOutCubic(fade);
+	auto with_alpha = [&](ImU32 color, float a = 1.f) { return ImGui::GetColorU32(color, a * alpha); };
+	float time = static_cast<float>(ImGui::GetTime());
+
+	// The top part covers the agent of the game: tall like it, the picture stays sharp in the preview
+	const float padding = S(16.f);
+	float spot_height = floorf(std::clamp(io.DisplaySize.y * 0.42f, 300.f, 440.f));
+	auto spot_size = ImVec2(floorf(spot_height * 0.66f), spot_height);
+	auto size = ImVec2(spot_size.x + padding * 2.f, spot_size.y + padding * 2.f + S(64.f));
+	auto min = ImVec2(floorf((io.DisplaySize.x - size.x) * 0.5f), floorf((io.DisplaySize.y - size.y) * 0.5f + (1.f - alpha) * S(12.f)));
+	auto max = min + size;
+	auto spot_min = min + ImVec2(padding, padding);
+	auto spot_max = spot_min + spot_size;
+
+	SoftShadow(d, min, max, WINDOW_ROUNDING);
+	d->AddRectFilled(min, max, with_alpha(col::window), WINDOW_ROUNDING);
+	d->AddRect(min, max, with_alpha(col::border), WINDOW_ROUNDING, 0, 1.f);
+
+	// The percent in the middle of a ring filled as far, a short arc turning around it
+	auto center = ImVec2(floorf((spot_min.x + spot_max.x) * 0.5f), floorf((spot_min.y + spot_max.y) * 0.5f));
+	float radius = floorf(spot_size.x * 0.3f);
+	const float pi = std::numbers::pi_v<float>;
+	d->AddCircle(center, radius, with_alpha(col::track), 64, S(4.f));
+	if (shown > 0.001f) {
+		d->PathArcTo(center, radius, -pi * 0.5f, -pi * 0.5f + pi * 2.f * shown, 64);
+		d->PathStroke(with_alpha(col::accent), 0, S(4.f));
+	}
+	d->PathArcTo(center, radius + S(9.f), time * 2.5f, time * 2.5f + pi * 0.35f, 16);
+	d->PathStroke(with_alpha(col::accent, 0.35f), 0, S(2.f));
+
+	auto percent = std::format("{}%", static_cast<int>(shown * 100.f + 0.0001f));
+	auto percent_size = font_bold->CalcTextSizeA(S(30.f), FLT_MAX, 0.f, percent.c_str());
+	d->AddText(font_bold, S(30.f), ImVec2(floorf(center.x - percent_size.x * 0.5f), floorf(center.y - percent_size.y * 0.5f)), with_alpha(col::text), percent.c_str());
+
+	// The name, Loading & what it waits for, a bar filled as far
+	float y = spot_max.y + S(14.f);
+	d->AddText(font_bold, S(16.f), ImVec2(min.x + padding, y), with_alpha(col::text), BRAND_TITLE);
+
+	std::string loading = ready ? "Ready" : "Loading" + std::string(static_cast<int>(time * 2.5f) % 4, '.');
+	auto progress = AgentPreview::GetProgress();
+	auto pictures = ImageCache::GetPrefetchProgress();
+	if (!agents_ready && progress.rfind("Waiting", 0) == 0)
+		loading = progress;
+	else if (!ready && agents_ready && pictures.rfind("Loading ", 0) == 0)
+		loading = pictures;
+	d->AddText(font_regular, S(13.f), ImVec2(min.x + padding, y + S(22.f)), with_alpha(col::text_dim), loading.c_str());
+
+	float bar_y = max.y - padding - S(4.f);
+	auto bar_min = ImVec2(min.x + padding, bar_y), bar_max = ImVec2(max.x - padding, bar_y + S(4.f));
+	d->AddRectFilled(bar_min, bar_max, with_alpha(col::track), S(2.f));
+	if (shown > 0.001f)
+		d->AddRectFilled(bar_min, ImVec2(bar_min.x + (bar_max.x - bar_min.x) * shown, bar_max.y), with_alpha(col::accent), S(2.f));
+
+	// Covered all the way: the agent goes under the top part
+	if (!agents_ready && !in_match && fade >= 1.f) {
+		POINT origin{ 0, 0 };
+		ClientToScreen(Window::hwnd, &origin);
+		AgentPreview::Request(spot_min.x, spot_min.y, spot_size.x, spot_size.y, static_cast<float>(origin.x), static_cast<float>(origin.y));
+	}
 }
 
 void Menu::RenderStartupHelpImpl() {
 	col::accent = ImGui::ColorConvertFloat4ToU32(ImVec4(cfg::settings::accent.r, cfg::settings::accent.g, cfg::settings::accent.b, 1.f));
 	col::backdrop = std::clamp(cfg::settings::menu_opacity, 0.3f, 1.f);
+	RefreshTheme();
 
-	// Toast in the top left corner of the game once the program runs. Gone after a few seconds, or right away
+	// The overlay is left out of screen captures while a picture of an agent is taken, the agent of the game is under
+	// the loading card
+	static bool excluded = false;
+	if (AgentPreview::IsCapturing() != excluded) {
+		excluded = AgentPreview::IsCapturing();
+		Window::SetAffinity(Window::hwnd, excluded || cfg::settings::streamproof ? WindowAffinity::Invisible : WindowAffinity::Disabled);
+	}
+
+	// The pictures of the items downloaded while it gets ready
+	ImageCache::StartPrefetch();
+
+	// Loading card in the middle while the program gets ready, the menu opens after it
+	RenderLoadingCard();
+	auto snapshot = Cache::Current();
+	bool in_match = snapshot && snapshot->globals.in_match;
+	if (!in_match && (!AgentPreview::IsReady() || !ImageCache::IsPrefetched()))
+		return;
+
+	// Ready: the pictures of what is worn made textures already, the skin changer opens with them there
+	static bool worn_loaded = false;
+	if (!worn_loaded && ImageCache::IsPrefetched() && Skins::IsLoaded()) {
+		worn_loaded = true;
+		std::lock_guard lock(cfg::skins::mutex);
+		for (const auto& loadout : cfg::skins::loadouts) {
+			if (auto agent = Skins::FindAgent(loadout.agent))
+				ImageCache::Get(SmallImage(agent->image));
+			if (auto knife = Skins::FindItem(loadout.knife); knife && !knife->image.empty())
+				ImageCache::Get(SmallImage(knife->image));
+			for (const auto& [index, item] : loadout.items)
+				if (auto info = Skins::FindItem(index))
+					if (auto skin = info->FindSkin(item.paint_kit))
+						ImageCache::Get(SmallImage(skin->image));
+		}
+		if (auto kit = Skins::FindMusicKit(cfg::skins::music_kit); kit && !kit->image.empty())
+			ImageCache::Get(kit->image);
+	}
+
+	// Toast in the top left corner of the game once the program is ready. Gone after a few seconds, or right away
 	// once the menu opens
 	constexpr float LIFETIME = 4.5f;
 

@@ -49,4 +49,6 @@ private:
     void RenderKeybinds();
     void RenderVotes();
     void RenderHitmarkers();
+    void RenderStrikes();
+    void RenderSelfAura();
 };

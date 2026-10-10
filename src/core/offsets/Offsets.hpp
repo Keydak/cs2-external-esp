@@ -49,7 +49,11 @@ namespace offsets
 		inline std::ptrdiff_t m_sSanitizedClanTag = 0x880; // CUtlString, the clan tag the scoreboard & kill feed show
 		inline std::ptrdiff_t m_szClan = 0x868; // CUtlSymbolLarge, the tag from the server, cleaned into m_sSanitizedClanTag
 		inline std::ptrdiff_t fnUpdateClanTag = 0; // Cleans m_szClan into m_sSanitizedClanTag & tells the scoreboard
-		inline std::ptrdiff_t fnUpdateName = 0;    // Cleans m_iszPlayerName into m_sSanitizedPlayerName & tells the scoreboard
+		inline std::ptrdiff_t fnUpdateName = 0;    // Cleans m_iszPlayerName into m_sSanitizedPlayerName & tells the server nothing
+
+		// engine2.dll, what the setinfo command runs: (context, const CCommand*) with argv[1] the key & argv[2] the
+		// value. Sets the console variable & sends it to the server (CNETMsg_SetConVar). 0 when not found
+		inline std::ptrdiff_t fnSetInfo = 0;
 	}
 
 	namespace pawn {
@@ -126,6 +130,50 @@ namespace offsets
 		inline std::ptrdiff_t fnPrecache = 0; // resourcesystem.dll, IResourceSystem::PreCache(this, const CResourceNameTyped&, const char* reason), a vfunc
 	}
 
+	// Material chams (-insecure): the meshes of players drawn again with materials we make. Found at startup, 0 when not
+	namespace materials {
+		// scenesystem.dll, CAnimatableSceneObjectDesc::DrawArray(desc, render context, meshes, int count, 4 more), and its
+		// vtable entry we point at our stub
+		inline std::ptrdiff_t fnDrawArray = 0;
+		inline std::ptrdiff_t drawArrayEntry = 0;
+		// materialsystem2.dll, CMaterialSystem2::CreateMaterial(system, CStrongHandle<CMaterial2>* out, const char* name,
+		// KeyValues3* params, uint32 flags, bool)
+		inline std::ptrdiff_t fnCreateMaterial = 0;
+		// client.dll, how the game loads KeyValues3 text: a context (constructor (context, 0)), its root, the "generic" id
+		inline std::ptrdiff_t fnKv3Context = 0;
+		inline std::ptrdiff_t fnKv3Root = 0;
+		inline std::ptrdiff_t kv3IdGeneric = 0;
+		constexpr std::ptrdiff_t kv3ContextSize = 0x1220;	// On the stack of the game, before its error string
+
+		// Our page: the stub at this offset, a mark & DrawArray at its start. Finds the entry an earlier run left on it
+		constexpr std::ptrdiff_t stubOffset = 0x1000;
+		constexpr uint64_t stubMagic = 0x534D4148435441AD;
+
+		constexpr std::ptrdiff_t meshStride = 0x70;      // One mesh of the array DrawArray gets
+		constexpr std::ptrdiff_t meshMaterial = 0x20;    // CMaterial2* it is drawn with
+	}
+
+	// Agent preview (-insecure): a player preview panel of Panorama made by JavaScript. Found at startup, 0 when not
+	namespace panorama {
+		// panorama.dll, CUIEngine::RunScript(engine, CUIPanel*, const char* script, const char* origin, { int line, column })
+		inline std::ptrdiff_t fnRunScript = 0;
+		// CUIEngine, the JavaScript context of each panel that has one: CUtlRBTree, nodes { links, CUIPanel*, context }
+		inline std::ptrdiff_t contextMap = 0;
+		// CUIEngine::RunFrame, every frame on the main thread, in the menu too: our calls run at its start
+		inline std::ptrdiff_t fnRunFrame = 0;
+		constexpr std::ptrdiff_t accessUIEngine = 13;    // vtable index of PanoramaUIEngine001: mov rax, [rcx + engine]; ret
+		constexpr std::ptrdiff_t panelId = 0x10;         // const char* - CUIPanel
+	}
+
+	// Kill effect (-insecure): the particle manager of the game, the way CreateParticle & SetParticleControl of its
+	// scripts (CScriptParticleManager) use it. Found at startup, 0 when not
+	namespace particles {
+		inline std::ptrdiff_t fnGetManager = 0;         // client.dll, CGameParticleManager* ()
+		inline std::ptrdiff_t fnCreateEffect = 0;       // CreateEffectIndex(manager, uint32* index, const request*)
+		inline std::ptrdiff_t fnSetControlPoint = 0;    // (manager, int index, int point, const Vector*, float)
+		inline std::ptrdiff_t fnSetControlPointForward = 0; // (manager, int index, int point, const Vector*, const Vector* forward, float), 0 when not found
+	}
+
 	// What the server sends of a vote: the counts in the vote controller, who voted what in the vote_cast event
 	namespace votes {
 		inline std::ptrdiff_t dwGameEventManager = 0; // CGameEventManager* - client.dll, found by signature
@@ -167,6 +215,7 @@ namespace offsets
 	namespace visuals {
 		inline std::ptrdiff_t m_flFlashMaxAlpha = 0x150C; // float32 - C_CSPlayerPawnBase, how white a flash gets (255)
 		inline std::ptrdiff_t m_bGunGameImmunity = 0x3508; // bool - C_CSPlayerPawn, spawn protection (deathmatch, casual)
+		inline std::ptrdiff_t m_pClientsideRagdoll = 0x1198; // C_BaseEntity* - C_BaseAnimGraph, the ragdoll of a dead pawn (an entity of its own)
 		inline std::ptrdiff_t m_bSmokeEffectSpawned = 0x13AA; // bool - C_SmokeGrenadeProjectile, the cloud was made
 
 		// The cloud of a smoke, from the code that makes it (not in the schema): an object in the projectile with the time
@@ -327,6 +376,10 @@ namespace offsets
 
 		// C_BasePlayerPawn* GetLocalPawn(int slot) of the game, called by the base OverrideView. 0 when not found
 		inline std::ptrdiff_t getLocalPawn = 0;
+
+		// CCSPlayer_CameraServices::CalcView(services, Vector* origin, QAngle* angles, float* fov): the eyes of that
+		// player & where they look, moved between the ticks by the game each frame. 0 when not found
+		inline std::ptrdiff_t calcView = 0;
 	}
 
 	// Accepting a found match like the button does: LobbyAPI.SetLocalPlayerReady("accept") of panorama calls
@@ -359,6 +412,8 @@ namespace offsets
 		const std::string userCmdManagers = "41 56 41 57 48 83 EC 48 48 8D 54 24 ?? E8 ?? ?? ?? ?? 8B 44 24 ?? 83 F8 FF 74 ?? FF C8 EB ?? B8 FF FF FF FF 4C 8B 35 ?? ?? ?? ?? 4C 63 F8";
 		// CreateMove: mov r14d, [rax + sequence]; mov edx, r14d; call
 		const std::string userCmdSequence = "44 8B B0 ?? ?? ?? ?? 41 8B D6 E8";
+		// engine2.dll, the setinfo command: cmp dword ptr [rdx + argc], 3 at its start
+		const std::string setInfo = "40 55 41 57 48 8D 6C 24 ?? 48 81 EC ?? ?? ?? ?? 45 33 FF 83 BA ?? ?? ?? ?? 03 74";
 		const std::string updateName = "48 89 5C 24 18 48 89 4C 24 08 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 ?? ?? ?? ?? 48 81 EC ?? ?? ?? ?? 44 8B A9 ?? ?? ?? ?? 4C 8B F1 41 C1 ED 08 41 80 E5 01 E8";
 		// C_BaseModelEntity::SetRenderColor: mov eax, [rdx]; ... mov [rcx + m_clrRender], eax; mov rcx, [rcx + alpha property]; ... jmp <update>
 		// Spawn protection of the shader: cmp [rdi + attributes], 0; jne; mov rcx, [scene system]; mov rdx, rdi; call [rax + allocate];
@@ -384,6 +439,12 @@ namespace offsets
 		const std::string playVol = "4C 8B DC 55 41 55 41 56 41 57 49 8D AB ?? ?? ?? ?? 48 81 EC ?? ?? ?? ?? 45 33 ED 4C 8B FA BA 01 00 00 00 44 89 6D ?? B9 C8 00 00 C0";
 		// IResourceSystem::PreCache: push rbx; push rbp; push rdi; sub rsp, 80h; mov rax, [rcx]; mov rbp, r8; mov rdi, rdx
 		const std::string resourcePrecache = "40 53 55 57 48 81 EC 80 00 00 00 48 8B 01 49 8B E8 48 8B FA";
+		// scenesystem.dll, DrawArray of the animatable scene objects: movsxd rsi, r9d (count); mov rbx, r8 (meshes)
+		const std::string drawArray = "48 8B C4 48 89 50 10 48 89 48 08 53 56 41 57 48 81 EC ?? ?? ?? ?? 49 63 F1 49 8B D8 4C 8B FA 83 FE 01";
+		// materialsystem2.dll, CreateMaterial: allocates the CMaterial2, then fills it from the KeyValues3
+		const std::string createMaterial = "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 81 EC ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 8B F2 BA ?? ?? ?? ?? 4D 8B F1 49 8B E8";
+		// client.dll, a KeyValues3 loaded from text: context constructor (+19), its root (+31), lea r9, [id] (+41)
+		const std::string kv3Load = "48 8D 8D ?? ?? ?? ?? 45 33 F6 33 D2 4C 89 B5 ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8D 8D ?? ?? ?? ?? E8 ?? ?? ?? ?? 44 89 74 24 28 4C 8D 0D";
 		const std::string gameEventManager = "41 C6 46 28 01 4C 8D 05 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? 49 8D 56 20 45 33 C9 48 8B 01 FF 50 18";
 		const std::string updateClanTag ="48 89 5C 24 10 48 89 74 24 18 55 57 41 56 48 8D AC 24 ?? ?? ?? ?? 48 81 EC ?? ?? ?? ?? 48 8B 81 ?? ?? ?? ?? 48 8D 3D ?? ?? ?? ?? 48 85 C0 C7 44 24 ?? 80 00 00 C0";
 
@@ -399,6 +460,21 @@ namespace offsets
 		// ClientModeCSNormal::OverrideView: push rbx; push rdi; sub rsp, 0x58; mov rdi, rdx; call <base OverrideView>; then a debug
 		// view of the game "movsd [rdi + origin], xmm0" at +0x98 & "movsd [rdi + angles], xmm0" at +0xC1
 		const std::string overrideView = "40 53 57 48 83 EC 58 48 8B FA E8 ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 80 78 58 00 0F 84";
+		// CCSPlayer_CameraServices::CalcView, entry 34 of its vtable
+		const std::string calcView = "40 55 56 57 41 56 41 57 48 8D 6C 24 C9 48 81 EC 90 00 00 00 48 83 79 38 00 4D 8B F9 4D 8B F0 48 8B F2 48 8B F9";
+
+		// panorama.dll, CUIEngine::RunScript (compile & run): arguments saved, mov r12, r8 (the script)
+		// Particle manager: its getter (a global, right before a function with a 0x1240 stack), CreateEffectIndex,
+		// SetControlPoint
+		const std::string particleManager = "48 8B 05 ?? ?? ?? ?? C3 CC CC CC CC CC CC CC CC 48 89 5C 24 10 57 B8 40 12 00 00";
+		const std::string createEffectIndex = "40 57 48 83 EC 20 49 8B 00 48 8B FA 48 85 C0 74 ?? 80 38 00 74 ?? 48 89 5C 24 30 8B 99";
+		const std::string setControlPoint = "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 50 F3 0F 10 1D ?? ?? ?? ?? 41 8B F8 8B DA 4C 8D 05";
+		const std::string setControlPointForward = "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 60 48 8B E9 49 8B F9 48 8D 4C 24 40 41 8B F0 8B DA E8 ?? ?? ?? ?? 48 8B 84 24 90 00 00 00 48 8D 54 24 30";
+		const std::string runScript = "4C 89 4C 24 20 4C 89 44 24 18 48 89 54 24 10 55 53 56 57 41 54 41 56 41 57 48 8D 6C 24 ?? 48 81 EC ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? 48 C7 44 24 38 ?? ?? ?? ?? 48 89 44 24 30 4D 8B E0";
+		// panorama.dll, CUIEngine::PanelDestroyed: mov r13, rdx; ...; mov rsi, rcx; ...; add rcx, contexts (+17)
+		const std::string panelDestroyed = "4C 8B EA 48 89 55 ?? 48 8B F1 48 89 55 ?? 48 81 C1 ?? ?? ?? ??";
+		// panorama.dll, CUIEngine::RunFrame: xor r14d, r14d; mov rsi, rcx; mov [rcx + x], r14d; rdtsc
+		const std::string runFrame = "48 89 5C 24 10 48 89 6C 24 18 56 57 41 54 41 56 41 57 48 81 EC ?? ?? ?? ?? 45 33 F6 48 8B F1 44 89 B1 ?? ?? ?? ?? 0F 31";
 		// Client mode of a split screen slot: movsxd rax, ecx; lea rcx, [rip + modes]; imul rax, rax, size; add rax, rcx; ret
 		// Setting up the view, after OverrideView: mov rsi, [rdi + observer services]; test rsi, rsi; je; mov rax, [rsi];
 		// mov rcx, rsi; call [rax + ...]; test al, al; je <skip> (at +26); lea r8, [rbx + angles]; mov rcx, rsi; lea rdx, [rbx + origin]

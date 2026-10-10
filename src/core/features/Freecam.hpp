@@ -64,6 +64,10 @@ private:
     Vec3_t CameraAngles();      // & where it looks
     void WriteFov();            // Of our camera, for the stub
     float fov_written = -1.f;
+    void WritePunch(bool alive);    // View punch scale for the stub, alive in first person only
+    bool punch_on = false;
+    float punch_scale = 1.f;
+    std::chrono::steady_clock::time_point punch_logged{};
     void PatchObserverView(bool patched);
     static uint32_t HandleOf(uintptr_t entity);
 

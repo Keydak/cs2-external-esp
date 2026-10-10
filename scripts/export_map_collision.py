@@ -18,7 +18,7 @@ from kv3 import KV3
 
 VPK_SIGNATURE = 0x55AA1234
 TRI_MAGIC = b'CS2T'
-TRI_VERSION = 1
+TRI_VERSION = 2
 
 # Collision layers grenades fly through
 IGNORED_LAYERS = {'playerclip', 'npcclip', 'sky'}
@@ -135,6 +135,9 @@ def mesh_triangles(mesh):
 
 
 def blocks_grenades(attribute):
+    # Small props players walk through (hanging signs, boxes on walls): grenades fly through them too
+    if 'player' in {layer.lower() for layer in attribute.get('m_InteractExcludeStrings', [])}:
+        return False
     layers = {layer.lower() for layer in attribute.get('m_InteractAsStrings', [])}
     return not (layers & IGNORED_LAYERS)
 

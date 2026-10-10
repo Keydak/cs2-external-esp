@@ -2,6 +2,8 @@
 
 #include "gui/renderer/window/Window.hpp"
 #include "updater/http/HttpHelper.hpp"
+#include "core/features/Skins.hpp"
+#include "core/features/AgentPreview.hpp"
 
 #include <d3d11.h>
 #include <wincodec.h>
@@ -12,6 +14,38 @@
 
 namespace {
     constexpr int WORKERS = 4;
+    constexpr int PREFETCH_WORKERS = 8;
+    // The skin list comes from the internet: waited for that long, the pictures downloaded for that long at most (what
+    // is left is downloaded when shown, like before)
+    constexpr auto LIST_WAIT = std::chrono::seconds(60);
+    constexpr auto PREFETCH_FOR = std::chrono::minutes(5);
+
+    // The pictures of the agents of the ESP preview, by the names of this build: a new version of a picture gets a new
+    // name, the old ones stay there to compare
+    constexpr auto AGENTS_URL = "https://raw.githubusercontent.com/Keydak/cs2-external-assets/main/agents/";
+
+    // Saved next to it first, a half written file is never read
+    bool SaveFile(const std::filesystem::path& path, const std::string& bytes) {
+        std::error_code error;
+        std::filesystem::create_directories(path.parent_path(), error);
+        auto part = path;
+        part += ".part";
+        {
+            std::ofstream f(part, std::ios::binary | std::ios::trunc);
+            f.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            if (!f.good())
+                return false;
+        }
+        std::filesystem::rename(part, path, error);
+        if (error)
+            std::filesystem::remove(part, error);
+        return !error;
+    }
+
+    // PNG: the 8 bytes it starts with, so a page of an error is not saved as one
+    bool IsPng(const std::string& bytes) {
+        return bytes.size() > 8 && bytes.compare(0, 8, "\x89PNG\r\n\x1a\n") == 0;
+    }
     const std::filesystem::path cache_dir = "cache/images";
 
     // File name from the url
@@ -142,6 +176,131 @@ ImTextureID ImageCache::FromMemory(const void* data, size_t size, const void* al
 
 ImTextureID ImageCache::Get(const std::string& url) {
     return GetInstance().GetImpl(url);
+}
+
+std::string ImageCache::Small(const std::string& url) {
+    return url.empty() ? url : url + "/256fx192f";
+}
+
+void ImageCache::StartPrefetch() {
+    auto& i = GetInstance();
+    if (i.prefetch_started.exchange(true))
+        return;
+    i.SetPrefetchProgress("Waiting for the item list");
+    std::thread(&ImageCache::Prefetch, &i).detach();
+}
+
+bool ImageCache::IsPrefetched() {
+    return GetInstance().prefetched;
+}
+
+float ImageCache::GetPrefetchPercent() {
+    auto& i = GetInstance();
+    if (i.prefetched)
+        return 1.f;
+    int total = i.prefetch_total;
+    return total > 0 ? static_cast<float>(i.prefetch_done) / total : 0.f;
+}
+
+std::string ImageCache::GetPrefetchProgress() {
+    auto& i = GetInstance();
+    std::lock_guard lock(i.prefetch_mutex);
+    return i.prefetch_progress;
+}
+
+void ImageCache::SetPrefetchProgress(const std::string& text) {
+    std::lock_guard lock(this->prefetch_mutex);
+    this->prefetch_progress = text;
+}
+
+void ImageCache::Prefetch() {
+    auto started = std::chrono::steady_clock::now();
+    auto finish = [&](const char* how) {
+        SetPrefetchProgress("");
+        this->prefetched = true;
+        LOGF(INFO, "Item pictures: {}", how);
+    };
+
+    // The agents of the preview from our repository: not there (or no internet), they are taken in the game later
+    SetPrefetchProgress("Loading the agents");
+    for (bool terrorist : { true, false }) {
+        std::filesystem::path path = AgentPreview::PicturePath(terrorist);
+        std::error_code error;
+        if (std::filesystem::exists(path, error))
+            continue;
+
+        std::string bytes;
+        auto url = AGENTS_URL + path.filename().string();
+        if (HttpHelper::GetRaw(url, bytes) == 200 && IsPng(bytes) && SaveFile(path, bytes))
+            LOGF(INFO, "Agent picture downloaded: {}", path.filename().string());
+        else
+            LOGF(WARNING, "Agent picture {} is not in the assets repository, it is taken in the game", path.filename().string());
+    }
+    SetPrefetchProgress("Waiting for the item list");
+
+    // The list of the items first, from the internet or the copy on the disk
+    while (!Skins::IsLoaded() && !Skins::HasFailed() && std::chrono::steady_clock::now() - started < LIST_WAIT)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (!Skins::IsLoaded())
+        return finish("no item list, they are downloaded when shown");
+
+    // The urls the skin changer shows
+    std::vector<std::string> urls;
+    for (const auto& item : Skins::GetItems()) {
+        if (!item.image.empty())
+            urls.push_back(Small(item.image));
+        for (const auto& skin : item.skins)
+            if (!skin.image.empty())
+                urls.push_back(Small(skin.image));
+    }
+    for (const auto& agent : Skins::GetAgents())
+        if (!agent.image.empty())
+            urls.push_back(Small(agent.image));
+    for (const auto& kit : Skins::GetMusicKits())
+        if (!kit.image.empty())
+            urls.push_back(kit.image);
+
+    std::sort(urls.begin(), urls.end());
+    urls.erase(std::unique(urls.begin(), urls.end()), urls.end());
+
+    std::vector<std::string> missing;
+    std::error_code error;
+    for (const auto& url : urls)
+        if (!std::filesystem::exists(cache_dir / HashName(url), error))
+            missing.push_back(url);
+
+    if (missing.empty())
+        return finish(std::format("all {} on the disk", urls.size()).c_str());
+
+    LOGF(INFO, "Item pictures: downloading {} of {}...", missing.size(), urls.size());
+    std::filesystem::create_directories(cache_dir, error);
+    this->prefetch_total = static_cast<int>(missing.size());
+    SetPrefetchProgress(std::format("Loading 0/{}", missing.size()));
+
+    // A few at a time. Written next to it first, so a half written one is never read
+    auto next = std::make_shared<std::atomic<size_t>>(0);
+    auto running = std::make_shared<std::atomic<int>>(PREFETCH_WORKERS);
+    auto list = std::make_shared<std::vector<std::string>>(std::move(missing));
+    for (int w = 0; w < PREFETCH_WORKERS; w++) {
+        std::thread([this, next, running, list] {
+            for (size_t at = (*next)++; at < list->size() && !this->prefetched; at = (*next)++) {
+                const auto& url = (*list)[at];
+                auto path = cache_dir / HashName(url);
+                std::string bytes;
+                if (HttpHelper::GetRaw(url, bytes) == 200 && !bytes.empty())
+                    SaveFile(path, bytes);
+                int done = ++this->prefetch_done;
+                SetPrefetchProgress(std::format("Loading {}/{}", done, list->size()));
+            }
+            (*running)--;
+        }).detach();
+    }
+
+    while (*running > 0 && std::chrono::steady_clock::now() - started < PREFETCH_FOR)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    finish(*running > 0
+        ? std::format("took too long, {} of {} downloaded, the rest when shown", this->prefetch_done.load(), list->size()).c_str()
+        : std::format("{} downloaded", list->size()).c_str());
 }
 
 ImTextureID ImageCache::GetImpl(const std::string& url) {

@@ -21,6 +21,7 @@
 #include <iostream>
 
 #include "updater/Updater.hpp"
+#include "gui/loader/Loader.hpp"
 #include "core/engine/Engine.hpp"
 #include "gui/renderer/Renderer.hpp"
 #include "core/features/View.hpp"
@@ -36,6 +37,9 @@
 #include "core/features/Sounds.hpp"
 #include "core/features/Subtick.hpp"
 #include "core/features/Visuals.hpp"
+#include "core/features/MaterialChams.hpp"
+#include "core/features/AgentPreview.hpp"
+#include "core/features/KillEffect.hpp"
 #include "core/engine/GameThread.hpp"
 
 #include <external/exception.hpp>
@@ -50,17 +54,16 @@ int main()
 
     // Normal priority: above it our threads take the CPU from the game, which lost a lot of its frame rate
 
-    // Our version file only tells: it never stops the program, unless a warning of it was answered with "no"
-    Updater::Init();
-    if (!Updater::Process())
-        goto exit;
-
-    if (!Engine::Init()) {
-#ifdef _DEBUG
-        LOGF(FATAL, "Engine failed to initialize, cannot continue execution");
-#endif
-        goto exit;
+    // The loader: the version against GitHub, then on Start the game & the items. Closed, or the game could not be
+    // used (it says why): nothing was started, straight out
+    if (!Loader::Run()) {
+        LOGF(INFO, "The loader was closed");
+        LogHelper::Destroy();
+        ExitProcess(0);
     }
+
+    // Everything checked: the features from here on
+    Engine::Start();
 
     if (!Renderer::Init()) {
         LOGF(FATAL, "Renderer failed to initialize, cannot continue execution");
@@ -101,16 +104,21 @@ int main()
     Sounds::Shutdown();
     Subtick::Shutdown();
     Visuals::Shutdown();
+    MaterialChams::Shutdown();
+    AgentPreview::Shutdown();
+    KillEffect::Shutdown();
     GameThread::Shutdown();
 
     // Everything is put back, now say why it stopped. Debug tells what was wrong, release only that it needs an update
     if (Engine::IsOutdated()) {
-        LogHelper::Show();
 #ifdef _DEBUG
+        LogHelper::Show();
         LOGF(FATAL, "Stopped, outdated for the running CS2: {}. Everything changed in the game was put back, "
             "run update-project/check.bat to see the rest", Engine::GetOutdated());
 #else
-        LOGF(FATAL, "CS2 was updated, this program has to be updated too before it can be used again");
+        // Release has no console
+        MessageBoxA(nullptr, "CS2 was updated, this program has to be updated too before it can be used again.",
+            "Cs2 External", MB_ICONWARNING);
 #endif
     }
 
