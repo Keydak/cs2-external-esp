@@ -15,6 +15,7 @@
 #include "core/features/ModBrowser.hpp"
 #include "core/features/GameRadar.hpp"
 #include "core/features/ClanTag.hpp"
+#include "core/features/AutoAccept.hpp"
 #include "core/features/Visuals.hpp"
 #include "assets/fonts/WeaponIcons.h"
 #include "assets/fonts/Inter.h"
@@ -554,15 +555,22 @@ namespace {
 	// The last slider was let go this frame, to act once the value is picked
 	bool slider_released = false;
 
-	bool SliderRow(const char* label, float* value, float min, float max, const char* value_text, const char* tooltip = nullptr) {
+	// Slider whose value box is a text field right now, & whether that field still needs the keyboard
+	ImGuiID typing_slider = 0;
+	bool typing_focus = false;
+
+	// Typed: a click on the value box turns it into a text field, Enter or a click away sets what was typed
+	bool SliderRow(const char* label, float* value, float min, float max, const char* value_text, const char* tooltip = nullptr, bool typed = false) {
 		ImGui::PushID(label);
 
 		auto row = BeginRow(label, tooltip);
 		auto d = ImGui::GetWindowDrawList();
 
-		// Value box
+		// Value box, wider for a longer value
 		const float box_height = S(22.f);
-		auto box_pos = RowSlot(row, ImVec2(SLIDER_VALUE_WIDTH, box_height));
+		auto text_size = ImGui::CalcTextSize(value_text);
+		const float box_width = std::max(SLIDER_VALUE_WIDTH, text_size.x + S(14.f));
+		auto box_pos = RowSlot(row, ImVec2(box_width, box_height));
 		EndRow(row);
 
 		// Track
@@ -591,6 +599,58 @@ namespace {
 
 		float hover = Animate(item + 1, ImGui::IsItemHovered() || active ? 1.f : 0.f, 16.f);
 		float drag = Animate(item + 2, active ? 1.f : 0.f, 14.f);
+
+		bool typing = typed && typing_slider == item;
+		bool box_hovered = false;
+		if (typing) {
+			// Starts with the value shown, the field keeps its own text while typed in
+			char buffer[32];
+			snprintf(buffer, sizeof(buffer), "%s", value_text);
+
+			ImGui::SetCursorScreenPos(box_pos);
+			if (typing_focus)
+				ImGui::SetKeyboardFocusHere();
+
+			ImGui::PushStyleColor(ImGuiCol_FrameBg, col::track_hover);
+			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, S(4.f));
+			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(S(6.f), (box_height - ImGui::GetTextLineHeight()) * 0.5f));
+			ImGui::SetNextItemWidth(box_width);
+			ImGui::InputText("##typed", buffer, sizeof(buffer), ImGuiInputTextFlags_AutoSelectAll);
+			ImGui::PopStyleVar(2);
+			ImGui::PopStyleColor();
+
+			if (ImGui::IsItemDeactivated()) {
+				// A comma for the decimals too
+				std::string text = buffer;
+				std::replace(text.begin(), text.end(), ',', '.');
+
+				char* end = nullptr;
+				float number = std::strtof(text.c_str(), &end);
+				if (end != text.c_str()) {
+					number = std::clamp(number, min, max);
+					if (number != *value) {
+						*value = number;
+						changed = true;
+					}
+				}
+				typing_slider = 0;
+			}
+			else if (!ImGui::IsItemActive() && !typing_focus)
+				typing_slider = 0;
+
+			typing_focus = false;
+		}
+		else if (typed) {
+			ImGui::SetCursorScreenPos(box_pos);
+			if (ImGui::InvisibleButton("##box", ImVec2(box_width, box_height))) {
+				typing_slider = item;
+				typing_focus = true;
+			}
+			box_hovered = ImGui::IsItemHovered();
+			if (box_hovered)
+				ImGui::SetMouseCursor(ImGuiMouseCursor_TextInput);
+		}
+
 		float t = Animate(item + 3, std::clamp((*value - min) / (max - min), 0.f, 1.f), 22.f);
 
 		float y = slider_pos.y + slider_height * 0.5f;
@@ -605,15 +665,16 @@ namespace {
 		// Knob in the accent, a little bigger while held or hovered
 		d->AddCircleFilled(ImVec2(fill_x, y), S(5.f) + hover * S(1.f), C(col::accent), 24);
 
-		d->AddRectFilled(box_pos, box_pos + ImVec2(SLIDER_VALUE_WIDTH, box_height), LerpColor(col::track, col::track_hover, hover * 0.5f), S(4.f));
-		d->AddRect(box_pos, box_pos + ImVec2(SLIDER_VALUE_WIDTH, box_height), C(col::border), S(4.f));
-
-		auto text_size = ImGui::CalcTextSize(value_text);
-		d->AddText(
-			box_pos + ImVec2((SLIDER_VALUE_WIDTH - text_size.x) * 0.5f, (box_height - text_size.y) * 0.5f),
-			C(col::text),
-			value_text
-		);
+		if (!typing) {
+			float box_hover = std::max(hover * 0.5f, box_hovered ? 1.f : 0.f);
+			d->AddRectFilled(box_pos, box_pos + ImVec2(box_width, box_height), LerpColor(col::track, col::track_hover, box_hover), S(4.f));
+			d->AddText(
+				box_pos + ImVec2((box_width - text_size.x) * 0.5f, (box_height - text_size.y) * 0.5f),
+				C(col::text),
+				value_text
+			);
+		}
+		d->AddRect(box_pos, box_pos + ImVec2(box_width, box_height), C(typing ? col::accent : col::border), S(4.f));
 
 		// Value bubble above the knob while dragging
 		if (drag > 0.01f) {
@@ -632,19 +693,19 @@ namespace {
 		return changed;
 	}
 
-	bool SliderFloat(const char* label, float* value, float min, float max, const char* format, const char* tooltip = nullptr) {
+	bool SliderFloat(const char* label, float* value, float min, float max, const char* format, const char* tooltip = nullptr, bool typed = false) {
 		char text[32];
 		snprintf(text, sizeof(text), format, *value);
 
-		return SliderRow(label, value, min, max, text, tooltip);
+		return SliderRow(label, value, min, max, text, tooltip, typed);
 	}
 
-	bool SliderInt(const char* label, int* value, int min, int max, const char* format, const char* tooltip = nullptr) {
+	bool SliderInt(const char* label, int* value, int min, int max, const char* format, const char* tooltip = nullptr, bool typed = false) {
 		char text[32];
 		snprintf(text, sizeof(text), format, *value);
 
 		float f = static_cast<float>(*value);
-		if (!SliderRow(label, &f, static_cast<float>(min), static_cast<float>(max), text, tooltip))
+		if (!SliderRow(label, &f, static_cast<float>(min), static_cast<float>(max), text, tooltip, typed))
 			return false;
 
 		int rounded = static_cast<int>(std::round(f));
@@ -1496,8 +1557,7 @@ namespace {
 			bool enter = ImGui::InputTextWithHint("##name", kind == Config::Preset::SKINS ? "Loadout name..." : "Config name...",
 				state.name, sizeof(state.name), ImGuiInputTextFlags_EnterReturnsTrue);
 
-			if (PillButton("Export", ImVec2(start.x + width - export_width, start.y), ImVec2(export_width, button_height), true,
-				"Saves the current settings under this name, one with the same name is overwritten") || enter) {
+			if (PillButton("Export", ImVec2(start.x + width - export_width, start.y), ImVec2(export_width, button_height), true) || enter) {
 				state.op = PresetState::Op::SAVE;
 				state.target = state.name;
 				state.name[0] = 0;
@@ -1552,11 +1612,11 @@ namespace {
 				float third = (width - gap * 2.f) / 3.f;
 				bool is_default = state.selected == state.default_name;
 
-				if (PillButton("Load", bar, ImVec2(half, button_height), true, "Imports it into the current settings")) {
+				if (PillButton("Load", bar, ImVec2(half, button_height), true)) {
 					state.op = PresetState::Op::LOAD;
 					state.target = state.selected;
 				}
-				if (PillButton("Save", ImVec2(bar.x + half + gap, bar.y), ImVec2(half, button_height), false, "Overwrites it with the current settings")) {
+				if (PillButton("Save", ImVec2(bar.x + half + gap, bar.y), ImVec2(half, button_height), false)) {
 					state.op = PresetState::Op::SAVE;
 					state.target = state.selected;
 				}
@@ -1569,12 +1629,12 @@ namespace {
 					snprintf(state.rename, sizeof(state.rename), "%s", state.selected.c_str());
 				}
 				if (PillButton(is_default ? "Default##unset" : "Set Default", ImVec2(second.x + third + gap, second.y), ImVec2(third, button_height), is_default,
-					is_default ? "Imported on every start, click to stop that" : "Imports it on every start of the program")) {
+					is_default ? "Imported on every start, click to stop that" : nullptr)) {
 					state.op = PresetState::Op::DEFAULT;
 					state.target = state.selected;
 				}
 				if (PillButton(state.confirm_delete ? "Sure?##delete" : "Delete##delete", ImVec2(second.x + (third + gap) * 2.f, second.y), ImVec2(third, button_height),
-					state.confirm_delete, state.confirm_delete ? "Click again to delete the file" : nullptr)) {
+					state.confirm_delete)) {
 					if (state.confirm_delete) {
 						state.op = PresetState::Op::REMOVE;
 						state.target = state.selected;
@@ -1596,7 +1656,7 @@ namespace {
 		const float folder_width = S(96.f);
 
 		if (PillButton("Open Folder", footer, ImVec2(folder_width, button_height), false,
-			"Files put in this folder by hand show up in the list too, like ones from a friend")) {
+			"Files put here by hand show up in the list too")) {
 			std::error_code error;
 			std::filesystem::create_directories(Config::PresetFolder(kind), error);
 			auto folder = std::filesystem::absolute(Config::PresetFolder(kind), error);
@@ -3134,7 +3194,7 @@ static bool HasPickedMod();
 // Previews of the tabs in their own panel next to the menu, so the options fit without scrolling. The profile page
 // of the misc tab shows the player picked there
 void Menu::RenderPreviewPanel(float alpha) {
-	bool profile = active_tab == Tab::MISC && misc_page == 1;
+	bool profile = active_tab == Tab::MISC && misc_page == 3;
 	bool mod = active_tab == Tab::SKINS && skin_page == SkinPage::MODEL_BROWSER && HasPickedMod();
 	bool skin = active_tab == Tab::SKINS && (skin_page == SkinPage::SKINS || skin_page == SkinPage::GLOVES ||
 		skin_page == SkinPage::KNIVES || skin_page == SkinPage::AGENTS || skin_page == SkinPage::MUSIC_KITS);
@@ -3466,7 +3526,7 @@ void Menu::RenderHeader() {
 		}
 	}
 	else if (active_tab == Tab::MISC) {
-		static const std::vector<const char*> pages = { "Camera", "Profile", "Interface", "Effects" };
+		static const std::vector<const char*> pages = { "View", "Self", "Kills", "Profile", "Interface" };
 
 		int clicked = PagePills("##misc_pages", pages, misc_page, ImVec2(x, pill_y), pill_height);
 		if (clicked >= 0) {
@@ -3842,8 +3902,8 @@ void Menu::RenderPlayersPreview() {
 	ImGui::EndDisabled();
 }
 
-// Rows of one group of the material chams: where it is seen, behind walls (null: never behind one), the material
-static void MaterialChamsRows(cfg::visuals::material_chams::group_t& chams, const char* visible_note, const char* hidden_note,
+// Rows of one group of the material chams: where it is seen, behind walls (when it can be behind one), the material
+static void MaterialChamsRows(cfg::visuals::material_chams::group_t& chams, bool behind_walls_row,
 	const char* visible_label = "Visible") {
 	constexpr auto unavailable = "Only available when the game is launched with -insecure";
 	static const std::vector<const char*> materials = { "Flat", "Glow", "Hologram", "Metallic" };
@@ -3859,15 +3919,13 @@ static void MaterialChamsRows(cfg::visuals::material_chams::group_t& chams, cons
 	bool available = MaterialChams::IsAvailable();
 
 	ImGui::BeginDisabled(!available);
-	Toggle(visible_label, &chams.visible.enabled, available ? visible_note : missing, nullptr, &chams.visible.color);
-	if (hidden_note) {
+	Toggle(visible_label, &chams.visible.enabled, available ? nullptr : missing, nullptr, &chams.visible.color);
+	if (behind_walls_row) {
 		bool behind_walls = MaterialChams::HasBehindWalls(chams.material);
 		ImGui::BeginDisabled(!behind_walls);
 		Toggle("Behind Walls", &chams.hidden.enabled, !available
 			? missing
-			: behind_walls
-			? hidden_note
-			: "Only with Flat & Glow", nullptr, &chams.hidden.color);
+			: behind_walls ? nullptr : "Only with Flat & Glow", nullptr, &chams.hidden.color);
 		ImGui::EndDisabled();
 	}
 
@@ -3900,13 +3958,13 @@ void Menu::RenderPlayersTab() {
 			"All four sides, the inside lightly filled",
 		};
 		ToggleMore("Box", &group.box, nullptr, [&] {
-			DropdownRow("Style", &group.box_style, box_styles, box_style_descriptions, "How the box is drawn");
+			DropdownRow("Style", &group.box_style, box_styles, box_style_descriptions);
 		}, &group.box_visible, "Visible", &group.box_invisible, "Behind a wall");
 		ToggleColors("Skeleton", &group.skeleton, nullptr, &group.skeleton_visible, &group.skeleton_invisible);
 		ToggleColors("Head Tracker", &group.head_tracker, nullptr, &group.tracker_visible, &group.tracker_invisible);
 		ToggleColors("Tracers", &group.tracers, nullptr, &group.tracer_visible, &group.tracer_invisible);
 		Toggle("Visible Only", &group.visible_only);
-		MoreRow("Bar Numbers", "The health & armor as numbers on their bars", [&] {
+		MoreRow("Bar Numbers", nullptr, [&] {
 			Toggle("Health Number", &group.health_number);
 			Toggle("Armor Number", &group.armor_number);
 		});
@@ -3918,13 +3976,13 @@ void Menu::RenderPlayersTab() {
 		// Size & color of each kind of flag, the sizes behind the dots
 		BeginPanel("FLAGS");
 		AddFlagRow(group, font_bold);
-		MoreRow("Text", "Name, weapon, ping, money...", [&] {
+		MoreRow("Text", nullptr, [&] {
 			SliderFloat("Size", &group.text_size, 8.f, 24.f, "%.0f px");
 		}, { { &group.text, "Color" } });
-		MoreRow("Icons", "Weapon, kit, C4 & the other icons", [&] {
+		MoreRow("Icons", nullptr, [&] {
 			SliderFloat("Size", &group.icon_size, 8.f, 28.f, "%.0f px");
 		}, { { &group.icon, "Flashed, reloading, scoped & kit icons" } });
-		MoreRow("States", "FLASHED, RELOADING, SCOPED & DEFUSING", [&] {
+		MoreRow("States", nullptr, [&] {
 			SliderFloat("Size", &group.state_size, 8.f, 24.f, "%.0f px");
 		}, { { &group.flashed, "Flashed" }, { &group.reloading, "Reloading" }, { &group.scoped, "Scoped" }, { &group.defusing, "Defusing" } });
 		EndPanel();
@@ -3947,9 +4005,7 @@ void Menu::RenderPlayersTab() {
 
 		// Our own materials drawn by the game, where the player is seen & behind walls
 		BeginPanel("MATERIAL CHAMS");
-		MaterialChamsRows(esp_group == 0 ? cfg::visuals::material_chams::team : cfg::visuals::material_chams::enemy,
-			"The player in our material where they can be seen",
-			"The player in our material through walls & smokes. A player partly behind a wall is split where the wall is");
+		MaterialChamsRows(esp_group == 0 ? cfg::visuals::material_chams::team : cfg::visuals::material_chams::enemy, true);
 		EndPanel();
 	}
 	ImGui::EndDisabled();
@@ -4017,16 +4073,12 @@ void Menu::RenderBombTab() {
 		Toggle("Bomb ESP", &cfg::esp::bomb, nullptr, nullptr, &cfg::esp::colors::bomb);
 
 		ImGui::BeginDisabled(!Visuals::IsAvailable());
-		Toggle("Outline Glow", &cfg::visuals::glow::bomb, Visuals::IsAvailable()
-			? "Outline of the game around the planted bomb, seen through walls.\nThe dropped bomb: in the items tab"
-			: "Only available when the game is launched with -insecure", nullptr, &cfg::visuals::glow::bomb_color);
+		Toggle("Outline Glow", &cfg::visuals::glow::bomb, Visuals::IsAvailable() ? nullptr : "Only available when the game is launched with -insecure", nullptr, &cfg::visuals::glow::bomb_color);
 		ImGui::EndDisabled();
 		EndPanel();
 
 		BeginPanel("MATERIAL CHAMS");
-		MaterialChamsRows(cfg::visuals::material_chams::bomb,
-			"The planted bomb in our material where it can be seen.\nThe dropped bomb: in the items tab",
-			"The planted bomb in our material through walls & smokes");
+		MaterialChamsRows(cfg::visuals::material_chams::bomb, true);
 		EndPanel();
 	}
 	EndColumn();
@@ -4133,19 +4185,19 @@ void Menu::RenderProjectilesTab() {
 
 		ImGui::BeginDisabled(!gr::enabled);
 		ToggleMore("Trails", &gr::trails, nullptr, [&] {
-			Toggle("Grenade Colors", &gr::trail_type_color, "Color each trail like its grenade instead of using the trail color");
+			Toggle("Grenade Colors", &gr::trail_type_color);
 		}, &gc::trail, "Trail color");
-		Toggle("Throw Preview", &gr::prediction, "Path, bounces & landing spot of the grenade in your hand\nUses the map collision, built from the game files the first time a map is played");
-		Toggle("Landing Prediction", &gr::landing, "Where grenades in the air are going to land or explode, thrown by anyone\nUses the map collision too");
+		Toggle("Throw Preview", &gr::prediction);
+		ToggleMore("Landing Prediction", &gr::landing, nullptr, [&] {
+			SegmentRow("Line", &gr::landing_line, { "Dashed", "Solid" });
+		});
 		ImGui::EndDisabled();
 
 		ImGui::BeginDisabled(!writes);
-		ToggleMore("Outline Glow", &cfg::visuals::glow::thrown, writes
-			? "Outline of the game around grenades in the air, seen through walls.\nGrenades on the ground: in the items tab"
-			: "Only available when the game is launched with -insecure", [&] {
+		ToggleMore("Outline Glow", &cfg::visuals::glow::thrown, writes ? nullptr : "Only available when the game is launched with -insecure", [&] {
 			namespace thrown = cfg::visuals::glow::thrown_colors;
 			ColorRow("Smoke", &thrown::smoke);
-			ColorRow("Molotov", &thrown::molotov, "Also the incendiary");
+			ColorRow("Molotov", &thrown::molotov);
 			ColorRow("Flash", &thrown::flash);
 			ColorRow("HE", &thrown::he);
 			ColorRow("Decoy", &thrown::decoy);
@@ -4156,7 +4208,7 @@ void Menu::RenderProjectilesTab() {
 		BeginPanel("COLORS");
 		ImGui::BeginDisabled(!gr::enabled);
 		ColorRow("Smoke", &gc::smoke);
-		ColorRow("Molotov", &gc::molotov, "Also used for the fire area");
+		ColorRow("Molotov", &gc::molotov);
 		ColorRow("Flash", &gc::flash);
 		ColorRow("HE", &gc::he);
 		ColorRow("Decoy", &gc::decoy);
@@ -4169,9 +4221,9 @@ void Menu::RenderProjectilesTab() {
 	{
 		BeginPanel("LOOK");
 		ImGui::BeginDisabled(!gr::enabled);
-		Toggle("Smoke Area", &gr::smoke_area, "Outline & fill of a popped smoke on the ground.\nIts icon & timer stay");
-		Toggle("Fire Area", &gr::fire_area, "Outline & fill of a molotov or incendiary fire on the ground.\nIts icon & timer stay");
-		Toggle("Glow", &gr::glow, "Popped smokes & burning fires glow on the ground");
+		Toggle("Smoke Area", &gr::smoke_area);
+		Toggle("Fire Area", &gr::fire_area);
+		Toggle("Glow", &gr::glow);
 		Toggle("Icons", &gr::icons);
 		Toggle("Names", &gr::names);
 		ToggleMore("Timers", &gr::timers, nullptr, [&] {
@@ -4257,7 +4309,7 @@ void Menu::RenderItemsTab() {
 	BeginColumn(0);
 	{
 		BeginPanel("ITEMS");
-		ToggleMore("Item ESP", &it::enabled, "Weapons, grenades, the bomb & defuse kits nobody holds", [&] {
+		ToggleMore("Item ESP", &it::enabled, nullptr, [&] {
 			SliderFloat("Max Distance", &it::max_distance, 5.f, 200.f, "%.0f m");
 			SliderFloat("Text Size", &it::text_size, 8.f, 24.f, "%.0f px");
 			SliderFloat("Icon Size", &it::icon_size, 8.f, 28.f, "%.0f px");
@@ -4277,22 +4329,14 @@ void Menu::RenderItemsTab() {
 	{
 		BeginPanel("OUTLINE GLOW");
 		ImGui::BeginDisabled(!writes);
-		Toggle("Weapons", &cfg::visuals::glow::items, writes
-			? "Outline of the game around weapons & defuse kits on the ground, seen through walls"
-			: unavailable, nullptr, &cfg::visuals::glow::item_color);
-		Toggle("Grenades", &cfg::visuals::glow::utility, writes
-			? "Outline of the game around grenades on the ground, seen through walls.\nThrown grenades: in the projectiles tab"
-			: unavailable, nullptr, &cfg::visuals::glow::utility_color);
-		Toggle("Dropped Bomb", &cfg::visuals::glow::dropped_bomb, writes
-			? "Outline of the game around the dropped bomb, seen through walls.\nThe planted bomb: in the bomb tab"
-			: unavailable, nullptr, &cfg::visuals::glow::dropped_bomb_color);
+		Toggle("Weapons", &cfg::visuals::glow::items, writes ? nullptr : unavailable, nullptr, &cfg::visuals::glow::item_color);
+		Toggle("Grenades", &cfg::visuals::glow::utility, writes ? nullptr : unavailable, nullptr, &cfg::visuals::glow::utility_color);
+		Toggle("Dropped Bomb", &cfg::visuals::glow::dropped_bomb, writes ? nullptr : unavailable, nullptr, &cfg::visuals::glow::dropped_bomb_color);
 		ImGui::EndDisabled();
 		EndPanel();
 
 		BeginPanel("MATERIAL CHAMS");
-		MaterialChamsRows(cfg::visuals::material_chams::items,
-			"Weapons, grenades, the dropped bomb & defuse kits on the ground in our material where they can be seen",
-			"The same through walls & smokes");
+		MaterialChamsRows(cfg::visuals::material_chams::items, true);
 		EndPanel();
 	}
 	EndColumn();
@@ -4313,8 +4357,7 @@ static bool CustomModelTools(cfg::skins::loadout_t& loadout, const std::vector<C
 			continue;
 
 		auto label = std::format("Move {} to its folder##move_{}", model.name, model.resource);
-		auto tooltip = std::format("Moves the folder of {} (with its materials) to csgo/{}", model.name, model.place);
-		if (PillButton(label.c_str(), ImGui::GetCursorScreenPos(), ImVec2(ImGui::GetContentRegionAvail().x, S(28.f)), false, tooltip.c_str())) {
+		if (PillButton(label.c_str(), ImGui::GetCursorScreenPos(), ImVec2(ImGui::GetContentRegionAvail().x, S(28.f)))) {
 			move_error.clear();
 			if (CustomModels::MoveToPlace(model, move_error) && loadout.custom_model == model.resource)
 				loadout.custom_model = model.made_for;      // Still the one picked, at its new place
@@ -4333,15 +4376,15 @@ static bool CustomModelTools(cfg::skins::loadout_t& loadout, const std::vector<C
 	const float row_x = pos.x;
 	float status_height = 0.f;
 
-	bool browse = PillButton("Download##custom_browse", pos, size, true, "Player models of GameBanana, put in the game with one click");
+	bool browse = PillButton("Download##custom_browse", pos, size, true);
 	pos.x += size.x + S(6.f);
 
-	if (PillButton("Refresh##custom_refresh", pos, size, false, "Look at the folders again, and try a model the game could not load once more"))
+	if (PillButton("Refresh##custom_refresh", pos, size, false))
 		CustomModels::Rescan();
 
 	// The folder of the model picked, else where new ones can go
 	if (PillButton("Open Folder##custom_folder", pos + ImVec2(size.x + S(6.f), 0.f), size, false,
-		picked != models.end() ? "Opens the folder of the model picked" : "Opens the csgo folder of the game, models go in characters/ or agents/")) {
+		picked != models.end() ? nullptr : "Models go in characters/ or agents/ of this folder")) {
 		auto folder = picked != models.end() ? picked->file.parent_path() : CustomModels::Folder().parent_path().parent_path();
 		if (!folder.empty()) {
 			std::error_code ec;
@@ -4561,13 +4604,13 @@ static ModPanelResult ModPanel(const ModBrowser::Mod& mod) {
 	}
 	else if (!installed) {
 		ImGui::BeginDisabled(busy);
-		if (PillButton("Download##mod_download", pos, button, true, busy ? "Another model is downloading" : "Downloads it and puts it in the game folder"))
+		if (PillButton("Download##mod_download", pos, button, true, busy ? "Another model is downloading" : nullptr))
 			ModBrowser::Install(mod);
 		ImGui::EndDisabled();
 		next();
 	}
 	else {
-		if (PillButton("Remove##mod_remove", pos, button, false, "Deletes the files it put in the game folder")) {
+		if (PillButton("Remove##mod_remove", pos, button, false)) {
 			std::vector<std::string> removed;
 			remove_error.clear();
 			remove_error_mod = mod.id;
@@ -4624,6 +4667,21 @@ static std::string CustomModelName(const std::string& resource) {
 
 // The knife under the mouse on the knives page, shown in the window next to the menu
 static int knife_hovered = 0;
+
+// Same paint kit, seed & wear
+static bool SameSkinItem(const cfg::skins::item_t& a, const cfg::skins::item_t& b) {
+	return a.paint_kit == b.paint_kit && a.seed == b.seed && std::abs(a.wear - b.wear) < 1e-6f;
+}
+
+// The saved skin last picked or shown for an item: changed after, Update saves the changes into it
+static std::string saved_loaded;
+static int saved_loaded_item = 0;
+
+// The one of the item picked last, while the paint kit is still its own
+static bool IsLoadedSave(const cfg::skins::saved_t& saved, int definition_index, const cfg::skins::item_t& entry) {
+	return saved_loaded_item == definition_index && saved.definition_index == definition_index && saved.name == saved_loaded &&
+		saved.item.paint_kit == entry.paint_kit;
+}
 
 // The picture of what is picked over the whole width of the window next to the menu, the glow of its rarity behind
 static void SkinPreview(const std::string& image, const char* icon, ImU32 rarity) {
@@ -4730,7 +4788,7 @@ void Menu::RenderSkinsTab() {
 		// Export & import of the loadouts
 		const auto presets_size = ImVec2(ImGui::CalcTextSize("Export / Import").x + S(22.f), S(28.f));
 		auto presets_pos = ImVec2(switch_pos.x - label_size.x - S(24.f) - presets_size.x, toolbar.y + (S(32.f) - presets_size.y) * 0.5f);
-		if (PillButton("Export / Import", presets_pos, presets_size, skin_page == SkinPage::PRESETS, "Saved skin loadouts, apart from the configs")) {
+		if (PillButton("Export / Import", presets_pos, presets_size, skin_page == SkinPage::PRESETS)) {
 			skin_page = skin_page == SkinPage::PRESETS ? SkinPage::ITEMS : SkinPage::PRESETS;
 			skin_page_progress = 0.f;
 		}
@@ -4744,7 +4802,7 @@ void Menu::RenderSkinsTab() {
 
 	// When a change shows up in the game
 	{
-		constexpr auto note = "Changes show after the next round or a respawn. Set in the lobby, they are on from the start of the match";
+		constexpr auto note = "Agents change next round, knives after a respawn. Set in the lobby, they are on from the start of the match";
 		auto at = ImGui::GetCursorScreenPos();
 		auto d = ImGui::GetWindowDrawList();
 		const float line = S(16.f);
@@ -5218,7 +5276,6 @@ void Menu::RenderSkinsTab() {
 		ImGui::BeginChild("##skin_presets", ImVec2(std::min(ImGui::GetContentRegionAvail().x, S(460.f)), 0.f),
 			ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_NoBackground);
 		BeginPanel("SKIN LOADOUTS");
-		TextBlock("Both teams, gloves, knives, agents & the music kit. Configs are exported apart, in Settings");
 		PresetList(Config::Preset::SKINS, skin_presets);
 		EndPanel();
 		ImGui::EndChild();
@@ -5254,6 +5311,44 @@ void Menu::RenderSkinsTab() {
 		BeginScrollArea("##skin_grid");
 		{
 			bool equipped = is_glove ? loadout.glove == selected_item : is_knife ? loadout.knife == selected_item : true;
+
+			// Saved ones of the item first, under their names
+			std::vector<const cfg::skins::saved_t*> kept;
+			for (const auto& saved : cfg::skins::saved) {
+				auto skin = info ? info->FindSkin(saved.item.paint_kit) : nullptr;
+				if (saved.definition_index == selected_item &&
+					(ContainsInsensitive(saved.name, skin_search) || (skin && ContainsInsensitive(skin->name, skin_search))))
+					kept.push_back(&saved);
+			}
+
+			if (!kept.empty()) {
+				SectionTitle("SAVED");
+				auto saved_grid = BeginFixedGrid(4);
+
+				for (size_t k = 0; k < kept.size(); k++) {
+					const auto& saved = *kept[k];
+					auto skin = info ? info->FindSkin(saved.item.paint_kit) : nullptr;
+					auto id = std::format("saved_{}", k);
+					auto details = std::format("Seed {}, wear {:.4f}", saved.item.seed, saved.item.wear);
+
+					NextCard(saved_grid);
+					if (ItemCard(id.c_str(), saved_grid.card, skin ? SmallImage(skin->image) : BaseImage(selected_item), is_glove ? nullptr : Weapon::IconFor(selected_item),
+						saved.name.c_str(), details.c_str(), skin ? RarityColor(skin->rarity_color) : col::border_hover,
+						equipped && (SameSkinItem(entry, saved.item) || IsLoadedSave(saved, selected_item, entry)))) {
+						entry = saved.item;
+						saved_loaded = saved.name;
+						saved_loaded_item = selected_item;
+
+						if (is_glove)
+							loadout.glove = selected_item;
+						if (is_knife)
+							loadout.knife = selected_item;
+					}
+				}
+
+				EndGrid(saved_grid);
+				SectionTitle("SKINS");
+			}
 
 			auto grid = BeginFixedGrid(4);
 			NextCard(grid);
@@ -5329,6 +5424,10 @@ void Menu::RenderSkinPanel() {
 			return it != loadout.items.end() && it->second.paint_kit ? item.FindSkin(it->second.paint_kit) : nullptr;
 		};
 		const int default_knife = skin_team == cfg::skins::TERRORIST ? 59 : 42;
+		auto entry_of = [&](int definition_index) {
+			auto it = loadout.items.find(definition_index);
+			return it != loadout.items.end() ? it->second : cfg::skins::item_t{};
+		};
 
 		switch (skin_page) {
 		case SkinPage::GLOVES: {
@@ -5341,8 +5440,9 @@ void Menu::RenderSkinPanel() {
 				SkinCaption(glove->name, skin->name, RarityColor(skin->rarity_color));
 			else
 				SkinCaption(glove ? glove->name : "Default", glove ? "No skin picked" : "From the player model");
+			InspectButton(loadout.glove, entry_of(loadout.glove));
 			Toggle("Hide In Third Person", &cfg::skins::glove_hide_third_person,
-				"Keeps the new gloves in first person only\nFor player models with gloves built in, they would show both in third person");
+				"For player models with gloves built in, they would show both in third person");
 			EndPanel();
 			break;
 		}
@@ -5360,6 +5460,7 @@ void Menu::RenderSkinPanel() {
 			if (skin)
 				name += " | " + skin->name;
 			SkinCaption(name, knife_hovered && knife_hovered != loadout.knife ? "Click to equip" : "Equipped");
+			InspectButton(shown_index ? shown_index : default_knife, skin ? entry_of(shown_index) : cfg::skins::item_t{});
 			EndPanel();
 			break;
 		}
@@ -5377,6 +5478,13 @@ void Menu::RenderSkinPanel() {
 				SkinCaption(agent->name, agent->group, RarityColor(agent->rarity_color));
 			else
 				SkinCaption("Default", "From the game");
+			// A custom model is no item of the game, it goes in the screen of an agent of its team
+			if (custom) {
+				if (InspectPill(Skins::IsLoaded()))
+					Skins::InspectModel(loadout.custom_model, CustomModelName(loadout.custom_model), skin_team == cfg::skins::TERRORIST);
+			}
+			else
+				InspectButton(agent ? loadout.agent : 0);
 			EndPanel();
 
 			if (CustomModels::IsAvailable()) {
@@ -5403,7 +5511,6 @@ void Menu::RenderSkinPanel() {
 			}
 			else
 				SkinCaption(cfg::skins::music_kit ? "Custom" : "Default", "From the game");
-			TextBlock("For both teams, plays in the menu, at the start & end of rounds and as your MVP anthem");
 			EndPanel();
 			break;
 		}
@@ -5419,6 +5526,168 @@ void Menu::RenderSkinPanel() {
 
 	if (go_to)
 		OpenSkinPage(*go_to);
+}
+
+// The item as the game shows it, in its inspect screen
+void Menu::InspectButton(int definition_index, const cfg::skins::item_t& item) {
+	if (InspectPill(definition_index > 0))
+		Skins::Inspect(definition_index, item.paint_kit, item.wear, item.seed);
+}
+
+// The button of the inspect screen: the menu closes, the mouse turns the item in the game
+bool Menu::InspectPill(bool enabled) {
+	ImGui::BeginDisabled(!Skins::CanInspect() || !enabled);
+	bool clicked = PillButton("Inspect##skin_inspect", ImGui::GetCursorScreenPos(), ImVec2(ImGui::GetContentRegionAvail().x, S(28.f)), false,
+		Skins::CanInspect() ? nullptr : "Only with -insecure, on the game build it was made for");
+	ImGui::EndDisabled();
+	ImGui::Dummy(ImVec2(0.f, S(4.f)));
+
+	if (clicked)
+		Renderer::SetOpen(false);
+	return clicked;
+}
+
+// Name field of the row below: the name of the save the skin is or came from, filled only when that save changes, so a
+// changed wear or seed keeps what is in it
+static char saved_name[48]{};
+static std::string name_of;
+static int name_item = -1;
+
+// The skin of the skins page kept under a name, picked again at the top of the skins of the item. A saved one shows its
+// name in the field, Update renames it, Remove forgets it. One picked & changed after: Update saves the changes into
+// it, Save makes a new one. An empty name is the name of the skin & its seed
+void Menu::SavedSkinRow(cfg::skins::item_t& entry, const SkinInfo* skin) {
+	auto& saved = cfg::skins::saved;      // Locked by RenderSkinPanel
+	auto match = std::find_if(saved.begin(), saved.end(), [&](const cfg::skins::saved_t& s) {
+		return s.definition_index == selected_item && SameSkinItem(s.item, entry);
+	});
+
+	if (match != saved.end()) {
+		saved_loaded = match->name;
+		saved_loaded_item = selected_item;
+	}
+
+	auto loaded = match != saved.end() ? saved.end() : std::find_if(saved.begin(), saved.end(), [&](const cfg::skins::saved_t& s) {
+		return IsLoadedSave(s, selected_item, entry);
+	});
+
+	// Another save (or none), its name in the field
+	auto current = match != saved.end() ? match->name : loaded != saved.end() ? loaded->name : std::string();
+	if (name_item != selected_item || name_of != current) {
+		name_item = selected_item;
+		name_of = current;
+		snprintf(saved_name, sizeof(saved_name), "%s", current.c_str());
+	}
+
+	auto d = ImGui::GetWindowDrawList();
+	const float width = ImGui::GetContentRegionAvail().x;
+	const float height = S(28.f), gap = S(6.f);
+	const int buttons = match != saved.end() || loaded != saved.end() ? 2 : 1;
+	const float button_width = buttons == 2 ? S(66.f) : S(76.f);
+
+	// The typed name without the spaces around it, the one of the skin & its seed when there is none
+	auto fallback = std::format("{} #{}", skin ? skin->name : std::format("Paint kit {}", entry.paint_kit), entry.seed);
+	auto typed = std::string(saved_name);
+	typed.erase(0, typed.find_first_not_of(' '));
+	typed.erase(typed.find_last_not_of(' ') + 1);
+	auto name = typed.empty() ? fallback : typed;
+
+	// The skin & the name into the saved one at that place. A name another save of the item has: that one is saved over
+	auto update = [&](size_t at) {
+		saved[at].item = entry;
+		if (name != saved[at].name) {
+			for (size_t k = 0; k < saved.size(); k++) {
+				if (k != at && saved[k].definition_index == selected_item && saved[k].name == name) {
+					saved.erase(saved.begin() + k);
+					if (k < at)
+						at--;
+					break;
+				}
+			}
+			saved[at].name = name;
+		}
+
+		saved_loaded = saved[at].name;
+		saved_loaded_item = selected_item;
+		std::thread(Config::Write).detach();
+	};
+
+	ImGui::Dummy(ImVec2(0.f, S(4.f)));
+
+	// What the row is about, over it
+	if (buttons == 2) {
+		auto text = match != saved.end() ? std::string("Saved") : std::format("Changed from {}", loaded->name);
+		auto at = ImGui::GetCursorScreenPos();
+		d->PushClipRect(at, at + ImVec2(width, S(16.f)), true);
+		d->AddText(font_regular, S(12.f), at + ImVec2(S(2.f), 0.f), C(col::text_dim), text.c_str());
+		d->PopClipRect();
+		ImGui::Dummy(ImVec2(width, S(18.f)));
+	}
+
+	auto start = ImGui::GetCursorScreenPos();
+	auto button = ImVec2(start.x + width - button_width, start.y);
+
+	ImGui::BeginDisabled(!entry.paint_kit);
+	ImGui::PushStyleColor(ImGuiCol_FrameBg, col::track);
+	ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, col::track_hover);
+	ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, S(6.f));
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(S(10.f), (height - ImGui::GetTextLineHeight()) * 0.5f));
+	ImGui::SetNextItemWidth(width - (button_width + gap) * buttons);
+	bool enter = ImGui::InputTextWithHint("##saved_name", fallback.c_str(), saved_name, sizeof(saved_name), ImGuiInputTextFlags_EnterReturnsTrue);
+	ImGui::PopStyleVar(2);
+	ImGui::PopStyleColor(2);
+
+	if (match != saved.end()) {
+		// Its name only, the skin is the same
+		bool renamed = name != match->name;
+
+		ImGui::BeginDisabled(!renamed);
+		bool rename = PillButton("Update##saved_skin", button, ImVec2(button_width, height), true);
+		ImGui::EndDisabled();
+		button.x -= button_width + gap;
+
+		bool remove = PillButton("Remove##saved_skin", button, ImVec2(button_width, height));
+
+		if ((rename || enter) && renamed)
+			update(match - saved.begin());
+		else if (remove) {
+			saved.erase(match);
+			saved_loaded.clear();
+			std::thread(Config::Write).detach();
+		}
+	}
+	else {
+		// Into the one picked, under the name in the field. Enter saves a new one only when there is none
+		if (loaded != saved.end()) {
+			auto tooltip = std::format("Saves the changes into {}", loaded->name);
+			if (PillButton("Update##saved_skin", button, ImVec2(button_width, height), true, tooltip.c_str()))
+				update(loaded - saved.begin());
+			button.x -= button_width + gap;
+		}
+
+		bool save = PillButton("Save##saved_skin", button, ImVec2(button_width, height), buttons == 1,
+			buttons == 1 ? nullptr : "Keeps it as a new one");
+		if ((save || (enter && buttons == 1)) && entry.paint_kit) {
+			// Never over another save, that is what Update is for: a number after a name the item already has
+			auto taken = [&](const std::string& candidate) {
+				return std::any_of(saved.begin(), saved.end(), [&](const cfg::skins::saved_t& s) {
+					return s.definition_index == selected_item && s.name == candidate;
+				});
+			};
+			auto unique = name;
+			for (int number = 2; taken(unique); number++)
+				unique = std::format("{} ({})", name, number);
+
+			saved.push_back({ unique, selected_item, entry });
+			saved_loaded = unique;
+			saved_loaded_item = selected_item;
+			std::thread(Config::Write).detach();
+		}
+	}
+	ImGui::EndDisabled();
+
+	ImGui::SetCursorScreenPos(ImVec2(start.x, start.y + height));
+	ImGui::Dummy(ImVec2(width, S(4.f)));
 }
 
 // The picked skin of the item of the skins page big, its wear, seed & paint kit
@@ -5441,18 +5710,25 @@ void Menu::SkinPanel() {
 			SkinCaption(skin->name, item_name, RarityColor(skin->rarity_color));
 		else
 			SkinCaption(is_knife ? "Vanilla" : "Default", item_name);
+		InspectButton(selected_item, entry);
 
 		ImGui::BeginDisabled(!entry.paint_kit);
 		{
 			float min_wear = std::max(skin ? skin->min_float : 0.f, 0.0001f);
 			float max_wear = skin ? skin->max_float : 1.f;
 
-			SliderFloat("Wear", &entry.wear, min_wear, max_wear, "%.4f", "Float value, lower is cleaner");
-			SliderInt("Seed", &entry.seed, 0, 1000, "%d", "Pattern seed, moves the pattern on skins like Case Hardened or Fade");
+			// Up to 6 decimals, at least 4: a typed float like 0.000123 shows as it is
+			char wear_text[32];
+			snprintf(wear_text, sizeof(wear_text), "%.6f", entry.wear);
+			for (auto length = strlen(wear_text); length > 6 && wear_text[length - 1] == '0'; length--)
+				wear_text[length - 1] = '\0';
+
+			SliderRow("Wear", &entry.wear, min_wear, max_wear, wear_text, "Click the value to type it", true);
+			SliderInt("Seed", &entry.seed, 0, 1000, "%d", "Click the value to type it", true);
 		}
 		ImGui::EndDisabled();
 
-		if (InputIntRow("Paint Kit ID", &entry.paint_kit, "Set the paint kit by hand, 0 for the default look", S(80.f)) && entry.paint_kit > 0) {
+		if (InputIntRow("Paint Kit ID", &entry.paint_kit, "0 for the default look", S(80.f)) && entry.paint_kit > 0) {
 			if (is_glove)
 				loadout.glove = selected_item;
 			if (is_knife)
@@ -5460,6 +5736,8 @@ void Menu::SkinPanel() {
 		}
 
 		entry.paint_kit = std::max(entry.paint_kit, 0);
+
+		SavedSkinRow(entry, skin);
 	}
 	EndPanel();
 
@@ -5487,14 +5765,14 @@ void Menu::RenderMovementTab() {
 			: "Only with -insecure, on the game build it was made for");
 
 		ToggleBind("Jump Bug", &cfg::misc::jump_bug, &cfg::misc::jump_bug_mode, &cfg::misc::jump_bug_key, Subtick::IsAvailable()
-			? "Jumps right before touching the ground: no fall damage & a higher jump. Hold SPACE with it while falling"
+			? "Hold SPACE with it while falling"
 			: "Only with -insecure, on the game build it was made for");
 		ImGui::EndDisabled();
 
 		// Rows the keybind list leaves out
 		MultiDropdownRow("Hide In Keybinds", { "Bunny Hop", "Air Strafe", "Jump Bug" },
 			{ &cfg::world::keybinds::hide_bhop, &cfg::world::keybinds::hide_air_strafe, &cfg::world::keybinds::hide_jump_bug },
-			"Left out of the keybind list, they keep working", S(120.f));
+			nullptr, S(120.f));
 		ImGui::EndDisabled();
 		EndPanel();
 	}
@@ -5504,11 +5782,9 @@ void Menu::RenderMovementTab() {
 	{
 		BeginPanel("GROUND");
 		ImGui::BeginDisabled(!available);
-		Toggle("Quick Stop", &cfg::misc::quick_stop, available
-			? "Counter strafes for you when you let go of WASD, stopping right away"
-			: unavailable);
+		Toggle("Quick Stop", &cfg::misc::quick_stop, available ? nullptr : unavailable);
 		Toggle("Null Binds", &cfg::misc::null_binds, available
-			? "Holding A & D (or W & S) moves towards the last one pressed instead of stopping,\nlike snap tap"
+			? "Holding A & D (or W & S) moves towards the last one pressed instead of stopping,\nlike snap tap. Bunny hopping without air strafe it rests in the air, the keys are your own"
 			: unavailable);
 		ImGui::EndDisabled();
 
@@ -5832,16 +6108,16 @@ static void ProfilePanel() {
 		ImGui::BeginDisabled(player->bot);
 		if (PillButton("Steam Profile##open", pos, button))
 			open(std::format(L"https://steamcommunity.com/profiles/{}", player->steam_id));
-		if (PillButton("csst.at##csst", pos + second, button, false, "Their CS2 stats on csst.at, in the browser"))
+		if (PillButton("csst.at##csst", pos + second, button, false))
 			open(std::format(L"https://csst.at/profile/{}", player->steam_id));
-		if (PillButton("Copy ID##copy", pos + below, button, false, "Copies their SteamID64"))
+		if (PillButton("Copy ID##copy", pos + below, button, false))
 			ImGui::SetClipboardText(std::to_string(player->steam_id).c_str());
 		ImGui::EndDisabled();
 
 		bool can_steal = ClanTag::IsNameAvailable() && !player->local;
 		ImGui::BeginDisabled(!can_steal);
 		if (PillButton("Steal Name##steal", pos + below + second, button, true,
-			ClanTag::IsNameAvailable() ? "Their name as yours (Change Name)" : "Only available when the game is launched with -insecure")) {
+			ClanTag::IsNameAvailable() ? nullptr : "Only available when the game is launched with -insecure")) {
 			CopyName(cfg::misc::name_text, sizeof(cfg::misc::name_text), player->name);
 			cfg::misc::name_change = true;
 		}
@@ -5855,8 +6131,8 @@ static void ProfilePanel() {
 }
 
 // A sound of the sound folder: on & off, behind the dots which file (heard when picked) & its volume (heard when let go)
-static void SoundRows(const char* label, bool* enabled, std::string& file, int* volume, const char* tooltip) {
-	bool changed = ToggleMore(label, enabled, tooltip, [&] {
+static void SoundRows(const char* label, bool* enabled, std::string& file, int* volume) {
+	bool changed = ToggleMore(label, enabled, nullptr, [&] {
 		auto files = Sounds::List();
 
 		if (files.empty()) {
@@ -5909,19 +6185,21 @@ void Menu::RenderMiscTab() {
 	column_layout.y += (1.f - page) * TAB_SLIDE;
 	ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * page);
 
+	// The pages: View (how the game is seen), Self (our own player), Kills (what our hits & kills show), Profile (how
+	// the others see us, the players of the match), Interface (our overlays)
 	switch (misc_page) {
 	case 0: {
 		const char* camera_missing = View::IsAvailable()
 			? "The camera code was not found in this game version"
 			: unavailable;
+		namespace vis = cfg::visuals;
+		const bool writes = Visuals::IsAvailable();
 
 		BeginColumn(0);
 		{
 			BeginPanel("VIEW");
 			ImGui::BeginDisabled(!View::IsAvailable());
-			ToggleMore("FOV Override", &cfg::view::fov_enabled, View::IsAvailable()
-				? "Camera field of view, scoped weapons keep their zoom"
-				: unavailable, [&] {
+			ToggleMore("FOV Override", &cfg::view::fov_enabled, View::IsAvailable() ? nullptr : unavailable, [&] {
 				SliderInt("FOV", &cfg::view::fov, 60, 140, "%d");
 			});
 			ImGui::EndDisabled();
@@ -5939,22 +6217,19 @@ void Menu::RenderMiscTab() {
 
 			ImGui::BeginDisabled(!Freecam::IsAvailable());
 			ToggleMore("View Punch", &cfg::view::punch_enabled, Freecam::IsAvailable()
-				? "How much the camera kicks when you shoot or get hit, 100% is the game\n"
-				  "Only what you see: where the bullets go stays the same"
+				? "Only what you see: where the bullets go stays the same"
 				: camera_missing, [&] {
-				SliderFloat("Amount", &cfg::view::punch_scale, 0.f, 100.f, "%.0f%%", "0% keeps the camera still");
+				SliderFloat("Amount", &cfg::view::punch_scale, 0.f, 100.f, "%.0f%%");
 			});
 			ImGui::EndDisabled();
 
 			// The console variables of the game, so the same limits
 			ImGui::BeginDisabled(!View::IsAvailable());
-			ToggleMore("Viewmodel", &cfg::view::viewmodel_enabled, View::IsAvailable()
-				? "Position & field of view of the weapon in your hands, like viewmodel_fov & viewmodel_offset_x/y/z in the console\nYour own values come back when turned off"
-				: unavailable, [&] {
-				SliderFloat("FOV", &cfg::view::viewmodel_fov, 40.f, 120.f, "%.0f", "The game allows 60 - 68");
-				SliderFloat("Offset X", &cfg::view::viewmodel_x, -20.f, 20.f, "%.1f", "Left & right, the game allows -2 - 2.5");
-				SliderFloat("Offset Y", &cfg::view::viewmodel_y, -20.f, 20.f, "%.1f", "Forward & back, the game allows -2 - 2");
-				SliderFloat("Offset Z", &cfg::view::viewmodel_z, -20.f, 20.f, "%.1f", "Up & down, the game allows -2 - 2");
+			ToggleMore("Viewmodel", &cfg::view::viewmodel_enabled, View::IsAvailable() ? nullptr : unavailable, [&] {
+				SliderFloat("FOV", &cfg::view::viewmodel_fov, 40.f, 120.f, "%.0f");
+				SliderFloat("Offset X", &cfg::view::viewmodel_x, -20.f, 20.f, "%.1f");
+				SliderFloat("Offset Y", &cfg::view::viewmodel_y, -20.f, 20.f, "%.1f");
+				SliderFloat("Offset Z", &cfg::view::viewmodel_z, -20.f, 20.f, "%.1f");
 
 				if (!View::IsViewmodelAvailable())
 					TextBlock("Looking for the viewmodel settings of the game...");
@@ -5969,40 +6244,41 @@ void Menu::RenderMiscTab() {
 			BeginPanel("CAMERA");
 			ImGui::BeginDisabled(!Freecam::IsAvailable());
 			ToggleMore("Free Cam", &cfg::view::freecam, Freecam::IsAvailable()
-				? "The camera flies on its own while your player stands still, only while alive\n"
-				  "The mouse looks around, W A S D fly where you look, space up, left ctrl down, left shift faster\n"
+				? "Only while alive. The mouse looks around, W A S D fly where you look, space up, left ctrl down, left shift faster\n"
 				  "Your player gets none of it: no turning, walking, shooting or scoping"
 				: camera_missing, [&] {
 				KeybindRow("Key", &cfg::view::freecam_key);
-				SliderFloat("Speed", &cfg::view::freecam_speed, 100.f, 3000.f, "%.0f", "Units per second, three times faster with shift");
-				SliderFloat("Sensitivity", &cfg::view::freecam_sensitivity, 0.1f, 5.f, "%.2fx", "Turning with the mouse, times your sensitivity in the game");
+				SliderFloat("Speed", &cfg::view::freecam_speed, 100.f, 3000.f, "%.0f");
+				SliderFloat("Sensitivity", &cfg::view::freecam_sensitivity, 0.1f, 5.f, "%.2fx");
 			});
 			ImGui::EndDisabled();
 
 			ImGui::BeginDisabled(!Freecam::IsDeadAvailable());
 			ToggleMore("Casual Spectate", &cfg::view::dead_spectate, Freecam::IsDeadAvailable()
-				? "Once you die, watch anyone like in casual, enemies too, no key needed\n"
-				  "Left & right click switch the player, space goes first person, third person, free cam"
+				? "Left & right click switch the player, space goes first person, third person, free cam"
 				: Freecam::IsAvailable()
 					? "The spectator camera was not found in this game version"
 					: camera_missing, [&] {
-				SliderFloat("Distance", &cfg::view::spectate_distance, 40.f, 300.f, "%.0f", "Behind them in third person, W & S change it");
+				SliderFloat("Distance", &cfg::view::spectate_distance, 40.f, 300.f, "%.0f", "W & S change it");
 			});
 			ImGui::EndDisabled();
 			EndPanel();
 
-			// Our agent & hands, our weapon in our material: always seen, one switch each
-			BeginPanel("LOCAL CHAMS");
-			{
-				static int part = 0;
-				SegmentRow("Part", &part, { "Agent & Hands", "Weapon" },
-					"Agent & Hands: your player in third person & what it holds, your arms & gloves in first person\n"
-					"Weapon: the weapon in your hands in first person");
-				namespace chams = cfg::visuals::material_chams;
-				MaterialChamsRows(part == 0 ? chams::local : chams::weapon, part == 0
-					? "Your player in third person & your arms in first person in our material"
-					: "The weapon in your hands in our material", nullptr, "Chams");
-			}
+			BeginPanel("REMOVALS");
+			ImGui::BeginDisabled(!writes);
+			ToggleMore("No Flash", &vis::no_flash, writes ? nullptr : unavailable, [&] {
+				SliderFloat("Flash Strength", &vis::flash_alpha, 0.f, 255.f, "%.0f");
+			});
+			Toggle("No Smoke", &vis::no_smoke, writes ? nullptr : unavailable);
+			Toggle("No Scope Overlay", &vis::no_scope_overlay, writes ? nullptr : unavailable);
+			ImGui::EndDisabled();
+
+			// Without the overlay there is nothing to blur
+			ImGui::BeginDisabled(!writes || vis::no_scope_overlay);
+			Toggle("No Scope Blur", &vis::no_scope_blur, !writes
+				? unavailable
+				: vis::no_scope_overlay ? "Gone with the scope overlay" : nullptr);
+			ImGui::EndDisabled();
 			EndPanel();
 		}
 		EndColumn();
@@ -6012,174 +6288,85 @@ void Menu::RenderMiscTab() {
 	case 1: {
 		BeginColumn(0);
 		{
-			BeginPanel("CLAN TAG");
-			ImGui::BeginDisabled(!ClanTag::IsAvailable());
-			next_more_width = S(360.f);
-			ToggleMore("Clan Tag", &cfg::misc::clantag, ClanTag::IsAvailable()
-				? "Animated tag, sent to the server: everyone there sees it.\n"
-				  "There it changes at most once a second"
-				: unavailable, [&] {
-				SegmentRow("Text", &cfg::misc::clantag_source, { "Custom", "Players" },
-					"Custom: the text below\nPlayers: the names of everyone in the match take turns");
+			// Our agent & hands, our weapon in our material: always seen, one switch each
+			BeginPanel("LOCAL CHAMS");
+			{
+				static int part = 0;
+				SegmentRow("Part", &part, { "Agent & Hands", "Weapon" },
+					"Agent & Hands: your player in third person & what it holds, your arms & gloves in first person\n"
+					"Weapon: the weapon in your hands in first person");
+				namespace chams = cfg::visuals::material_chams;
+				MaterialChamsRows(part == 0 ? chams::local : chams::weapon, false, "Chams");
+			}
+			EndPanel();
+		}
+		EndColumn();
 
-				if (cfg::misc::clantag_source == 0)
-					TextField("##clantag_text", "Tag... (tag 1|tag 2 take turns)", cfg::misc::clantag_text, sizeof(cfg::misc::clantag_text),
-						"Separate texts with | to show them one after another,\neach one a whole round of the animation");
-
-				// Where the tag goes, the name ones need the name update
-				ImGui::BeginDisabled(!ClanTag::IsNameAvailable());
-				SegmentRow("Position", &cfg::misc::clantag_target, { "Clan", "Before", "After", "Name" },
-					"Clan: [tag] name, in the clan slot of the game\n"
-					"Before: tag name, without brackets\n"
-					"After: name tag\n"
-					"Name: the tag is your whole name");
-				ImGui::EndDisabled();
-
-				static const char* descriptions[] = {
-					"Always the same", "On & off", "Moves left through itself",
-					"Typed in with a cursor & deleted again", "Letters found one by one, the rest guessed", "One capital moving through",
-					"Every letter fades in & out on its own ( . : )", "All guessed, letters lock in random order", "Now & then letters turn into symbols",
-					"Grows out of its middle & shrinks back", "- = # around the tag", "Comes in from the left, goes out to the right",
+		BeginColumn(1);
+		{
+			// An effect of the game on our own player
+			BeginPanel("SELF EFFECT");
+			{
+				namespace se = cfg::world::self_effect;
+				bool available = KillEffect::IsAvailable();
+				const char* why = Engine::IsInsecure()
+					? "The particle code of the game was not found in this game version"
+					: "Only available when the game is launched with -insecure";
+				static const char* self_descriptions[] = {
+					"Zeus sparks running over your body",
+					"Ashes coming off your body",
+					"Small lightning jumping over & out of your body, drawn over the game",
+					"Three little black holes going round you, drawn over the game",
+					"A gold halo over your head & sparkles rising, drawn over the game",
+					"Ice crystals going round you & snow falling, drawn over the game",
+					"Two neon rings turning around you, drawn over the game",
+					"Fireflies wandering around you, drawn over the game",
+					"Sakura petals falling & turning around you, drawn over the game",
+					"Six blades of light going round you, drawn over the game",
+					"Green code raining down around you, drawn over the game",
+					"A dome of energy around you, waves going over it, drawn over the game",
+					"A ribbon of light behind you as you move, drawn over the game",
 				};
 
-				auto& modes = ClanTag::GetModes();
-				int mode = std::clamp(cfg::misc::clantag_mode, 0, static_cast<int>(modes.size()) - 1);
-				DropdownRow("Animation", &cfg::misc::clantag_mode, modes, descriptions, descriptions[mode]);
-
-				SliderFloat("Speed", &cfg::misc::clantag_speed, 100.f, 1500.f, "%.0f ms", "Time of each step of the animation (Static: 8 steps per text)");
-			});
-			ImGui::EndDisabled();
-			EndPanel();
-
-			BeginPanel("NAME");
-			ImGui::BeginDisabled(!ClanTag::IsNameAvailable());
-			Toggle("Change Name", &cfg::misc::name_change, ClanTag::IsNameAvailable()
-				? "Your whole name in the scoreboard & kill feed, sent to the server: everyone there sees it.\n"
-				  "Empty keeps your real name, turned off your real name goes back"
-				: unavailable);
-			if (cfg::misc::name_change)
-				TextField("##name_text", "Name...", cfg::misc::name_text, sizeof(cfg::misc::name_text));
-			ImGui::EndDisabled();
-			EndPanel();
-		}
-		EndColumn();
-
-		BeginColumn(1);
-		MatchPlayersPanel();
-		EndColumn();
-		break;
-	}
-
-	default: {
-		// The radar of the game needs memory writes
-		if (!GameRadar::IsAvailable())
-			cfg::world::radar::mode = cfg::world::radar::MODE_OVERLAY;
-
-		BeginColumn(0);
-		{
-			BeginPanel("OVERLAYS");
-			ToggleMore("Radar", &cfg::world::radar::enabled, nullptr, [&] {
-				ImGui::BeginDisabled(!GameRadar::IsAvailable());
-				SegmentRow("Type", &cfg::world::radar::mode, { "External", "Internal" }, GameRadar::IsAvailable()
-					? "External: our own radar window\nInternal: enemies show up on the radar of the game, even when nobody sees them"
-					: "Internal is only available when the game is launched with -insecure");
+				ImGui::BeginDisabled(!available);
+				Toggle("Enabled", &se::enabled, available
+					? "Only you see it"
+					: why);
+				ImGui::BeginDisabled(!se::enabled);
+				const auto& names = KillEffect::GetSelfNames();
+				se::effect = std::clamp(se::effect, 0, static_cast<int>(names.size()) - 1);
+				DropdownRow("Effect", &se::effect, names, self_descriptions, self_descriptions[se::effect]);
+				if (KillEffect::SelfUsesInterval(se::effect))
+					SliderFloat("Interval", &se::interval, 0.2f, 5.f, "%.1f s");
+				Toggle("Third Person Only", &se::third_person_only);
 				ImGui::EndDisabled();
-
-				// Only our own window turns & has a range
-				ImGui::BeginDisabled(cfg::world::radar::mode != cfg::world::radar::MODE_OVERLAY);
-				Toggle("Disable Rotation", &cfg::world::radar::no_rotate);
-				SliderFloat("Range", &cfg::world::radar::range, 100.f, 8000.f, "%.0f u");
 				ImGui::EndDisabled();
-			});
-
-			ToggleMore("Spectator List", &cfg::world::spectators::enabled, nullptr, [&] {
-				Toggle("Detailed", &cfg::world::spectators::detailed);
-				Toggle("Only Self", &cfg::world::spectators::self_only);
-			});
-
-			ToggleMore("Vote List", &cfg::world::votes::enabled,
-				"Shows the vote going on (kick, surrender, timeout...) of your team or the enemy with its yes & no.\n"
-				"Only you see it. Who called it, on whom & who voted what needs Voter Names", [&] {
-				Toggle("Voter Names", &cfg::world::votes::names,
-					"Experimental: who voted yes or no with their profile picture, heard from inside the game.\n"
-					"Needs -insecure. Turn it off if the game crashes");
-			});
-
-			Toggle("Keybind List", &cfg::world::keybinds::enabled,
-				"Shows the features turned on by a key while they are on: third person, free cam, bunny hop, air strafe, jump bug.\n"
-				"With the menu open it shows them all & can be dragged");
-
-		#ifdef _DEBUG // Part of the velocity graph for developers
-			ToggleMore("Velocity Graph", &cfg::world::velocity::enabled, nullptr, [&] {
-				SliderInt("Sample Rate", &cfg::world::velocity::sample_rate, 1, 100, "%d");
-				SliderFloat("Sample Length", &cfg::world::velocity::sample_length, 1.f, 20.f, "%.1f s");
-			});
-		#else
-			Toggle("Velocity Graph", &cfg::world::velocity::enabled);
-		#endif
-			EndPanel();
-		}
-		EndColumn();
-
-		BeginColumn(1);
-		{
-			BeginPanel("CROSSHAIR");
-			ToggleMore("Sniper Crosshair", &cfg::world::crosshair::enabled, "Draws a crosshair while holding an unscoped sniper", [&] {
-				SegmentRow("Style", &cfg::world::crosshair::style, { "Classic", "CS2" },
-					"Classic: small white cross\nCS2: your crosshair from the game settings (size, gap, color, outline, dot)");
-				if (cfg::world::crosshair::style == cfg::world::crosshair::STYLE_GAME && !GameCrosshair::Get().found)
-					TextBlock("No CS2 settings found in the Steam userdata, using the default crosshair");
-			});
-			EndPanel();
-
-			BeginPanel("MATCHMAKING");
-			Toggle("Auto Accept", &cfg::misc::auto_accept,
-				"Accepts when a match is found, the cursor never moves.\n"
-				"-insecure: from memory like the button does. Else a click sent to the game window,\n"
-				"brought to the front if needed");
+			}
 			EndPanel();
 		}
 		EndColumn();
 		break;
 	}
 
-	case 3: {
-		namespace vis = cfg::visuals;
+	case 2: {
 		namespace hm = cfg::world::hitmarker;
-		const bool writes = Visuals::IsAvailable();
 
 		BeginColumn(0);
 		{
-			BeginPanel("REMOVALS");
-			ImGui::BeginDisabled(!writes);
-			ToggleMore("No Flash", &vis::no_flash, writes ? nullptr : unavailable, [&] {
-				SliderFloat("Flash Strength", &vis::flash_alpha, 0.f, 255.f, "%.0f", "0 is no white at all, 255 is the game");
-			});
-			Toggle("No Smoke", &vis::no_smoke, writes
-				? "Smokes are not drawn. The smoke ESP still shows where they are"
-				: unavailable);
-			ImGui::EndDisabled();
-			EndPanel();
-
 			BeginPanel("HITMARKER");
 			Toggle("Crosshair", &hm::crosshair);
-			ToggleMore("World", &hm::world, "An X on the player you hit, at their bone nearest to your crosshair", [&] {
+			ToggleMore("World", &hm::world, nullptr, [&] {
 				Toggle("Damage", &hm::damage);
 			});
-			MoreRow("Look", "How long & how big the hitmarkers are, their colors", [&] {
+			MoreRow("Look", nullptr, [&] {
 				SliderFloat("Duration", &hm::duration, 0.2f, 2.f, "%.1f s");
 				SliderFloat("Size", &hm::size, 3.f, 16.f, "%.0f");
 			}, { { &hm::color, "Color" }, { &hm::kill_color, "Kill color" } });
 			EndPanel();
-		}
-		EndColumn();
 
-		BeginColumn(1);
-		{
 			BeginPanel("HIT & KILL SOUND");
-			SoundRows("Hit Sound", &cfg::misc::hitsound, cfg::misc::hitsound_file, &cfg::misc::hitsound_volume, nullptr);
-			SoundRows("Kill Sound", &cfg::misc::killsound, cfg::misc::killsound_file, &cfg::misc::killsound_volume,
-				"Played instead of the hit sound when you kill");
+			SoundRows("Hit Sound", &cfg::misc::hitsound, cfg::misc::hitsound_file, &cfg::misc::hitsound_volume);
+			SoundRows("Kill Sound", &cfg::misc::killsound, cfg::misc::killsound_file, &cfg::misc::killsound_volume);
 
 			{
 				auto row = BeginRow("Download Sounds");
@@ -6198,7 +6385,11 @@ void Menu::RenderMiscTab() {
 			if (!status.empty())
 				TextBlock(status.c_str());
 			EndPanel();
+		}
+		EndColumn();
 
+		BeginColumn(1);
+		{
 			// An effect of the game where an enemy we killed was, the body gone
 			BeginPanel("KILL EFFECT");
 			{
@@ -6229,7 +6420,7 @@ void Menu::RenderMiscTab() {
 
 				ImGui::BeginDisabled(!available);
 				Toggle("Enabled", &ke::enabled, available
-					? "An enemy you kill: its body is gone at once & an effect of the game plays in its place"
+					? "Only you see it"
 					: why);
 				ImGui::BeginDisabled(!ke::enabled);
 				const auto& names = KillEffect::GetNames();
@@ -6237,51 +6428,150 @@ void Menu::RenderMiscTab() {
 				DropdownRow("Effect", &ke::effect, names, effect_descriptions, effect_descriptions[ke::effect]);
 				if (KillEffect::Floats(ke::effect))
 					SliderFloat("Gravity", &ke::gravity, -1.f, 1.f, "%.2fx",
-						"Times the normal gravity: below 0 the body rises, 0 it hangs where it died. Every body floats while this is picked, not only your kills");
+						"Below 0 the body rises, 0 it hangs where it died.\nEvery body floats while this is picked, not only your kills");
 				ImGui::EndDisabled();
 				ImGui::EndDisabled();
 			}
 			EndPanel();
+		}
+		EndColumn();
+		break;
+	}
 
-			// An effect of the game on our own player
-			BeginPanel("SELF EFFECT");
-			{
-				namespace se = cfg::world::self_effect;
-				bool available = KillEffect::IsAvailable();
-				const char* why = Engine::IsInsecure()
-					? "The particle code of the game was not found in this game version"
-					: "Only available when the game is launched with -insecure";
-				static const char* self_descriptions[] = {
-					"Zeus sparks running over your body",
-					"Ashes coming off your body",
-					"Small lightning jumping over & out of your body, drawn over the game",
-					"Three little black holes going round you, drawn over the game",
-					"A gold halo over your head & sparkles rising, drawn over the game",
-					"Ice crystals going round you & snow falling, drawn over the game",
-					"Two neon rings turning around you, drawn over the game",
-					"Fireflies wandering around you, drawn over the game",
-					"Sakura petals falling & turning around you, drawn over the game",
-					"Six blades of light going round you, drawn over the game",
-					"Green code raining down around you, drawn over the game",
-					"A dome of energy around you, waves going over it, drawn over the game",
-					"A ribbon of light behind you as you move, drawn over the game",
+	case 3: {
+		BeginColumn(0);
+		{
+			BeginPanel("CLAN TAG");
+			ImGui::BeginDisabled(!ClanTag::IsAvailable());
+			next_more_width = S(360.f);
+			ToggleMore("Clan Tag", &cfg::misc::clantag, ClanTag::IsAvailable()
+				? "Sent to the server: everyone there sees it.\n"
+				  "There it changes at most once a second"
+				: unavailable, [&] {
+				SegmentRow("Text", &cfg::misc::clantag_source, { "Custom", "Players" },
+					"Players: the names of everyone in the match take turns");
+
+				if (cfg::misc::clantag_source == 0)
+					TextField("##clantag_text", "Tag... (tag 1|tag 2 take turns)", cfg::misc::clantag_text, sizeof(cfg::misc::clantag_text),
+						"Separate texts with | to show them one after another,\neach one a whole round of the animation");
+
+				// Where the tag goes, the name ones need the name update
+				ImGui::BeginDisabled(!ClanTag::IsNameAvailable());
+				SegmentRow("Position", &cfg::misc::clantag_target, { "Clan", "Before", "After", "Name" },
+					"Clan: [tag] name, in the clan slot of the game\n"
+					"Before: tag name, without brackets\n"
+					"After: name tag\n"
+					"Name: the tag is your whole name");
+				ImGui::EndDisabled();
+
+				static const char* descriptions[] = {
+					"Always the same", "On & off", "Moves left through itself",
+					"Typed in with a cursor & deleted again", "Letters found one by one, the rest guessed", "One capital moving through",
+					"Every letter fades in & out on its own ( . : )", "All guessed, letters lock in random order", "Now & then letters turn into symbols",
+					"Grows out of its middle & shrinks back", "- = # around the tag", "Comes in from the left, goes out to the right",
 				};
 
-				ImGui::BeginDisabled(!available);
-				Toggle("Enabled", &se::enabled, available
-					? "An effect of the game on your own player, played again & again.\nOnly you see it"
-					: why);
-				ImGui::BeginDisabled(!se::enabled);
-				const auto& names = KillEffect::GetSelfNames();
-				se::effect = std::clamp(se::effect, 0, static_cast<int>(names.size()) - 1);
-				DropdownRow("Effect", &se::effect, names, self_descriptions, self_descriptions[se::effect]);
-				if (KillEffect::SelfUsesInterval(se::effect))
-					SliderFloat("Interval", &se::interval, 0.2f, 5.f, "%.1f s", "Time between two plays: lower is denser");
-				Toggle("Third Person Only", &se::third_person_only,
-					"In first person the effect is all around the camera & covers the view");
+				auto& modes = ClanTag::GetModes();
+				int mode = std::clamp(cfg::misc::clantag_mode, 0, static_cast<int>(modes.size()) - 1);
+				DropdownRow("Animation", &cfg::misc::clantag_mode, modes, descriptions, descriptions[mode]);
+
+				SliderFloat("Speed", &cfg::misc::clantag_speed, 100.f, 1500.f, "%.0f ms");
+			});
+			ImGui::EndDisabled();
+			EndPanel();
+
+			BeginPanel("NAME");
+			ImGui::BeginDisabled(!ClanTag::IsNameAvailable());
+			Toggle("Change Name", &cfg::misc::name_change, ClanTag::IsNameAvailable()
+				? "Sent to the server: everyone there sees it.\n"
+				  "Empty keeps your real name, turned off your real name goes back"
+				: unavailable);
+			if (cfg::misc::name_change)
+				TextField("##name_text", "Name...", cfg::misc::name_text, sizeof(cfg::misc::name_text));
+			ImGui::EndDisabled();
+			EndPanel();
+
+			BeginPanel("MATCHMAKING");
+			ImGui::BeginDisabled(!AutoAccept::IsAvailable());
+			Toggle("Auto Accept", &cfg::misc::auto_accept, AutoAccept::IsAvailable()
+				? nullptr
+				: Engine::IsInsecure()
+					? "The accept of the game was not found in this game version"
+					: unavailable);
+			ImGui::EndDisabled();
+
+			ImGui::BeginDisabled(!AutoAccept::IsQueueAvailable());
+			Toggle("Cancel Queue", &cfg::misc::cancel_queue, AutoAccept::IsQueueAvailable()
+				? "An X in the top right corner of the popup when a match is found, accepted or not. Cancels like the cancel search of the game, a cooldown for it is up to the game"
+				: Engine::IsInsecure()
+					? "The matchmaking status of the game was not found in this game version"
+					: unavailable);
+			ImGui::EndDisabled();
+			EndPanel();
+		}
+		EndColumn();
+
+		BeginColumn(1);
+		MatchPlayersPanel();
+		EndColumn();
+		break;
+	}
+
+	default: {
+		// The radar of the game needs memory writes
+		if (!GameRadar::IsAvailable())
+			cfg::world::radar::mode = cfg::world::radar::MODE_OVERLAY;
+
+		BeginColumn(0);
+		{
+			BeginPanel("OVERLAYS");
+			ToggleMore("Radar", &cfg::world::radar::enabled, nullptr, [&] {
+				ImGui::BeginDisabled(!GameRadar::IsAvailable());
+				SegmentRow("Type", &cfg::world::radar::mode, { "External", "Internal" }, GameRadar::IsAvailable() ? nullptr : "Internal is only available when the game is launched with -insecure");
 				ImGui::EndDisabled();
+
+				// Only our own window turns & has a range
+				ImGui::BeginDisabled(cfg::world::radar::mode != cfg::world::radar::MODE_OVERLAY);
+				Toggle("Disable Rotation", &cfg::world::radar::no_rotate);
+				SliderFloat("Range", &cfg::world::radar::range, 100.f, 8000.f, "%.0f u");
 				ImGui::EndDisabled();
-			}
+			});
+
+			ToggleMore("Spectator List", &cfg::world::spectators::enabled, nullptr, [&] {
+				Toggle("Detailed", &cfg::world::spectators::detailed);
+				Toggle("Only Self", &cfg::world::spectators::self_only);
+			});
+
+			ToggleMore("Vote List", &cfg::world::votes::enabled,
+				"Only you see it. Who called it, on whom & who voted what needs Voter Names", [&] {
+				Toggle("Voter Names", &cfg::world::votes::names,
+					"Experimental, needs -insecure. Turn it off if the game crashes");
+			});
+
+			Toggle("Keybind List", &cfg::world::keybinds::enabled,
+				"With the menu open it shows them all & can be dragged");
+
+		#ifdef _DEBUG // Part of the velocity graph for developers
+			ToggleMore("Velocity Graph", &cfg::world::velocity::enabled, nullptr, [&] {
+				SliderInt("Sample Rate", &cfg::world::velocity::sample_rate, 1, 100, "%d");
+				SliderFloat("Sample Length", &cfg::world::velocity::sample_length, 1.f, 20.f, "%.1f s");
+			});
+		#else
+			Toggle("Velocity Graph", &cfg::world::velocity::enabled);
+		#endif
+			EndPanel();
+		}
+		EndColumn();
+
+		BeginColumn(1);
+		{
+			BeginPanel("CROSSHAIR");
+			ToggleMore("Sniper Crosshair", &cfg::world::crosshair::enabled, nullptr, [&] {
+				SegmentRow("Style", &cfg::world::crosshair::style, { "Classic", "CS2" },
+					"CS2: your crosshair from the game settings");
+				if (cfg::world::crosshair::style == cfg::world::crosshair::STYLE_GAME && !GameCrosshair::Get().found)
+					TextBlock("No CS2 settings found in the Steam userdata, using the default crosshair");
+			});
 			EndPanel();
 		}
 		EndColumn();
@@ -6297,7 +6587,6 @@ void Menu::RenderConfigsTab() {
 	BeginColumn(0);
 	{
 		BeginPanel("CONFIGS");
-		TextBlock("Everything but the skins, saved in export/configs");
 		PresetList(Config::Preset::CONFIG, config_presets);
 		EndPanel();
 	}
@@ -6306,7 +6595,6 @@ void Menu::RenderConfigsTab() {
 	BeginColumn(1);
 	{
 		BeginPanel("SKIN LOADOUTS");
-		TextBlock("Both teams, gloves, knives, agents & the music kit, saved in export/skins");
 		PresetList(Config::Preset::SKINS, skin_presets);
 		EndPanel();
 	}
@@ -6319,7 +6607,7 @@ void Menu::RenderSettingsTab() {
 		BeginPanel("GENERAL");
 		Toggle("ESP", &cfg::enabled);
 
-		if (Toggle("Streamproof", &cfg::settings::streamproof, "Hides the overlay from screen capture and streaming software"))
+		if (Toggle("Streamproof", &cfg::settings::streamproof))
 		{
 			Window::SetAffinity(
 				Window::hwnd,
@@ -6327,7 +6615,7 @@ void Menu::RenderSettingsTab() {
 			);
 		}
 
-		Toggle("Notifications", &cfg::settings::notifications, "Map building, notices of the program & the ESP off message");
+		Toggle("Notifications", &cfg::settings::notifications);
 
 
 
@@ -6350,8 +6638,8 @@ void Menu::RenderSettingsTab() {
 		// Warnings, errors & info lines always show
 		BeginPanel("DEBUG LOG");
 		namespace logs = cfg::settings::logs;
-		Toggle("Skins", &logs::skins, "Debug lines of skins, knives & agents");
-		Toggle("Other", &logs::other, "Every other debug line");
+		Toggle("Skins", &logs::skins);
+		Toggle("Other", &logs::other);
 		EndPanel();
 	#endif
 	}
@@ -6360,12 +6648,12 @@ void Menu::RenderSettingsTab() {
 	BeginColumn(1);
 	{
 		BeginPanel("PERFORMANCE");
-		Toggle("Free CPU", &cfg::settings::free_cpu, "Let the CPU sleep to free resources\nOff as a last resort: more CPU use, less latency");
+		Toggle("Free CPU", &cfg::settings::free_cpu, "Off as a last resort: more CPU use, less latency");
 		Toggle("Watermark", &cfg::settings::watermark);
 
 	#ifdef _DEBUG
 		ImGui::BeginDisabled(!cfg::settings::watermark);
-		Toggle("Frame Times", &cfg::settings::frame_times, "Shows in the watermark where the time of a frame goes, in milliseconds");
+		Toggle("Frame Times", &cfg::settings::frame_times);
 		ImGui::EndDisabled();
 	#endif
 		EndPanel();

@@ -347,6 +347,14 @@ bool Movement::OnMoveKey(size_t key, bool down) {
     auto p = Engine::GetProcess();
     bool active = cfg::misc::null_binds && p && IsPlaying();
 
+    std::lock_guard lock(this->null_mutex);
+
+    // Resting the keys pass as they are. Right after the takeoff the movement thread may not have put ours back yet
+    if (active && this->resting) {
+        RestoreNulled();
+        active = false;
+    }
+
     if (!active) {
         this->nulled[key] = this->nulled[opposite] = false;
         return false;
@@ -381,6 +389,37 @@ bool Movement::OnMoveKey(size_t key, bool down) {
     return false;
 }
 
+// Bunny hopping (on & SPACE held) without air strafe, null binds rest in the air: the keys are the player's own, both
+// directions held like on a plain keyboard. A key we let go of while it is held goes back down at the takeoff, not
+// later with the release of the other one: that release & a press at the same moment is the counter strafe of a
+// script, what the server looks for. A plain jump, or air strafe on, keeps them
+void Movement::RestNullBindsInAir() {
+    auto p = Engine::GetProcess();
+    bool hopping = cfg::misc::null_binds && cfg::misc::bhop && p && IsSpaceHeld() && !Subtick::IsAirStrafeOn();
+    auto pawn = hopping ? Engine::GetLocalPawn() : 0;
+    bool resting = pawn && p->read<int>(pawn + offsets::pawn::m_iHealth) > 0
+        && !(p->read<uint32_t>(pawn + offsets::pawn::m_fFlags) & FL_ONGROUND);
+
+    this->resting = resting;
+    if (!resting)
+        return;
+
+    std::lock_guard lock(this->null_mutex);
+    RestoreNulled();
+}
+
+// null_mutex held
+void Movement::RestoreNulled() {
+    for (size_t key = 0; key < std::size(MOVE_KEYS); key++) {
+        if (!this->nulled[key])
+            continue;
+
+        this->nulled[key] = false;
+        if (this->held[key])
+            SendKey(MOVE_KEYS[key], true);
+    }
+}
+
 bool Movement::IsSpaceHeld() {
     return IsKeyDown(VK_SPACE);
 }
@@ -404,6 +443,7 @@ void Movement::Thread() {
             continue;
         }
 
+        RestNullBindsInAir();
         QuickStop();
         Bhop();
 

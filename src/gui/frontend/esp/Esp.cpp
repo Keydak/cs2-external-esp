@@ -51,9 +51,6 @@ bool Esp::InitImpl() {
 }
 
 void Esp::RenderImpl() {
-	if (!cfg::enabled)
-		return;
-
 	auto current = Cache::Current();
 	const auto& snapshot = *current;
 	auto& game = snapshot.game;
@@ -62,10 +59,16 @@ void Esp::RenderImpl() {
 	auto& globals = snapshot.globals;
 	auto& players = snapshot.players;
 
-	ImGui::PushFont(this->font);
-
 	this->io = ImGui::GetIO();
 	this->d = ImGui::GetBackgroundDrawList();
+
+	// Under everything else, also with the ESP off: the scope of the game is gone meanwhile
+	RenderScope(snapshot);
+
+	if (!cfg::enabled)
+		return;
+
+	ImGui::PushFont(this->font);
 
 	// The camera of right now, read as we draw: the one of the cache stands still while it reads all the players
 	// (several ms, more on a slow PC) & may be copied half written, the boxes shook behind the mouse
@@ -794,6 +797,99 @@ void Esp::RenderCrosshair(Player local)
 		thickness);
 }
 
+// The scope of the game off (Visuals), ours sharp in its place: the lines alone without the overlay, the black around
+// them too without the blur. Shapes of its shader (legacy_sniper_scope), in pixels: the lines cross a quarter of a
+// pixel right & below the middle, the view is round, its edge from 0.395 of the height away from the middle black at 0.425
+void Esp::RenderScope(const Snapshot& snapshot) {
+	if (!Visuals::IsScopeHidden())
+		return;
+
+	// Whose eyes we see through: ours, or the one we watch in first person
+	const auto& local = snapshot.local;
+	const Player* viewed = nullptr;
+
+	if (local.alive)
+		viewed = Freecam::GetMode() == Freecam::Mode::Off ? &local : nullptr;
+	else {
+		for (const auto& player : snapshot.players) {
+			bool watched = (local.observer_services.target == player.pawn_controller_addr && local.observer_services.mode == ObserverMode::First)
+				|| (Freecam::IsFirstPerson() && Freecam::GetTarget() == player.GetPawnAddress());
+			if (watched && player.alive) {
+				viewed = &player;
+				break;
+			}
+		}
+	}
+
+	if (!viewed)
+		return;
+
+	static constexpr WeaponIds SNIPERS[] = { weapon_awp, weapon_ssg08, weapon_g3sg1, weapon_scar20 };
+	if (std::find(std::begin(SNIPERS), std::end(SNIPERS), viewed->weapon.item_index) == std::end(SNIPERS))
+		return;
+
+	// Read now, the cache is a few ms behind the zoom
+	auto p = Engine::GetProcess();
+	bool scoped = p && viewed->GetPawnAddress()
+		? p->read<bool>(viewed->GetPawnAddress() + offsets::pawn::m_bIsScoped)
+		: viewed->scoped;
+	if (!scoped)
+		return;
+
+	const float width = io.DisplaySize.x;
+	const float height = io.DisplaySize.y;
+	const ImU32 black = IM_COL32(0, 0, 0, 255);
+
+	if (!cfg::visuals::no_scope_overlay) {
+		constexpr int SEGMENTS = 128;
+
+		// How far from the middle (in heights) & how black: the smoothstep fade of the shader, then past the corners
+		const float corners = std::hypot(width, height) / height;
+		const std::pair<float, float> rings[] = {
+			{ 0.395f, 0.f }, { 0.4025f, 0.156f }, { 0.41f, 0.5f }, { 0.4175f, 0.844f }, { 0.425f, 1.f }, { corners, 1.f }
+		};
+		constexpr int RINGS = static_cast<int>(std::size(rings));
+
+		const ImVec2 middle(width * 0.5f, height * 0.5f);
+		const ImVec2 uv = d->_Data->TexUvWhitePixel;
+
+		d->PrimReserve((RINGS - 1) * SEGMENTS * 6, RINGS * SEGMENTS);
+		auto first = static_cast<ImDrawIdx>(d->_VtxCurrentIdx);
+
+		for (const auto& [radius, alpha] : rings) {
+			for (int i = 0; i < SEGMENTS; i++) {
+				float angle = i * 2.f * std::numbers::pi_v<float> / SEGMENTS;
+				ImVec2 at(middle.x + cosf(angle) * radius * height, middle.y + sinf(angle) * radius * height);
+				d->PrimWriteVtx(at, uv, IM_COL32(0, 0, 0, static_cast<int>(alpha * 255.f + 0.5f)));
+			}
+		}
+
+		for (int ring = 0; ring + 1 < RINGS; ring++) {
+			for (int i = 0; i < SEGMENTS; i++) {
+				auto inner = static_cast<ImDrawIdx>(first + ring * SEGMENTS + i);
+				auto next = static_cast<ImDrawIdx>(first + ring * SEGMENTS + (i + 1) % SEGMENTS);
+				d->PrimWriteIdx(inner);
+				d->PrimWriteIdx(next);
+				d->PrimWriteIdx(static_cast<ImDrawIdx>(next + SEGMENTS));
+				d->PrimWriteIdx(inner);
+				d->PrimWriteIdx(static_cast<ImDrawIdx>(next + SEGMENTS));
+				d->PrimWriteIdx(static_cast<ImDrawIdx>(inner + SEGMENTS));
+			}
+		}
+	}
+
+	// The pixels whose middle is within half the width of the line (at least half a pixel)
+	float half = std::max(Visuals::GetScopeLineWidth() * 0.5f, 0.5f);
+	auto span = [&](float line) {
+		return std::pair{ std::ceil(line - half - 0.5f), std::floor(line + half - 0.5f) + 1.f };
+	};
+
+	auto [left, right] = span(width * 0.5f + 0.25f);
+	auto [top, bottom] = span(height * 0.5f + 0.25f);
+	d->AddRectFilled(ImVec2(left, 0.f), ImVec2(right, height), black);
+	d->AddRectFilled(ImVec2(0.f, top), ImVec2(width, bottom), black);
+}
+
 void Esp::RenderPlayerTracers(const Player& source, const Player& player, const cfg::esp::group_t& group, bool visible) {
 	if (!group.tracers)
 		return;
@@ -1217,8 +1313,8 @@ void Esp::RenderGrenadeLanding(const Grenade& grenade, ImU32 color) {
 			!matrix.wts(points[i], io.DisplaySize, to, false))
 			continue;
 
-		// Dashed, so it reads as a prediction next to the real trail
-		if ((i / 3) % 2 == 0)
+		// Dashed, so it reads as a prediction next to the real trail, or solid
+		if (cfg::esp::grenades::landing_line == 1 || (i / 3) % 2 == 0)
 			d->AddLine(from, to, faded, 1.5f);
 	}
 

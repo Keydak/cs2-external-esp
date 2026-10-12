@@ -71,6 +71,14 @@ public:
     static const std::vector<MusicKitInfo>& GetMusicKits();
     static const MusicKitInfo* FindMusicKit(int definition_index);
 
+    // The inspect screen of the game for an item with a paint kit (0 its default look), like the store shows items not
+    // owned, with our wear & seed. Needs the scripts of Panorama (-insecure)
+    static bool CanInspect();
+    static void Inspect(int definition_index, int paint_kit, float wear = 0.f, int seed = 0);
+    // A custom model there: the screen of an agent of its team, the model put in its preview & the name over the one
+    // of the agent
+    static void InspectModel(const std::string& model, const std::string& name, bool terrorist);
+
     // Undoes what is left in the game code
     static void Shutdown();
 private:
@@ -119,6 +127,10 @@ private:
     void ShowCustomModelHands(uintptr_t pawn, bool on, uint64_t mask, bool hide_gloves);
     uint64_t AgentArms(uintptr_t pawn, const std::string& worn, uint64_t empty_mask);
     bool CallInGame(uintptr_t function, uintptr_t first, uintptr_t second);
+    // Our wear & seed on the made up item the inspect screen shows, false when they could not be set
+    bool SetInspectAttributes(int definition_index, int paint_kit, float wear, int seed);
+    // The pause menu in a match, the inspect screen is part of it. False when it could not be shown
+    bool ShowGameUI();
     uintptr_t GetGloveEntity(uintptr_t pawn);
     struct MeshMask {
         uintptr_t node;
@@ -153,6 +165,8 @@ private:
     bool glove_patched = false;
     uintptr_t glove_hidden = 0; // Glove entity we hid from the third person view // Gloves are kept even when the player model says it has its own
     std::atomic<bool> stopping = false;
+    std::atomic<bool> inspecting = false;   // The script of Inspect() is on its way
+    uintptr_t inspect_page = 0;             // Sets the wear & seed of the inspected item, in the game
 
     uintptr_t code = 0; // Executable memory in the game for Rebuild()
     uintptr_t strings = 0; // Memory in the game for names passed to its functions
@@ -191,7 +205,10 @@ private:
     uintptr_t agent_pawn = 0;   // The pawn & when it spawned: the model only changes right after
     bool agent_alive = false;
     bool agent_waiting = false; // Logged once that a change waits for the next spawn
-    std::chrono::steady_clock::time_point agent_spawned{};
+    std::chrono::steady_clock::time_point agent_spawned{};     // Also a new round alive, the game sets the model again then
+    std::chrono::steady_clock::time_point respawned{};         // Alive again after a death or with a new pawn
+    uintptr_t round_rules = 0;      // Game rules the count below is of
+    uint8_t round_starts = 0;       // Their m_nRoundStartCount when last read
     std::chrono::steady_clock::time_point selection_spawn{};   // The spawn the pick below was taken at
     std::string spawn_selection;    // Agent or custom model picked when we spawned, a pick after waits for the next spawn
     uintptr_t arms_swapped = 0;     // First person arms given the agent model (a custom model without hands)

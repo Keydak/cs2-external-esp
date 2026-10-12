@@ -44,6 +44,8 @@ private:
 
     static LRESULT CALLBACK KeyboardHook(int code, WPARAM wparam, LPARAM lparam);
     bool OnMoveKey(size_t key, bool down); // Returns true to block the key event
+    void RestNullBindsInAir();
+    void RestoreNulled();
     bool IsHeld(size_t key);
 
     bool IsSpaceHeld();
@@ -87,6 +89,8 @@ private:
     std::atomic<bool> hooked = false;
     std::atomic<bool> held[4]{};    // Held on the keyboard
     bool nulled[4]{};               // Held, but let go for the opposite key pressed after it
+    std::mutex null_mutex;          // nulled, changed by the keyboard hook & the movement thread
+    std::atomic<bool> resting = false;  // Our player bunny hopping in the air without air strafe: null binds rest
 
     // Keyboard hook, order of the presses
     std::atomic<uint64_t> pressed_at[4]{};

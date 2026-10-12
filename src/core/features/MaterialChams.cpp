@@ -26,6 +26,7 @@ namespace {
     constexpr uintptr_t DATA_OWNER = 0x10;      // int32, field of a mesh holding its scene object, -1 while not known
     constexpr uintptr_t DATA_ENABLED = 0x14;    // uint32
     constexpr uintptr_t DATA_COUNT = 0x18;      // uint32, entries of the table
+    constexpr uintptr_t DATA_GLOW = 0x20;       // CMaterial2* the glow of the game draws models in: those draws stay its own
     constexpr uintptr_t DATA_MATERIALS = 0x80;  // CMaterial2*[SLOT_COUNT] by Slot, 0 leaves the own material of the mesh
     constexpr uintptr_t DATA_VOTES = 0x40;      // uint32[8], meshes whose field k * 8 is one of the table
     constexpr uintptr_t TABLE = 0x200;          // { scene object, class (1 enemy, 2 team) } each
@@ -205,6 +206,14 @@ void MaterialChams::Update() {
         }
     }
 
+    // The material of the glow, once the game has it
+    auto glow_handle = mat::dwGlowMaterial ? p->read<uintptr_t>(Engine::GetClient().base + mat::dwGlowMaterial) : 0;
+    auto glow_material = glow_handle ? p->read<uintptr_t>(glow_handle) : 0;
+    if (glow_material != this->glow_material) {
+        p->write<uintptr_t>(this->page + DATA_GLOW, glow_material);
+        this->glow_material = glow_material;
+    }
+
     if (!wanted) {
         p->write<uint32_t>(this->page + DATA_ENABLED, 0);
         return;
@@ -287,8 +296,13 @@ bool MaterialChams::Install() {
         c.put({ 0x4C, 0x8D, 0x34, 0x06 });          // lea r14, [rsi + rax]
     };
 
-    // eax the class of the mesh r14 in the table, 0 when not there
+    // eax the class of the mesh r14 in the table, 0 when not there. Also 0 in the material of the glow of the game: the
+    // glow draws the model again in it, ours in its place left no glow
     auto find_class = [&]() {
+        c.put({ 0x31, 0xC0 });                      // xor eax, eax
+        c.put({ 0x49, 0x8B, 0x56, static_cast<uint8_t>(mat::meshMaterial) }); // mov rdx, [r14 + material]
+        c.put({ 0x49, 0x3B, 0x54, 0x24, DATA_GLOW }); // cmp rdx, [r12 + glow]
+        auto glow = c.jump({ 0x0F, 0x84 });         // je done
         c.put({ 0x49, 0x63, 0x44, 0x24, DATA_OWNER });  // movsxd rax, [r12 + owner]
         c.put({ 0x4D, 0x8B, 0x04, 0x06 });          // mov r8, [r14 + rax]
         c.put({ 0x41, 0x8B, 0x4C, 0x24, DATA_COUNT });  // mov ecx, [r12 + count]
@@ -305,6 +319,7 @@ bool MaterialChams::Install() {
         c.land(hit);
         c.put({ 0x8B, 0x42, 0x08 });                // mov eax, [rdx + 8]
         c.land(done);
+        c.land(glow);
     };
 
     std::vector<size_t> to_all;

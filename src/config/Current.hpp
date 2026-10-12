@@ -142,6 +142,7 @@ namespace cfg {
 			inline bool timers = true;
 			inline bool prediction = true; // Grenade in hand
 			inline bool landing = true; // Grenades in the air, thrown by anyone
+			inline int landing_line = 0; // Its line: 0 dashed, 1 solid
 
 			inline bool smoke_area = true;	// Shape of a popped smoke on the ground
 			inline bool fire_area = true;	// Shape of a molotov fire on the ground
@@ -306,6 +307,15 @@ namespace cfg {
 		inline loadout_t loadouts[TEAM_COUNT];      // Like the game, each team has its own
 		inline int music_kit = 0;                    // Definition index, 0 keeps the one the game gives. Both teams
 
+		// Skins kept under a name to pick again with their wear & seed (a blue gem pattern...), for both teams. Apart
+		// from the loadouts in config.json, an imported loadout leaves them be
+		struct saved_t {
+			std::string name;
+			int definition_index = 0;
+			item_t item;
+		};
+		inline std::vector<saved_t> saved;
+
 		inline std::mutex mutex;             // Menu & skin thread
 	}
 
@@ -320,6 +330,7 @@ namespace cfg {
 		inline int jump_bug_mode = 1;           // Toggle, hold, always
 		inline int jump_bug_key = VK_XBUTTON1;
 		inline bool auto_accept = false;
+		inline bool cancel_queue = true;        // An X in the popup of a found match
 
 		// Clan tag in front of our name, in the scoreboard & kill feed (what the game shows us, offline)
 		inline bool clantag = false;
@@ -346,6 +357,8 @@ namespace cfg {
 		inline bool no_flash = false;
 		inline float flash_alpha = 0.f;         // 0 - 255, how white a flash still gets
 		inline bool no_smoke = false;
+		inline bool no_scope_overlay = false;	// Snipers zoom in without the black scope around
+		inline bool no_scope_blur = false;		// The scope stays sharp while moving
 
 		// Players tinted in a color by the game itself (its render color), seen where the model is seen
 		namespace chams {

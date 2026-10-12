@@ -70,6 +70,7 @@ FIELD_MAP = {
     ("bone", "m_modelState"): "CSkeletonInstance",
     ("observerServices", "m_iObserverMode"): "CPlayer_ObserverServices",
     ("observerServices", "m_hObserverTarget"): "CPlayer_ObserverServices",
+    ("rules", "m_nRoundStartCount"): "C_CSGameRules",
 }
 
 def fetch_classes():

@@ -23,6 +23,8 @@ public:
     static void Thread();
 
     static bool IsOpen();
+    // The menu opened or closed like its key does, from the render thread
+    static void SetOpen(bool open);
     static bool IsFocused();
     // The game was closed, the render thread ended for that
     static bool IsGameClosed();
@@ -42,6 +44,7 @@ private:
 
     void Render();
     bool HandleState();
+    void SetOpenImpl(bool open);
     bool HandleWindowOrder();
 private:
     bool isRunning = true;

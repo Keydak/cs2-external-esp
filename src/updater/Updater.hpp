@@ -42,7 +42,7 @@ private:
     Status status;
     bool isSetup = false;
     // This fork's own numbering, raise it with "current" in .github/status.json when a version is pushed
-    int current_version = 210;
+    int current_version = 220;
     std::string project_url = "https://github.com/Keydak/cs2-external-esp";
     std::string status_url = "https://raw.githubusercontent.com/Keydak/cs2-external-esp/main/.github/status.json";
 };

@@ -78,4 +78,5 @@ private:
     void RenderGroundCircle(const Vec3_t& center, float radius, ImU32 color, int segments, bool filled, bool glow = false);
     void RenderArea(const AreaShape& area, ImU32 color, bool glow = false);
 	void RenderCrosshair(Player local);
+	void RenderScope(const Snapshot& snapshot);
 };

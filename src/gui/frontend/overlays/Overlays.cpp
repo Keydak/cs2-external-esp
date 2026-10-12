@@ -1114,8 +1114,8 @@ void Overlays::RenderBomb() {
 
     bool hovered = is_menu_open && CardHandle("##bomb", cfg::world::bomb::pos, size);
 
-    // Fades & drops in like the other cards, out with the last bomb still on it (defused, exploded, we died)
-    bool shown = is_menu_open || (bomb.is_planted && bomb.pos.length() && local.alive);
+    // Fades & drops in like the other cards, out with the last bomb still on it (defused, exploded). Dead too
+    bool shown = is_menu_open || (bomb.is_planted && bomb.pos.length());
 
     static float window_alpha = 0.f;
     static Bomb last_bomb;
@@ -1139,6 +1139,7 @@ void Overlays::RenderBomb() {
 
         if (is_menu_open) on_top = false;
         if (dist > 1500.f) on_top = false;
+        if (!local.alive) on_top = false;   // Where we died is not where we look from
 
         render = ImVec2(cfg::world::bomb::pos.x, cfg::world::bomb::pos.y);
 

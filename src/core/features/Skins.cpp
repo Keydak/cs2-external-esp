@@ -4,9 +4,12 @@
 #include "core/offsets/Dumper.hpp"
 #include "core/engine/GameThread.hpp"
 #include "core/features/CustomModels.hpp"
+#include "core/features/AgentPreview.hpp"
+#include "core/engine/cache/Cache.hpp"
 #include "updater/http/HttpHelper.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <optional>
 #include <set>
 
@@ -16,6 +19,18 @@ namespace {
     const std::string music_kits_url = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/music_kits.json";
     const std::string cache_file = "skins_cache.json";
     constexpr int CACHE_VERSION = 6; // Bumped when the cached fields change
+
+    // The inspect screen: made up items of the game are 0xF000000000000000 | paint kit << 16 | definition. Our page in
+    // the game sets their wear & seed, its code first, the names of the attributes after it
+    constexpr uint64_t FAUX_ITEM_ID = 0xF000000000000000ull;
+    constexpr size_t INSPECT_PAGE_SIZE = 0x1000;
+    constexpr size_t INSPECT_WEAR_NAME = 0x200;
+    constexpr size_t INSPECT_SEED_NAME = 0x220;
+    constexpr size_t INSPECT_SHOW_UI = 0x300;   // Code showing the game UI, written right before it runs
+
+    // Game UI vtable: whether it shows, show it
+    constexpr uint8_t GAME_UI_SHOWN = 12 * 8;
+    constexpr uint8_t GAME_UI_SHOW = 13 * 8;
 
     constexpr uint32_t INVALID_ITEM_ID = 0xFFFFFFFF; // Not an inventory item, the game skips the inventory lookup
     constexpr int QUALITY_UNUSUAL = 3; // The star quality of knives & gloves
@@ -206,6 +221,195 @@ void Skins::FetchList() {
 
 bool Skins::IsAvailable() {
     return Engine::IsInsecure() && offsets::skins::updateWeaponSkin;
+}
+
+bool Skins::CanInspect() {
+    return AgentPreview::IsAvailable();
+}
+
+// Like the store shows items nobody owns: a made up item of the definition & paint kit, in the popup of the inventory
+// with nothing to do but look. The popup sets itself up from the settings a frame later
+static std::string InspectScript(int definition_index, int paint_kit) {
+    return std::format(
+        "const id = InventoryAPI.GetFauxItemIDFromDefAndPaintIndex({}, {});"
+        "const popup = UiToolkitAPI.ShowCustomLayoutPopup('', 'file://{{resources}}/layout/popups/popup_inventory_inspect.xml');"
+        "popup.Data().oSettings = {{ item_id: id, inspect_only: true, hide_all_action_items: true }};",
+        definition_index, paint_kit);
+}
+
+// Text between the single quotes of a script
+static std::string ScriptString(const std::string& text) {
+    std::string out = "'";
+    for (char c : text) {
+        if (static_cast<unsigned char>(c) < 0x20)
+            continue;
+        if (c == '\\' || c == '\'')
+            out += '\\';
+        out += c;
+    }
+    return out + "'";
+}
+
+void Skins::Inspect(int definition_index, int paint_kit, float wear, int seed) {
+    if (!CanInspect() || GetInstance().inspecting.exchange(true))
+        return;
+
+    // The script waits for the next frame of the game, not the menu
+    std::thread([definition_index, paint_kit, wear, seed]() {
+        auto& skins = GetInstance();
+        skins.ShowGameUI();
+
+        // Our wear & seed on it first, the screen reads them when it opens
+        if (paint_kit > 0 && !skins.SetInspectAttributes(definition_index, paint_kit, wear, seed))
+            LOGF(WARNING, "Could not give the inspected item its wear & seed, it shows the ones of the game");
+
+        if (!AgentPreview::RunScript(InspectScript(definition_index, paint_kit)))
+            LOGF(WARNING, "Could not open the inspect screen of the game for item {} paint kit {}", definition_index, paint_kit);
+
+        skins.inspecting = false;
+    }).detach();
+}
+
+void Skins::InspectModel(const std::string& model, const std::string& name, bool terrorist) {
+    if (!CanInspect() || model.empty() || !IsLoaded())
+        return;
+
+    // Any agent of the team, the screen sets its scene up by it: the background, the animations of the team
+    int agent = 0;
+    for (const auto& info : GetAgents()) {
+        if (info.terrorist == terrorist) {
+            agent = info.definition_index;
+            break;
+        }
+    }
+
+    if (!agent || GetInstance().inspecting.exchange(true))
+        return;
+
+    std::thread([agent, model, name]() {
+        // The screen makes its preview of the agent once it set itself up, then the model goes in it like the game
+        // puts the agent there (the preview loads it). The name of the agent & its collection make way for ours
+        auto script = InspectScript(agent, 0) + std::format(
+            "let tries = 0;"
+            "const swap = () => {{"
+            "  if (!popup.IsValid()) return;"
+            "  const preview = popup.FindChildTraverse('CharPreviewPanel');"
+            "  if (!preview) {{ if (++tries < 60) $.Schedule(0.05, swap); return; }}"
+            "  preview.SetPlayerModel({});"
+            "  const header = popup.FindChildTraverse('PopUpInspectHeader');"
+            "  if (!header) return;"
+            "  header.SetDialogVariable('item_name', {});"
+            "  for (const part of ['InspectCollection', 'InspectSetImage', 'InspectCustomName', 'InspectOriginalOwner']) {{"
+            "    const el = header.FindChildTraverse(part);"
+            "    if (el) el.visible = false;"
+            "  }}"
+            "}};"
+            "$.Schedule(0.05, swap);",
+            ScriptString(model), ScriptString(name));
+
+        GetInstance().ShowGameUI();
+        if (!AgentPreview::RunScript(script))
+            LOGF(WARNING, "Could not open the inspect screen of the game for the model {}", model);
+
+        GetInstance().inspecting = false;
+    }).detach();
+}
+
+// In a match the inspect screen is part of the pause menu, hidden until Escape: the game UI is shown first like Escape
+// does it (what gameui_activate runs, no command), on the main thread. Nothing when it already shows
+bool Skins::ShowGameUI() {
+    auto p = Engine::GetProcess();
+    if (!p || !offsets::skins::gameUI || !Cache::Current()->globals.in_match || !GameThread::Ensure())
+        return false;
+
+    if (!this->inspect_page && !(this->inspect_page = p->allocate_remote(INSPECT_PAGE_SIZE, PAGE_EXECUTE_READWRITE)))
+        return false;
+
+    auto ui = Engine::GetEngine().base + offsets::skins::gameUI;
+
+    std::vector<uint8_t> code;
+    auto put = [&](std::initializer_list<uint8_t> list) { code.insert(code.end(), list); };
+    auto put64 = [&](uint64_t value) { for (int k = 0; k < 8; k++) code.push_back(static_cast<uint8_t>(value >> (k * 8))); };
+
+    put({ 0x48, 0x83, 0xEC, 0x28 });                    // sub rsp, 0x28
+    put({ 0x48, 0xB9 }); put64(ui);                     // mov rcx, game UI
+    put({ 0x48, 0x8B, 0x01 });                          // mov rax, [rcx]
+    put({ 0xFF, 0x50, GAME_UI_SHOWN });                 // call [rax + shown]
+    put({ 0x84, 0xC0 });                                // test al, al
+    put({ 0x75, 0x00 }); size_t shown = code.size();    // jnz done
+    put({ 0x48, 0xB9 }); put64(ui);                     // mov rcx, game UI
+    put({ 0x48, 0x8B, 0x01 });                          // mov rax, [rcx]
+    put({ 0xFF, 0x50, GAME_UI_SHOW });                  // call [rax + show]
+    code[shown - 1] = static_cast<uint8_t>(code.size() - shown);    // done:
+    put({ 0x48, 0x83, 0xC4, 0x28 });                    // add rsp, 0x28
+    put({ 0xC3 });                                      // ret
+
+    p->write_bytes(this->inspect_page + INSPECT_SHOW_UI, code);
+    FlushInstructionCache(p->handle_, reinterpret_cast<void*>(this->inspect_page + INSPECT_SHOW_UI), code.size());
+
+    if (!GameThread::Call(this->inspect_page + INSPECT_SHOW_UI)) {
+        // The game might still be inside it, the page is left to it
+        this->inspect_page = 0;
+        LOGF(WARNING, "Could not show the pause menu, the inspect screen shows once Escape is pressed");
+        return false;
+    }
+    return true;
+}
+
+// The made up item of the game gets them on the main thread: the item of the id (made when it is not there yet), then
+// each attribute by name. The game keeps that one item for the id, so both are always written, a seed of 0 too
+bool Skins::SetInspectAttributes(int definition_index, int paint_kit, float wear, int seed) {
+    auto p = Engine::GetProcess();
+    if (!p || !offsets::skins::fnGetItemView || !offsets::skins::fnSetAttributeByName)
+        return false;
+
+    if (!this->inspect_page && !(this->inspect_page = p->allocate_remote(INSPECT_PAGE_SIZE, PAGE_EXECUTE_READWRITE)))
+        return false;
+
+    auto client = Engine::GetClient().base;
+    uint64_t id = FAUX_ITEM_ID | (static_cast<uint64_t>(paint_kit & 0xFFFF) << 16) | static_cast<uint64_t>(definition_index & 0xFFFF);
+    const std::pair<size_t, uint32_t> attributes[] = {
+        { INSPECT_WEAR_NAME, std::bit_cast<uint32_t>(wear) },
+        { INSPECT_SEED_NAME, std::bit_cast<uint32_t>(static_cast<float>(seed)) },   // Kept as a float like the game does
+    };
+
+    std::vector<uint8_t> code;
+    auto put = [&](std::initializer_list<uint8_t> list) { code.insert(code.end(), list); };
+    auto put32 = [&](uint32_t value) { for (int k = 0; k < 4; k++) code.push_back(static_cast<uint8_t>(value >> (k * 8))); };
+    auto put64 = [&](uint64_t value) { for (int k = 0; k < 8; k++) code.push_back(static_cast<uint8_t>(value >> (k * 8))); };
+
+    put({ 0x48, 0x83, 0xEC, 0x38 });                            // sub rsp, 0x38
+    put({ 0x48, 0xB9 }); put64(id);                             // mov rcx, id
+    put({ 0x48, 0xB8 }); put64(client + offsets::skins::fnGetItemView);    // mov rax, GetItemView
+    put({ 0xFF, 0xD0 });                                        // call rax
+    put({ 0x48, 0x85, 0xC0 });                                  // test rax, rax
+    put({ 0x74, 0x00 }); size_t none = code.size();             // jz done
+    put({ 0x48, 0x89, 0x44, 0x24, 0x30 });                      // mov [rsp + 0x30], rax
+    for (const auto& [name, value] : attributes) {
+        put({ 0x48, 0x8B, 0x4C, 0x24, 0x30 });                  // mov rcx, [rsp + 0x30]
+        put({ 0x48, 0xBA }); put64(this->inspect_page + name);  // mov rdx, name
+        put({ 0xB8 }); put32(value);                            // mov eax, value
+        put({ 0x66, 0x0F, 0x6E, 0xD0 });                        // movd xmm2, eax
+        put({ 0x48, 0xB8 }); put64(client + offsets::skins::fnSetAttributeByName);  // mov rax, SetAttributeByName
+        put({ 0xFF, 0xD0 });                                    // call rax
+    }
+    code[none - 1] = static_cast<uint8_t>(code.size() - none);  // done:
+    put({ 0x48, 0x83, 0xC4, 0x38 });                            // add rsp, 0x38
+    put({ 0xC3 });                                              // ret
+
+    std::vector<uint8_t> page(INSPECT_PAGE_SIZE, 0);
+    std::copy(code.begin(), code.end(), page.begin());
+    std::memcpy(&page[INSPECT_WEAR_NAME], "set item texture wear", sizeof("set item texture wear"));
+    std::memcpy(&page[INSPECT_SEED_NAME], "set item texture seed", sizeof("set item texture seed"));
+    p->write_bytes(this->inspect_page, page);
+    FlushInstructionCache(p->handle_, reinterpret_cast<void*>(this->inspect_page), page.size());
+
+    if (!AgentPreview::Call(this->inspect_page)) {
+        // The game might still be inside it, the page is left to it
+        this->inspect_page = 0;
+        return false;
+    }
+    return true;
 }
 
 bool Skins::IsLoaded() {
@@ -625,6 +829,11 @@ void Skins::Shutdown() {
     skins.SetGlovePreload(false);
     skins.PatchGloveRemoval(false);
     skins.ApplyMusicKit(0);
+
+    // Our page for the inspect screen, unless a call into it is still on its way
+    if (skins.inspect_page && !skins.inspecting)
+        Engine::GetProcess()->free_remote(skins.inspect_page);
+    skins.inspect_page = 0;
 }
 
 void Skins::Thread() {
@@ -1218,12 +1427,32 @@ std::string Skins::GetModelName(uintptr_t entity) {
 constexpr auto AGENT_SPAWN_WINDOW = 3s;
 
 void Skins::TrackSpawn(uintptr_t pawn, bool alive) {
+    auto p = Engine::GetProcess();
+    auto now = std::chrono::steady_clock::now();
+
     // A spawn: another pawn alive, or the same one alive again. Not the pawn we first see, that one might be mid life
-    if (alive && this->agent_pawn && (pawn != this->agent_pawn || !this->agent_alive)) {
-        this->agent_spawned = std::chrono::steady_clock::now();
+    bool spawned = alive && this->agent_pawn && (pawn != this->agent_pawn || !this->agent_alive);
+
+    // A new round spawns the ones still alive again too, in the tick the count goes up. Only the count of the rules we
+    // read before, the rules of another match have their own
+    auto rules = p->read<uintptr_t>(Engine::GetClient().base + offsets::rules::dwGameRules);
+    auto round_starts = rules ? p->read<uint8_t>(rules + offsets::rules::m_nRoundStartCount) : uint8_t{ 0 };
+    bool new_round = rules && rules == this->round_rules && round_starts != this->round_starts;
+    this->round_rules = rules;
+    this->round_starts = round_starts;
+
+    if (spawned || (alive && this->agent_pawn == pawn && new_round)) {
+        this->agent_spawned = now;
         this->agent_waiting = false;
         this->agent_next_try = {};
+
+        if (new_round && !spawned)
+            LOGF(VERBOSE, "New round, the agent may change");
     }
+
+    // The knife only after a death: alive into a new round it is the knife we had, a change of it crashes the game
+    if (spawned)
+        this->respawned = now;
 
     if (pawn)
         this->agent_pawn = pawn;
@@ -1348,7 +1577,7 @@ bool Skins::ApplyKnife(uintptr_t pawn, uintptr_t weapon, uintptr_t item, int& in
         // on leaves a skeleton whose owner is gone, the game crashes on it with its next update of the weapon. The
         // knives there when we started might be mid life too
         bool new_knife = seen > this->skins_started + 1s && now - seen <= KNIFE_CHANGE_WINDOW;
-        bool spawned = now - this->agent_spawned <= KNIFE_CHANGE_WINDOW;
+        bool spawned = now - this->respawned <= KNIFE_CHANGE_WINDOW;
 
         if (!new_knife && !spawned) {
             if (!this->knife_waiting)

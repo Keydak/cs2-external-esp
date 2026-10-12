@@ -61,6 +61,10 @@ private:
     static json SettingsJson();
     static json SkinsJson();
 
+    // Saved skins, in config.json only: no part of an exported loadout
+    static void ApplySavedSkins(const json& list);
+    static json SavedSkinsJson();
+
     static void ReadGroup(const json& from, cfg::esp::group_t& group, const cfg::esp::group_t& def);
     static void WriteGroup(json& to, const cfg::esp::group_t& group);
 };

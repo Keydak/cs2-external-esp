@@ -22,6 +22,7 @@ namespace offsets
 		inline std::ptrdiff_t dwGameRules = 0x255D650; // C_CSGameRules*
 		inline std::ptrdiff_t m_pGameModeRules = 0xD98; // CCSGameModeRules* - C_CSGameRules, its class tells the game mode
 		inline std::ptrdiff_t m_gamePhase = 0x84; // int32 - C_CSGameRules, 5 once the match ended
+		inline std::ptrdiff_t m_nRoundStartCount = 0xF4C; // uint8 - C_CSGameRules, one up at every round start, in the tick the players spawn again
 	}
 
 	// client.dll button states, fallbacks overwritten by Dumper::FetchRemote()
@@ -151,6 +152,10 @@ namespace offsets
 
 		constexpr std::ptrdiff_t meshStride = 0x70;      // One mesh of the array DrawArray gets
 		constexpr std::ptrdiff_t meshMaterial = 0x20;    // CMaterial2* it is drawn with
+
+		// client.dll, CStrongHandle of materials/dev/glowproperty.vmat: the glow of the game draws the models again in it,
+		// the stub leaves those draws alone. 0 when not found
+		inline std::ptrdiff_t dwGlowMaterial = 0;
 	}
 
 	// Agent preview (-insecure): a player preview panel of Panorama made by JavaScript. Found at startup, 0 when not
@@ -225,6 +230,13 @@ namespace offsets
 		inline std::ptrdiff_t smokeRenderObject = 0;    // 0xD8 - pointer
 		inline std::ptrdiff_t smokeRenderStart = 0;     // 0xE0 - float, game time
 
+		// The scope of a zoomed sniper (shader legacy_sniper_scope), a post processing layer (not in the schema). Its flag
+		// also hides the weapon while zoomed, so the flag stays & only the layer goes: the check whether the view has post
+		// processing (a health boost or the scope) leaves the scope out (jne +3 -> +0), & next to a health boost the layer
+		// of the scope is skipped (cmp [r14], dil -> cmp dil, dil). In client.dll, 0 when not found
+		inline std::ptrdiff_t scopeCheck = 0;   // The displacement of the jne
+		inline std::ptrdiff_t scopeLayer = 0;   // The cmp
+
 		inline std::ptrdiff_t m_zoomLevel = 0x1F20; // int32 - C_CSWeaponBaseGun, 0 when not zoomed
 
 		inline std::ptrdiff_t m_clrRender = 0xCA0; // Color (r, g, b, a bytes) - C_BaseModelEntity, multiplies the colors of the model
@@ -250,6 +262,10 @@ namespace offsets
 		inline std::ptrdiff_t m_iGlowType = 0x30; // int32 - CGlowProperty, 3 is seen through walls
 		inline std::ptrdiff_t m_glowColorOverride = 0x40; // Color (r, g, b, a bytes) - CGlowProperty
 		inline std::ptrdiff_t m_bGlowing = 0x51; // bool - CGlowProperty
+
+		// CCSPlayer_GlowServices::UpdateGlow, each frame on a pawn that glows: asks a list of reasons whether it glows & in
+		// what color, else it turns the glow off. The list (client.dll, read only, ends with 0) gets our reason. 0 when not found
+		inline std::ptrdiff_t glowReasons = 0;
 	}
 
 	namespace econ {
@@ -309,6 +325,16 @@ namespace offsets
 		inline std::ptrdiff_t compositeOwner = 0x610; // Owner of the skin materials - C_BaseModelEntity
 		inline std::ptrdiff_t compositeMaterials = 0x4A8; // Material pointers, count right before - composite owner
 		inline std::ptrdiff_t compositePending = 0x4B8; // int32, materials still being built - composite owner
+
+		// The item of an id, also a made up one (0xF000000000000000 | paint kit << 16 | definition, like the store shows
+		// items nobody owns), made when it is not there yet, & an attribute set on it by name: wear & seed for the inspect
+		// screen. client.dll, 0 when not found
+		inline std::ptrdiff_t fnGetItemView = 0;        // CEconItemView*(uint64 id)
+		inline std::ptrdiff_t fnSetAttributeByName = 0; // void(CEconItemView*, const char* name, float value in xmm2)
+
+		// engine2.dll, the game UI (main & pause menu), the inspect screen is part of it: vfunc 12 tells whether it
+		// shows, 13 shows it like Escape does (gameui_activate). 0 when not found
+		inline std::ptrdiff_t gameUI = 0;
 	}
 
 	namespace bone {
@@ -388,6 +414,9 @@ namespace offsets
 		inline std::ptrdiff_t matchmaking = 0;      // Pointer to the object, 0 inside while not in the queue
 		inline std::ptrdiff_t accept = 0;           // The function
 		constexpr std::ptrdiff_t m_nState = 0xA8;   // int32, 2 & up once accepted
+		// The status the menu of the game shows, (context, CUtlString* out): "#SFUI_QMM_State_find_" & game/mmqueue of the
+		// session (searching, reserved...), empty out of the queue. A context of zeros skips its check of how old it is
+		inline std::ptrdiff_t fnQueueStatus = 0;
 	}
 
 	namespace global {
@@ -427,11 +456,21 @@ namespace offsets
 		const std::string chamsSceneObject = "48 85 D2 75 03 33 C0 C3 48 8B 42 ?? C3";
 		// The pawn lets go of its updater: call; mov rcx, [rbx + ...]; xor edi, edi; test rcx, rcx; je; mov rdx, [rbx + updater]
 		const std::string chamsUpdater = "E8 ?? ?? ?? ?? 48 8B 8B ?? ?? ?? ?? 33 FF 48 85 C9 74 18 48 8B 93";
+		// CCSPlayer_GlowServices::UpdateGlow: lea rax, [first reason]; mov [rbp + flag], r12b; lea rbx, [rip + reasons]
+		const std::string glowReasons = "48 8D 05 ?? ?? ?? ?? 44 88 65 ?? 48 8D 1D ?? ?? ?? ?? 0F 29 74 24";
+		// The glow draws a model: mov rax, [rip + glow material]; test rax, rax; je; mov rsi, [rax]; mov rax, [rbx + ...]
+		const std::string glowMaterial = "48 8B 05 ?? ?? ?? ?? 48 85 C0 74 ?? 48 8B 30 48 8B 83";
 		const std::string setRenderColor = "40 53 48 83 EC 20 8B 02 48 8B D9 39 81 ?? ?? ?? ?? 74 06 89 81 ?? ?? ?? ?? 48 8B 89 ?? ?? ?? ?? 0F B6 52 03 48 8B 01 FF 50 ?? 48 8B CB 48 83 C4 20 5B E9";
 		// C_SmokeGrenadeProjectile makes its cloud: mov word ptr [rcx + spawned flags], 0x100; add rcx, volume; call
 		const std::string smokeVolume = "66 C7 81 ?? ?? 00 00 00 01 48 81 C1 ?? ?? 00 00 E8";
 		// The cloud starts: mov rax, [rsi + render object]; mov edx, -1; movss [rax + start], xmm6; ... movss [rsi + start], xmm6
 		const std::string smokeStart = "48 8B 86 ?? ?? 00 00 BA FF FF FF FF F3 0F 11 B0 ?? ?? 00 00 48 8B 86 ?? ?? 00 00 C6 80";
+		// Whether the view has post processing: movss xmm1, [rcx] (health boost); xorps; comiss; ja; cmp byte ptr
+		// [rcx + 4], 0 (the scope of a sniper); jne; xor al, al; ret; mov al, 1; ret
+		const std::string scopeCheck = "F3 0F 10 09 0F 57 C0 0F 2F C8 77 ?? 80 79 04 00 75 ?? 32 C0 C3 B0 01 C3";
+		// Its layers, the scope after the health boost: lea r14, [rsi + 4]; jmp; lea r13, [r15 + 10]; cmp byte ptr
+		// [r14], dil (scope on); je (past its layer); mov rcx, [r15]; xorps xmm0, xmm0; cmp rbx, -1
+		const std::string scopeLayer = "4C 8D 76 04 EB 04 4D 8D 6F 10 ?? 38 ?? 0F 84 ?? ?? ?? ?? 49 8B 0F 0F 57 C0 48 83 FB FF";
 		// Some hud element listens for the vote events: mov byte [r14 + 28], 1; lea r8, name; mov rcx, [rip + manager];
 		// lea rdx, [r14 + 20]; xor r9d, r9d; mov rax, [rcx]; call [rax + 18] (AddListener)
 		// soundsystem.dll, callback of the "playvol" command: lea r11...; xor r13d, r13d; mov r15, rdx (the arguments);
@@ -486,6 +525,8 @@ namespace offsets
 			"56 57 41 56 41 57 48 8B EC 48 83 EC 60 48 8B 01 41 8B F0 48 8B DA 48 8B F9 FF 90 ?? ?? ?? ?? 85 C0 0F 84";
 		// LobbyAPI.SetLocalPlayerReady(string): "deferred", else with the matchmaking "prematch:..." or accept:
 		// cmp qword ptr [rip + matchmaking], 0 at +0x31; ... mov dl, 1; ...; jmp <accept> at +0x6B
+		// The matchmaking status of the menu: the string purged, then the session settings of the match framework
+		const std::string queueStatus = "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 56 41 57 48 83 EC 20 4C 8B F1 4C 8B FA 48 8B CA FF 15 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? 48 8D 35 ?? ?? ?? ?? 48 8B FE 48 8D 2D ?? ?? ?? ?? 48 8B 01 FF 50 78";
 		const std::string setLocalPlayerReady =
 			"40 53 48 83 EC 20 48 8B DA 48 8D 15 ?? ?? ?? ?? 48 8B CB FF 15 ?? ?? ?? ?? 85 C0 75 ?? BA 02 00 00 00 33 C9 E8 "
 			"?? ?? ?? ?? B0 01 48 83 C4 20 5B C3 48 83 3D ?? ?? ?? ?? 00 74 ?? 48 8D 15 ?? ?? ?? ?? 48 8B CB FF 15 ?? ?? ?? ?? "
@@ -502,6 +543,14 @@ namespace offsets
 		const std::string setMeshGroupMask = "48 89 5C 24 ?? 48 89 74 24 ?? 57 48 83 EC ?? 48 8D 99 ?? ?? ?? ?? 48 8B 71";
 		// Pawn update: "lea rcx, [rbx + glove helper]; call ApplyGloves; mov rcx, rbx; call ...; mov rdi, [rbx + ...]"
 		const std::string applyGlovesCall = "48 8D 8B ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8B CB E8 ?? ?? ?? ?? 48 8B BB";
+		// The item of an id: push rbx; ...; mov rcx, [inventory]; test rcx, rcx; je; mov rdx, rbx; call; test rax, rax;
+		// jne; mov rax, 0xF000000000000000 (made up ids from here on)
+		const std::string getItemView = "40 53 48 83 EC 20 48 8B D9 48 8B 0D ?? ?? ?? ?? 48 85 C9 74 ?? 48 8B D3 E8 ?? ?? ?? ?? 48 85 C0 75 ?? 48 B8 00 00 00 00 00 00 00 F0";
+		// Sets an attribute of an item by name: push rbx; ...; add rcx, m_AttributeList; call; mov rcx, rbx; ...; jmp
+		const std::string setAttributeByName = "40 53 48 83 EC 20 48 8B D9 48 81 C1 ?? ?? 00 00 E8 ?? ?? ?? ?? 48 8B CB 48 83 C4 20 5B E9";
+		// engine2.dll, Escape: "mov rax, [game UI]; lea rcx, [game UI]; call [rax + 0x60] (shows?); test al, al; je;
+		// mov rax, [x]; lea rcx, [x]; call [rax + ...]", then gameui_hide or gameui_activate
+		const std::string gameUI = "48 8B 05 ?? ?? ?? ?? 48 8D 0D ?? ?? ?? ?? FF 50 60 84 C0 74 ?? 48 8B 05 ?? ?? ?? ?? 48 8D 0D ?? ?? ?? ?? FF 90 ?? ?? 00 00";
 		// C_BaseModelEntity::SetModel: model handle by name from the resource system, then set by handle
 		const std::string setModel = "40 53 48 83 EC ?? 48 8B D9 4C 8B C2 48 8B 0D ?? ?? ?? ?? 48 8D 54 24";
 		// OnSubclassIDChanged: "call UpdateSubclass; cmp [rbx + vdata], 0; je; mov rax, [rbx]; mov edx, 1" then the vdata changed vfunc

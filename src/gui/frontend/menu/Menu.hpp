@@ -1,6 +1,8 @@
 #pragma once
 #include "assets/fonts/Icons.h"
 
+struct SkinInfo;
+
 enum Tab {
     PLAYERS,
     BOMB,
@@ -56,6 +58,9 @@ private:
     void RenderItemsPreview();
     void RenderSkinPanel();             // Next to the menu on the skins pages: what is picked there
     void SkinPanel();
+    void InspectButton(int definition_index, const cfg::skins::item_t& item = {});    // Its paint kit, wear & seed
+    bool InspectPill(bool enabled);     // True when clicked, the menu closed
+    void SavedSkinRow(cfg::skins::item_t& entry, const SkinInfo* skin);     // Save the skin of the skins page under a name
 
     void RenderPlayersTab();
     void RenderBombTab();

@@ -25,6 +25,10 @@ bool Renderer::IsOpen() {
     return GetInstance().isOpen;
 }
 
+void Renderer::SetOpen(bool open) {
+    GetInstance().SetOpenImpl(open);
+}
+
 bool Renderer::IsFocused() {
     return GetInstance().isFocused;
 }
@@ -223,22 +227,8 @@ bool Renderer::HandleState() {
         should_toggle = false;
 
     if (should_toggle || pressed_end) { // Toggle when pressing end to trigger the config save :v
-        this->isOpen = !isOpen;
-
-        // Release cursor when opening the menu
-        // Sometimes flashes the render as its handling the window order
-        if (this->isOpen)
-            SetForegroundWindow(Window::hwnd);
-        else
-            SetForegroundWindow(Engine::GetProcess()->hwnd_);
-
-        Window::SetClickthrough(Window::hwnd, !this->isOpen);
-
-        LOGF(VERBOSE, "Captured global VK_INSERT or VK_RSHIFT, toggling menu state to {}", this->isOpen);
-
-        // Not the best way, but wont bother the user
-        // As far as i know, no one has complained about the config saving system :D
-        std::thread(Config::Write).detach(); // Not needed, but just in case
+        LOGF(VERBOSE, "Captured global VK_INSERT or VK_RSHIFT, toggling menu state to {}", !this->isOpen);
+        SetOpenImpl(!this->isOpen);
     }
 
     if (pressed_end)
@@ -246,6 +236,26 @@ bool Renderer::HandleState() {
 
     was_holding = pressed_insert || pressed_rshift;
     return should_toggle;
+}
+
+void Renderer::SetOpenImpl(bool open) {
+    if (open == this->isOpen)
+        return;
+
+    this->isOpen = open;
+
+    // Release cursor when opening the menu
+    // Sometimes flashes the render as its handling the window order
+    if (this->isOpen)
+        SetForegroundWindow(Window::hwnd);
+    else
+        SetForegroundWindow(Engine::GetProcess()->hwnd_);
+
+    Window::SetClickthrough(Window::hwnd, !this->isOpen);
+
+    // Not the best way, but wont bother the user
+    // As far as i know, no one has complained about the config saving system :D
+    std::thread(Config::Write).detach(); // Not needed, but just in case
 }
 
 bool Renderer::HandleWindowOrder() {

@@ -151,6 +151,7 @@ namespace {
 
             { offsets::rules::m_pGameModeRules,                "C_CSGameRules",                            "m_pGameModeRules" },
             { offsets::rules::m_gamePhase,                     "C_CSGameRules",                            "m_gamePhase" },
+            { offsets::rules::m_nRoundStartCount,              "C_CSGameRules",                            "m_nRoundStartCount" },
 
             { offsets::bone::m_modelState,                      "CSkeletonInstance",                        "m_modelState" },
 
@@ -438,7 +439,7 @@ bool Dumper::InitImpl() {
     if (!ResolveCamera(client))
         Missing("Could not find the camera code, free cam & spectating are disabled");
 
-    // Accepting a match from memory, optional: without it the button is clicked
+    // Accepting a match from memory, optional
     {
         auto ready = ScanMemory(offsets::signatures::setLocalPlayerReady, client.base, client.base + client.size);
         if (!ready.empty()) {
@@ -448,9 +449,16 @@ bool Dumper::InitImpl() {
             LOGF(VERBOSE, "Found the match accept at 0x{:X} (matchmaking 0x{:X})", offsets::lobby::accept, offsets::lobby::matchmaking);
         }
         else {
-            Missing("Could not find the match accept code, auto accept clicks the button");
+            Missing("Could not find the match accept code, auto accept is disabled");
         }
     }
+
+    // The matchmaking status the menu shows, optional: the card to cancel the queue
+    if (auto found = ScanMemory(offsets::signatures::queueStatus, client.base, client.base + client.size); found.size() == 1) {
+        offsets::lobby::fnQueueStatus = found.at(0) - client.base;
+        LOGF(VERBOSE, "Found the matchmaking status at 0x{:X}", offsets::lobby::fnQueueStatus);
+    } else
+        LOGF(WARNING, "Could not find the matchmaking status of the game ({}), cancel queue is disabled", found.size());
 
     // Skin regeneration, optional
     if (!ResolveSkins(client))
@@ -570,6 +578,14 @@ bool Dumper::InitImpl() {
                 draw.size(), entries.size(), create.size(), load.size());
     }
 
+    // The material the glow draws models in, optional: without it the material chams take the place of the glow
+    if (auto found = ScanMemory(offsets::signatures::glowMaterial, client.base, client.base + client.size); found.size() == 1) {
+        auto at = found.at(0); // mov rax, [rip + handle]
+        offsets::materials::dwGlowMaterial = at + 7 + Engine::GetProcess()->read<int32_t>(at + 3) - client.base;
+        LOGF(VERBOSE, "Found the glow material at 0x{:X}", offsets::materials::dwGlowMaterial);
+    } else
+        LOGF(WARNING, "Could not find the glow material of the game ({}), the material chams cover the outline glow", found.size());
+
     // Agent preview, optional: RunScript of Panorama & where its engine keeps the JavaScript contexts
     {
         auto process = Engine::GetProcess();
@@ -657,6 +673,14 @@ bool Dumper::InitImpl() {
             Missing("Could not find the code for the glow chams, only textured chams");
     }
 
+    // Glow reasons of the players, optional: without them the game turns the outline glow of players off again & again
+    if (auto found = ScanMemory(offsets::signatures::glowReasons, client.base, client.base + client.size); found.size() == 1) {
+        auto at = found.at(0) + 11; // lea rbx, [rip + reasons]
+        offsets::visuals::glowReasons = at + 7 + Engine::GetProcess()->read<int32_t>(at + 3) - client.base;
+        LOGF(VERBOSE, "Found the glow reasons at 0x{:X}", offsets::visuals::glowReasons);
+    } else
+        LOGF(WARNING, "Could not find the glow reasons of the game ({}), the outline glow of players can flicker", found.size());
+
     // Smoke clouds, optional: only for no smoke
     {
         auto process = Engine::GetProcess();
@@ -688,6 +712,41 @@ bool Dumper::InitImpl() {
             offsets::visuals::smokeVolume = 0;
             Missing("Could not find the smoke cloud, no smoke is disabled");
         }
+    }
+
+    // Scope of the snipers, optional: only for no scope overlay & no scope blur. Bytes of the code, put back when an
+    // earlier run left ours
+    {
+        constexpr size_t CHECK_AT = 17;     // The displacement of the jne
+        constexpr size_t LAYER_AT = 10;     // The cmp: its REX (41, ours 40) & two bytes on its ModRM (3E, ours FF)
+
+        auto check = ScanMemory(offsets::signatures::scopeCheck, client.base, client.base + client.size);
+        auto layer = ScanMemory(offsets::signatures::scopeLayer, client.base, client.base + client.size);
+
+        if (!check.empty() && !layer.empty()
+            && RestorePatch(check.at(0) + CHECK_AT, 0x03, 0x00)
+            && RestorePatch(layer.at(0) + LAYER_AT, 0x41, 0x40)
+            && RestorePatch(layer.at(0) + LAYER_AT + 2, 0x3E, 0xFF)) {
+            offsets::visuals::scopeCheck = check.at(0) + CHECK_AT - client.base;
+            offsets::visuals::scopeLayer = layer.at(0) + LAYER_AT - client.base;
+            LOGF(VERBOSE, "Found the scope check at 0x{:X} & its layer at 0x{:X}",
+                offsets::visuals::scopeCheck, offsets::visuals::scopeLayer);
+        } else
+            Missing("Could not find the scope of the snipers, no scope overlay & no scope blur are disabled");
+    }
+
+    // Items by id & their attributes, optional: only for the wear & seed in the inspect screen
+    {
+        auto item_view = ScanMemory(offsets::signatures::getItemView, client.base, client.base + client.size);
+        auto set_attribute = ScanMemory(offsets::signatures::setAttributeByName, client.base, client.base + client.size);
+
+        if (!item_view.empty() && !set_attribute.empty()) {
+            offsets::skins::fnGetItemView = item_view.at(0) - client.base;
+            offsets::skins::fnSetAttributeByName = set_attribute.at(0) - client.base;
+            LOGF(VERBOSE, "Found the item of an id at 0x{:X} & its attribute by name at 0x{:X}",
+                offsets::skins::fnGetItemView, offsets::skins::fnSetAttributeByName);
+        } else
+            Missing("Could not find the items by id, the inspect screen shows the default wear & seed");
     }
 
     // server.dll, optional: only the MVP anthem needs it. Loaded with the first map, so tried again later
@@ -725,6 +784,14 @@ bool Dumper::InitImpl() {
         LOGF(VERBOSE, "Found setinfo at 0x{:X}", offsets::controller::fnSetInfo);
     } else
         Missing("Could not find setinfo ({}), the name & tag are not sent to the server", found.size());
+
+    // The game UI, optional: in a match the inspect screen would wait for Escape without it. The object of "lea rcx"
+    if (auto found = ScanMemory(offsets::signatures::gameUI, engine.base, engine.base + engine.size); found.size() == 1) {
+        auto lea = found.at(0) + 7;
+        offsets::skins::gameUI = lea + 7 + process->read<int32_t>(lea + 3) - engine.base;
+        LOGF(VERBOSE, "Found the game UI at 0x{:X}", offsets::skins::gameUI);
+    } else
+        Missing("Could not find the game UI ({}), the inspect screen in a match shows once Escape is pressed", found.size());
 
     LOGF(INFO, "Successfully dumped offsets...");
 
@@ -983,21 +1050,25 @@ bool Dumper::ResolveThirdPerson(ProcessModule client) {
 }
 
 bool Dumper::RestoreJump(uintptr_t address, uint8_t opcode) {
+    constexpr uint8_t JMP_SHORT = 0xEB;
+    return RestorePatch(address, opcode, JMP_SHORT);
+}
+
+bool Dumper::RestorePatch(uintptr_t address, uint8_t original, uint8_t ours) {
     auto process = Engine::GetProcess();
     auto current = process->read<uint8_t>(address);
 
-    if (current == opcode)
+    if (current == original)
         return true;
 
-    // Still our jmp from an earlier run that was closed without putting it back
-    constexpr uint8_t JMP_SHORT = 0xEB;
-    if (current != JMP_SHORT)
+    // Still ours from an earlier run that was closed without putting it back
+    if (current != ours)
         return false;
 
-    if (!process->patch_code(address, &opcode, sizeof(opcode)))
+    if (!process->patch_code(address, &original, sizeof(original)))
         return false;
 
-    LOGF(INFO, "Put back the jump at 0x{:X} an earlier run left patched", address);
+    LOGF(INFO, "Put back the byte at 0x{:X} an earlier run left patched", address);
     return true;
 }
 

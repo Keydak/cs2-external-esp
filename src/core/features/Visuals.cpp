@@ -8,6 +8,7 @@
 #include "core/engine/cache/Cache.hpp"
 #include "core/offsets/Dumper.hpp"
 #include "core/engine/GameThread.hpp"
+#include "core/features/View.hpp"
 
 namespace {
     namespace vis = offsets::visuals;
@@ -31,11 +32,36 @@ namespace {
     constexpr size_t GLOW_CODE = 0x1800;
     constexpr uintptr_t ALLOCATION_GRANULARITY = 0x10000; // Where VirtualAllocEx starts our pages
 
+    // Outline glow of players: each frame the game asks a list of reasons whether a pawn glows & in what color, else it
+    // turns the glow off. Our reason in that list, its page: a mark, the reason of the game it asks for the rest, the
+    // table read now, two tables { pawn, color: float[4] } (end with pawn 0) & the code
+    constexpr size_t REASON_PAGE_SIZE = 0x1000;
+    constexpr size_t REASON_MARK = 0x00;
+    constexpr size_t REASON_ORIGINAL = 0x08;
+    constexpr size_t REASON_ACTIVE = 0x10;
+    constexpr uint64_t REASON_MARK_VALUE = 0x4E4F534145525747; // "GWREASON"
+    constexpr size_t REASON_TABLES[2] = { 0x080, 0x700 };
+    constexpr size_t REASON_ENTRY = 0x18;
+    constexpr size_t REASON_MAX_PAWNS = 64;
+    constexpr size_t REASON_CODE = 0xE00;
+    constexpr size_t REASON_SLOT = 8;           // The second reason of the list, the first one is called directly
+    static_assert(REASON_TABLES[0] + (REASON_MAX_PAWNS + 1) * REASON_ENTRY <= REASON_TABLES[1]);
+    static_assert(REASON_TABLES[1] + (REASON_MAX_PAWNS + 1) * REASON_ENTRY <= REASON_CODE);
+
     constexpr size_t UPDATER_FUNCTION = 0x08;   // In the updater handle, after its parameter (the pawn)
     constexpr uint32_t SPAWN_INVULNERABILITY = 0x244EC9B0;  // murmur2 of the attribute names
     constexpr uint32_t INVULNERABILITY_COLOR = 0xB2CAF4DF;
     constexpr float GLOW_PARTIAL = 0.5f;          // Strength of the glow types over the model
     constexpr float SMOKE_AGE = 1000.f;          // Seconds a hidden cloud is made older, it is gone after 22
+
+    // Scope of the snipers, bytes of the code: the jne of the post processing check (+3 to the scope, ours +0) & the
+    // compare before its layer ([r14] with dil, ours dil with itself: always past it). Its lines are as thick as a
+    // console variable, read now & then for ours
+    constexpr uint8_t SCOPE_CHECK_ON = 0x03;
+    constexpr uint8_t SCOPE_CHECK_OFF = 0x00;
+    constexpr uint8_t SCOPE_LAYER_ON[] = { 0x41, 0x38, 0x3E };
+    constexpr uint8_t SCOPE_LAYER_OFF[] = { 0x40, 0x38, 0xFF };
+    constexpr auto SCOPE_WIDTH_REFRESH = 1s;
 
     uint32_t Pack(const color_t& color) {
         auto byte = [](float value) { return static_cast<uint32_t>(std::clamp(value, 0.f, 1.f) * 255.f + 0.5f); };
@@ -132,6 +158,7 @@ void Visuals::Thread() {
         was_available = true;
 
         UpdateFlash(pawn);
+        UpdateScope(true);
 
         // The cache only while something needs it, or something of ours is left to turn off
         namespace glow = cfg::visuals::glow;
@@ -180,6 +207,42 @@ void Visuals::UpdateFlash(uintptr_t pawn) {
     this->flash_written = false;
 }
 
+bool Visuals::IsScopeHidden() {
+    return GetInstance().scope_hidden;
+}
+
+int Visuals::GetScopeLineWidth() {
+    return GetInstance().scope_line_width;
+}
+
+// Changed in the code, which runs inside the frame of the game: it fills the scope in again every frame, a value
+// written from here would race it. The shader of the scope has its lens (colors apart towards the edge) & its black
+// edge built in, so without the overlay or its blur the layer of the game is off & the ESP draws ours. The flag of the
+// scope stays as the game sets it, it also hides the weapon while zoomed
+void Visuals::UpdateScope(bool allowed) {
+    auto p = Engine::GetProcess();
+    bool wanted = allowed && (cfg::visuals::no_scope_overlay || cfg::visuals::no_scope_blur);
+
+    if (vis::scopeCheck && vis::scopeLayer && wanted != this->scope_hidden) {
+        auto client = Engine::GetClient().base;
+        uint8_t check = wanted ? SCOPE_CHECK_OFF : SCOPE_CHECK_ON;
+
+        if (p->patch_code(client + vis::scopeLayer, wanted ? SCOPE_LAYER_OFF : SCOPE_LAYER_ON, sizeof(SCOPE_LAYER_ON))
+            && p->patch_code(client + vis::scopeCheck, &check, sizeof(check)))
+            this->scope_hidden = wanted;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    if (!this->scope_hidden || now < this->next_scope_width)
+        return;
+
+    this->next_scope_width = now + SCOPE_WIDTH_REFRESH;
+    if (!this->scope_width_convar)
+        this->scope_width_convar = View::FindConVar("cl_crosshair_sniper_width");
+    if (this->scope_width_convar)
+        this->scope_line_width = std::max(1, p->read<int>(this->scope_width_convar + View::CONVAR_VALUE));
+}
+
 void Visuals::RefreshTargets() {
     namespace glow = cfg::visuals::glow;
 
@@ -188,6 +251,7 @@ void Visuals::RefreshTargets() {
     auto p = Engine::GetProcess();
 
     this->glow_targets.clear();
+    this->glow_pawns.clear();
     this->chams_targets.clear();
     this->smokes.clear();
     this->known.clear();
@@ -205,11 +269,13 @@ void Visuals::RefreshTargets() {
             continue;
 
         bool enemy = snapshot.game.IsEnemy(local.team, player.team);
-        // Like the rest of the player ESP, off with the switch of its group
-        if (enemy && glow::enemies && cfg::esp::enemy.enabled)
-            add(pawn, glow::enemy_color);
-        else if (!enemy && glow::team && cfg::esp::team.enabled)
-            add(pawn, glow::team_color);
+        // Like the rest of the player ESP, off with the switch of its group. Kept on by the game with our reason
+        const color_t* glow_color = enemy && glow::enemies && cfg::esp::enemy.enabled ? &glow::enemy_color
+            : !enemy && glow::team && cfg::esp::team.enabled ? &glow::team_color : nullptr;
+        if (pawn && glow_color) {
+            add(pawn, *glow_color);
+            this->glow_pawns.push_back({ pawn, Pack(*glow_color) });
+        }
 
         // Chams: always opaque, a see through render color needs a render mode the pawn does not have. Off while
         // spawn protected: ours would cover the shimmer of the game that tells it, it comes back once they can be hurt
@@ -311,6 +377,9 @@ void Visuals::UpdateSmoke() {
 void Visuals::UpdateGlow() {
     auto p = Engine::GetProcess();
 
+    // Players: our reason in the game keeps them glowing in our color, the writes below start it (& do it all without it)
+    UpdateGlowReason();
+
     std::unordered_map<uintptr_t, uint32_t> wanted;
     for (auto [entity, color] : this->glow_targets) {
         if (!IsLive(entity))
@@ -337,6 +406,157 @@ void Visuals::UpdateGlow() {
     }
 
     this->glowing = std::move(wanted);
+}
+
+bool Visuals::EnsureGlowReason() {
+    if (this->reason_page)
+        return true;
+    if (!vis::glowReasons || this->reason_failed)
+        return false;
+
+    auto p = Engine::GetProcess();
+    auto client = Engine::GetClient();
+    auto in_client = [&](uintptr_t address) { return address >= client.base && address < client.base + client.size; };
+    auto slot = client.base + vis::glowReasons + REASON_SLOT;
+
+    // The reason of the game, or ours from a run before that keeps it on its page
+    auto original = p->read<uintptr_t>(slot);
+    if (original && !in_client(original)) {
+        auto old = original & ~(ALLOCATION_GRANULARITY - 1);
+        if (p->read<uint64_t>(old + REASON_MARK) == REASON_MARK_VALUE)
+            original = p->read<uintptr_t>(old + REASON_ORIGINAL);
+    }
+    if (!in_client(original)) {
+        this->reason_failed = true;
+        LOGF(WARNING, "Glow: the reasons of the game hold 0x{:X}, the outline glow of players can flicker", original);
+        return false;
+    }
+
+    auto page = p->allocate_remote(REASON_PAGE_SIZE, PAGE_EXECUTE_READWRITE);
+    if (!page) {
+        this->reason_failed = true;
+        return false;
+    }
+
+    std::vector<uint8_t> code;
+    auto emit = [&](std::initializer_list<uint8_t> bytes) { code.insert(code.end(), bytes); };
+    auto emit64 = [&](uint64_t value) { for (int i = 0; i < 8; i++) code.push_back(static_cast<uint8_t>(value >> (i * 8))); };
+
+    // A short jump with its rel8 filled in once the target is known
+    auto jump = [&](uint8_t opcode) { code.push_back(opcode); code.push_back(0); return code.size() - 1; };
+    auto bind = [&](size_t at, size_t target) {
+        code[at] = static_cast<uint8_t>(static_cast<int8_t>(static_cast<int64_t>(target) - static_cast<int64_t>(at + 1)));
+    };
+
+    // Called with (pawn, local player, float color[3] out, ?, float* alpha out, ...): our color & true when the pawn is in
+    // the table, else the reason of the game decides. The game turns the floats into the bytes of the glow color
+    emit({ 0x48, 0xB8 }); emit64(page + REASON_ACTIVE);     // mov rax, &active
+    emit({ 0x48, 0x8B, 0x00 });                             // mov rax, [rax]
+    size_t find = code.size();
+    emit({ 0x4C, 0x8B, 0x10 });                             // mov r10, [rax]
+    emit({ 0x4D, 0x85, 0xD2 });                             // test r10, r10
+    auto to_original = jump(0x74);                          // jz original
+    emit({ 0x4C, 0x3B, 0xD1 });                             // cmp r10, rcx
+    auto to_found = jump(0x74);                             // je found
+    emit({ 0x48, 0x83, 0xC0, static_cast<uint8_t>(REASON_ENTRY) }); // add rax, entry
+    bind(jump(0xEB), find);                                 // jmp find
+
+    bind(to_found, code.size());
+    emit({ 0x44, 0x8B, 0x50, 0x08 });                       // mov r10d, [rax + 8] (red)
+    emit({ 0x45, 0x89, 0x10 });                             // mov [r8], r10d
+    emit({ 0x44, 0x8B, 0x50, 0x0C });                       // mov r10d, [rax + 0xC] (green)
+    emit({ 0x45, 0x89, 0x50, 0x04 });                       // mov [r8 + 4], r10d
+    emit({ 0x44, 0x8B, 0x50, 0x10 });                       // mov r10d, [rax + 0x10] (blue)
+    emit({ 0x45, 0x89, 0x50, 0x08 });                       // mov [r8 + 8], r10d
+    emit({ 0x4C, 0x8B, 0x54, 0x24, 0x28 });                 // mov r10, [rsp + 0x28] (the fifth argument)
+    emit({ 0x44, 0x8B, 0x58, 0x14 });                       // mov r11d, [rax + 0x14] (alpha)
+    emit({ 0x45, 0x89, 0x1A });                             // mov [r10], r11d
+    emit({ 0xB0, 0x01 });                                   // mov al, 1
+    emit({ 0xC3 });                                         // ret
+
+    bind(to_original, code.size());
+    emit({ 0x48, 0xB8 }); emit64(page + REASON_ORIGINAL);   // mov rax, &original
+    emit({ 0xFF, 0x20 });                                   // jmp [rax]
+
+    if (REASON_CODE + code.size() > REASON_PAGE_SIZE) {
+        p->free_remote(page);
+        this->reason_failed = true;
+        return false;
+    }
+
+    // Empty tables: until the first one is written only the reason of the game decides
+    std::vector<uint8_t> data(REASON_PAGE_SIZE, 0);
+    auto put64 = [&](size_t at, uint64_t value) { std::memcpy(&data[at], &value, sizeof(value)); };
+    put64(REASON_MARK, REASON_MARK_VALUE);
+    put64(REASON_ORIGINAL, original);
+    put64(REASON_ACTIVE, page + REASON_TABLES[0]);
+    std::copy(code.begin(), code.end(), data.begin() + REASON_CODE);
+    p->write_bytes(page, data);
+    FlushInstructionCache(p->handle_, reinterpret_cast<void*>(page + REASON_CODE), code.size());
+
+    // The list is read only data of the game
+    uintptr_t stub = page + REASON_CODE;
+    if (!p->patch_code(slot, &stub, sizeof(stub))) {
+        LOGF(WARNING, "Glow: could not put our reason in the list of the game ({})", GetLastError());
+        p->free_remote(page);
+        this->reason_failed = true;
+        return false;
+    }
+
+    this->reason_page = page;
+    this->reason_original = original;
+    this->reason_active = 0;
+    this->reason_table.assign(REASON_ENTRY, 0);
+    LOGF(VERBOSE, "Glow reason of ours at 0x{:X}, the one of the game 0x{:X}", stub, original);
+    return true;
+}
+
+void Visuals::UpdateGlowReason() {
+    // Each color as the bytes we write, plus a half: the game cuts the fraction off, the color it writes is ours to the bit
+    std::vector<uint8_t> table;
+    for (auto [pawn, color] : this->glow_pawns) {
+        if (table.size() >= REASON_MAX_PAWNS * REASON_ENTRY || !IsLive(pawn))
+            continue;
+
+        uint8_t entry[REASON_ENTRY]{};
+        std::memcpy(entry, &pawn, sizeof(pawn));
+        for (int i = 0; i < 4; i++) {
+            float value = (static_cast<float>((color >> (i * 8)) & 0xFF) + 0.5f) / 255.f;
+            std::memcpy(entry + 8 + i * sizeof(float), &value, sizeof(value));
+        }
+        table.insert(table.end(), entry, entry + REASON_ENTRY);
+    }
+    table.resize(table.size() + REASON_ENTRY, 0);  // Pawn 0 ends it
+
+    // Nothing to glow & never put in the list: it stays out
+    if (table.size() == REASON_ENTRY && !this->reason_page)
+        return;
+    if (!EnsureGlowReason() || table == this->reason_table)
+        return;
+
+    // Into the table not read now, then switched to
+    auto p = Engine::GetProcess();
+    int next = 1 - this->reason_active;
+    p->write_bytes(this->reason_page + REASON_TABLES[next], table);
+    p->write<uintptr_t>(this->reason_page + REASON_ACTIVE, this->reason_page + REASON_TABLES[next]);
+    this->reason_active = next;
+    this->reason_table = std::move(table);
+}
+
+void Visuals::RestoreGlowReason() {
+    if (!this->reason_page)
+        return;
+
+    auto p = Engine::GetProcess();
+    auto slot = Engine::GetClient().base + vis::glowReasons + REASON_SLOT;
+    if (p->read<uintptr_t>(slot) == this->reason_page + REASON_CODE)
+        p->patch_code(slot, &this->reason_original, sizeof(this->reason_original));
+
+    // The page stays: the game might be running it right now. With empty tables it only asks the reason of the game
+    p->write<uintptr_t>(this->reason_page + REASON_TABLES[0], 0);
+    p->write<uintptr_t>(this->reason_page + REASON_TABLES[1], 0);
+    this->reason_page = 0;
+    this->reason_table.clear();
 }
 
 bool Visuals::HasModelGlow() {
@@ -749,6 +969,8 @@ void Visuals::Restore() {
     if (this->flash_written && pawn)
         p->write<float>(pawn + vis::m_flFlashMaxAlpha, FLASH_FULL);
 
+    UpdateScope(false);
+
     for (const auto& [entity, hidden] : this->hidden_smokes) {
         if (!IsLive(entity))
             continue;
@@ -765,6 +987,7 @@ void Visuals::Restore() {
         p->write<bool>(entity + vis::m_Glow + vis::m_bGlowing, false);
         p->write<uint32_t>(entity + vis::m_Glow + vis::m_glowColorOverride, 0);
     }
+    RestoreGlowReason();
 
     this->flash_written = false;
 

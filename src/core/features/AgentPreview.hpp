@@ -54,6 +54,19 @@ public:
     // Why no picture was taken, empty when none failed
     static std::string GetStatus();
 
+    // A script of ours (JavaScript of Panorama) on the main thread of the game, in the context of the main menu or else
+    // of the hud, at the start of its next frame. Needs IsAvailable(), false when it did not run
+    static bool RunScript(const std::string& script);
+    // A panel of the game by its id, one made by a layout or a script: 0 when it is not there. Needs IsAvailable()
+    static uintptr_t FindPanel(const char* id);
+    // That panel is still there
+    static bool HasPanel(uintptr_t panel);
+    // A script in the context of the layout of that panel instead
+    static bool RunScript(uintptr_t panel, const std::string& script);
+    // Code of ours in the game (no arguments, ends with ret) at the start of the next frame of Panorama, on the main
+    // thread in the menu & in a match. False when it did not run in time: then it might still run, its code must stay
+    static bool Call(uintptr_t function, DWORD timeout_ms = 500);
+
     // The panels removed, the vtable of the engine put back
     static void Shutdown();
 private:
@@ -87,8 +100,10 @@ private:
     uintptr_t FindRoot(const char* id);
     // The roots of the main menu & of the hud that are there
     std::vector<uintptr_t> Roots();
+    // CUIEngine, from PanoramaUIEngine001. broken: its code is not the one we know
+    bool FindEngine(bool& broken);
 
-    // Runs the script in the context of the panel on the main thread
+    // Runs the script in the context of the panel on the main thread, nothing when the panel is gone by then
     bool Run(uintptr_t panel, const std::string& script);
     bool Run(const std::vector<uintptr_t>& panels, const std::string& script);  // In each, in the same frame
 
@@ -118,6 +133,7 @@ private:
     uintptr_t copy_vtable = 0;
 
     std::mutex wanted_mutex;
+    std::mutex run_mutex;           // The call page & the frame hook: the thread, RunScript & Shutdown
     std::condition_variable wake;
     Wanted wanted{};
     std::chrono::steady_clock::time_point asked_at{};

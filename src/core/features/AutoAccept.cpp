@@ -3,8 +3,10 @@
 #include "core/engine/Engine.hpp"
 #include "core/engine/GameThread.hpp"
 #include "core/offsets/Offsets.hpp"
+#include "core/features/AgentPreview.hpp"
 
 #include <cstring>
+#include <thread>
 
 namespace {
     // ".accept-match .FlatButton" of panorama/styles/popups/popup_accept_match.vcss: a solid button of this color,
@@ -21,10 +23,42 @@ namespace {
     constexpr float MIN_HEIGHT = 0.03f;
 
     constexpr auto CHECK_INTERVAL = 500ms;
-    constexpr auto CONFIRM_INTERVAL = 150ms; // Seen once, looked at again before clicking
-    constexpr auto AFTER_CLICK = 3s;
+    constexpr auto CONFIRM_INTERVAL = 150ms; // Seen once, looked at again before accepting
+    constexpr auto AFTER_ACCEPT = 1s;
 
     constexpr int32_t ACCEPTED = 2;         // State of the matchmaking once accepted
+
+    constexpr auto CANCEL_INTERVAL = 500ms;
+    constexpr auto STATUS_BACKOFF = 2s;     // The status call did not run (the game loads)
+
+    // Page of the status call: the code, its context (zeros) & the CUtlString the game writes the status into. The game
+    // purges it first, so the same one goes every time
+    constexpr size_t STATUS_PAGE_SIZE = 0x1000;
+    constexpr uintptr_t STATUS_CONTEXT = 0x100;
+    constexpr uintptr_t STATUS_TEXT = 0x200;
+
+    // The accept button of popups/popup_accept_match.xml, a panel of the popup to find it by
+    constexpr const char* POPUP_PANEL = "AcceptMatchBtn";
+
+    // The X: a button of the game like its cancel search (PartyCancelBtn of friendslist.xml), its classes, icon, tooltip
+    // & sound. In the top right corner of the box of the popup, over its map. Run in the context of the popup, once
+    constexpr const char* CANCEL_BUTTON =
+        "var c=$.GetContextPanel();"
+        "var a=c.id==='AcceptMatchBtn'?c:c.FindChildTraverse('AcceptMatchBtn');"
+        "if(!a)return;"
+        "var box=a.GetParent();"
+        "if(box.FindChild('cs2ext_cancel_queue'))return;"
+        "var b=$.CreatePanel('Button',box,'cs2ext_cancel_queue');"
+        "b.AddClass('IconButton');b.AddClass('horizontal-align-right');b.AddClass('vertical-align-top');"
+        "$.CreatePanel('Image',b,'cs2ext_cancel_queue_icon').SetImage('file://{images}/icons/ui/cancel.svg');"
+        "b.SetPanelEvent('onmouseover',function(){UiToolkitAPI.ShowTextTooltip(b.id,'#tooltip_canelsearch');});"
+        "b.SetPanelEvent('onmouseout',function(){UiToolkitAPI.HideTextTooltip();});"
+        "b.SetPanelEvent('onactivate',function(){"
+        "UiToolkitAPI.HideTextTooltip();b.enabled=false;"
+        "LobbyAPI.StopMatchmaking();"
+        "$.DispatchEvent('CSGOPlaySoundEffect','UIPanorama.generic_button_press','MOUSE');"
+        "$.Schedule(5,function(){if(b.IsValid())b.enabled=true;});"
+        "});";
 }
 
 bool AutoAccept::Init() {
@@ -40,15 +74,127 @@ void AutoAccept::Shutdown() {
     GetInstance().stopping = true;
 }
 
+bool AutoAccept::IsAvailable() {
+    return Engine::IsInsecure() && offsets::lobby::matchmaking && (offsets::lobby::accept || AgentPreview::IsAvailable());
+}
+
+bool AutoAccept::IsQueueAvailable() {
+    return Engine::IsInsecure() && offsets::lobby::fnQueueStatus && AgentPreview::IsAvailable();
+}
+
+void AutoAccept::UpdateCancel() {
+    auto now = std::chrono::steady_clock::now();
+    if (now < this->next_cancel)
+        return;
+    this->next_cancel = now + CANCEL_INTERVAL;
+
+    if (!cfg::misc::cancel_queue || !IsQueueAvailable()) {
+        this->cancel_popup = 0;
+        return;
+    }
+
+    // A match found, accepted or not: "#SFUI_QMM_State_find_reserved" in the menu
+    std::string status;
+    if (!ReadQueueStatus(status)) {
+        this->next_cancel = now + STATUS_BACKOFF;
+        return;
+    }
+    if (!status.ends_with("_reserved")) {
+        this->cancel_popup = 0;
+        return;
+    }
+
+    // Once in each popup, from when it is there
+    if (this->cancel_popup && AgentPreview::HasPanel(this->cancel_popup))
+        return;
+    auto popup = AgentPreview::FindPanel(POPUP_PANEL);
+    if (!popup)
+        return;
+
+    if (AgentPreview::RunScript(popup, CANCEL_BUTTON)) {
+        this->cancel_popup = popup;
+        LOGF(INFO, "Put the cancel button in the popup of the game");
+    }
+}
+
+bool AutoAccept::ReadQueueStatus(std::string& status) {
+    if (!GameThread::Ensure())
+        return false;
+
+    auto p = Engine::GetProcess();
+    if (!this->status_code) {
+        // status(&context, &text)
+        std::vector<uint8_t> code = {
+            0x48, 0x83, 0xEC, 0x28,                     // sub rsp, 0x28
+            0x48, 0xB9, 0, 0, 0, 0, 0, 0, 0, 0,         // mov rcx, context
+            0x48, 0xBA, 0, 0, 0, 0, 0, 0, 0, 0,         // mov rdx, text
+            0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,         // mov rax, status
+            0xFF, 0xD0,                                 // call rax
+            0x48, 0x83, 0xC4, 0x28,                     // add rsp, 0x28
+            0xC3,                                       // ret
+        };
+
+        auto page = p->allocate_remote(STATUS_PAGE_SIZE, PAGE_EXECUTE_READWRITE);
+        if (!page)
+            return false;
+
+        uint64_t context = page + STATUS_CONTEXT, text = page + STATUS_TEXT;
+        uint64_t function = Engine::GetClient().base + offsets::lobby::fnQueueStatus;
+        std::memcpy(&code[6], &context, sizeof(context));
+        std::memcpy(&code[16], &text, sizeof(text));
+        std::memcpy(&code[26], &function, sizeof(function));
+
+        std::vector<uint8_t> data(STATUS_PAGE_SIZE, 0);
+        std::copy(code.begin(), code.end(), data.begin());
+        p->write_bytes(page, data);
+        FlushInstructionCache(p->handle_, reinterpret_cast<void*>(page), code.size());
+        this->status_code = page;
+    }
+
+    if (!GameThread::Call(this->status_code, 500)) {
+        // Might still run later: the page is left to it, the next call gets a new one
+        this->status_code = 0;
+        return false;
+    }
+
+    char text[64]{};
+    if (auto string = p->read<uintptr_t>(this->status_code + STATUS_TEXT))
+        p->read_raw(string, text, sizeof(text) - 1);
+    status = text;
+    return true;
+}
+
+bool AutoAccept::Accepted() {
+    auto p = Engine::GetProcess();
+    if (!p || !offsets::lobby::matchmaking)
+        return false;
+
+    auto matchmaking = p->read<uintptr_t>(Engine::GetClient().base + offsets::lobby::matchmaking);
+    return matchmaking && p->read<int32_t>(matchmaking + offsets::lobby::m_nState) >= ACCEPTED;
+}
+
+bool AutoAccept::AcceptInPopup() {
+    // Its button runs OnAcceptMatchPressed, & so does this event of the game: LobbyAPI.SetLocalPlayerReady("accept") &
+    // the popup marked as accepted (the players in place of its button, its timer gone)
+    if (!AgentPreview::IsAvailable() || !AgentPreview::RunScript("$.DispatchEvent('MatchAssistedAccept');"))
+        return false;
+
+    bool accepted = Accepted();
+    if (!accepted)
+        LOGF(WARNING, "Accepting through the popup of the game did not take");
+    return accepted;
+}
+
 void AutoAccept::Thread() {
     POINT last{};
     int seen = 0;
-    bool told_failed = false;
+    bool accepted = false;      // This popup, told once
 
     while (!this->stopping) {
         std::this_thread::sleep_for(seen ? CONFIRM_INTERVAL : CHECK_INTERVAL);
+        UpdateCancel();
 
-        if (!cfg::misc::auto_accept) {
+        if (!cfg::misc::auto_accept || !IsAvailable()) {
             seen = 0;
             continue;
         }
@@ -70,9 +216,11 @@ void AutoAccept::Thread() {
             continue;
         }
 
+        // No popup: the next one starts over
         POINT center{};
         if (!FindButton(window, center)) {
             seen = 0;
+            accepted = false;
             continue;
         }
 
@@ -83,60 +231,33 @@ void AutoAccept::Thread() {
             seen = 1;
             continue;
         }
-
-        // From memory, nothing to click
-        if (AcceptInMemory()) {
-            LOGF(INFO, "Match found, accepted it");
-            told_failed = false;
-            seen = 0;
-            std::this_thread::sleep_for(AFTER_CLICK);
-            continue;
-        }
-
-        // Else a click posted to the window: the cursor never moves & what the player does with the mouse can't get
-        // in between. Brought to the front first, the game takes clicks only there
-        if (GetForegroundWindow() != window) {
-            DWORD foreground = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
-            DWORD ours = GetCurrentThreadId();
-
-            // Windows only lets the app in the foreground hand it over, borrowed by sharing its input
-            AttachThreadInput(ours, foreground, TRUE);
-            ShowWindow(window, SW_RESTORE);
-            SetForegroundWindow(window);
-            BringWindowToTop(window);
-            AttachThreadInput(ours, foreground, FALSE);
-            continue;
-        }
-
-        PostClick(window, center);
-        LOGF(INFO, "Match found, clicked ACCEPT");
-        told_failed = false;
         seen = 0;
-        std::this_thread::sleep_for(AFTER_CLICK);
 
-        // Still there after the click: the game did not take it
-        POINT again{};
-        if (FindButton(window, again) && !told_failed) {
-            LOGF(WARNING, "ACCEPT is still there after clicking it, accept it yourself");
-            told_failed = true;
+        // Through the popup of the game, like a click on its button: it shows it took it. Else from memory: the server
+        // takes it, the popup keeps its button. Taken already: nothing more to do. Not taken: tried again a moment later
+        const char* how = nullptr;
+        if (Accepted())
+            how = "already";
+        else if (AcceptInPopup())
+            how = "through the popup of the game";
+        else if (AcceptInMemory())
+            how = "from memory, the popup of the game keeps its button until the match loads";
+
+        if (how) {
+            if (!accepted) {
+                LOGF(INFO, "Match found, accepted ({})", how);
+
+                // Behind other windows: its taskbar button flashes until the game is brought up, the window stays
+                // where it is
+                if (GetForegroundWindow() != window) {
+                    FLASHWINFO flash{ sizeof(flash), window, FLASHW_TRAY | FLASHW_TIMERNOFG, 0, 0 };
+                    FlashWindowEx(&flash);
+                }
+            }
+            accepted = true;
         }
+        std::this_thread::sleep_for(AFTER_ACCEPT);
     }
-}
-
-void AutoAccept::PostClick(HWND window, POINT center) {
-    // Window messages, not input: the game reads them like a real click. Posted ones go before the input of the
-    // mouse, the move right before each button puts the game at the button whatever the mouse did in between
-    LPARAM at = MAKELPARAM(center.x, center.y);
-
-    PostMessageA(window, WM_MOUSEMOVE, 0, at);
-    std::this_thread::sleep_for(30ms);                 // Hovered first, like a real click it lights up
-
-    PostMessageA(window, WM_MOUSEMOVE, 0, at);
-    PostMessageA(window, WM_LBUTTONDOWN, MK_LBUTTON, at);
-    std::this_thread::sleep_for(40ms);
-
-    PostMessageA(window, WM_MOUSEMOVE, MK_LBUTTON, at);
-    PostMessageA(window, WM_LBUTTONUP, 0, at);
 }
 
 bool AutoAccept::Capture(HWND window, int width, int height, std::vector<uint32_t>& pixels) {

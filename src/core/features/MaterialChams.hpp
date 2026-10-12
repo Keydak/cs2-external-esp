@@ -82,6 +82,7 @@ private:
     uintptr_t page = 0;             // Stub, its data, the table of scene objects
     uintptr_t entry = 0;            // The vtable entry of DrawArray
     uintptr_t original = 0;         // DrawArray of the game
+    uintptr_t glow_material = 0;    // The material the glow of the game draws models in, as written to the page
 
     uintptr_t material_system = 0;
     uintptr_t load_kv3 = 0;         // tier0 export

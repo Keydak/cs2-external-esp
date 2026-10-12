@@ -34,7 +34,7 @@ namespace {
 
     // Page of a call: the code, the origin of the script, the script
     constexpr size_t PAGE_SIZE = 0x4000;
-    constexpr uintptr_t PAGE_ORIGIN = 0x100;
+    constexpr uintptr_t PAGE_ORIGIN = 0x180;
     constexpr uintptr_t PAGE_SCRIPT = 0x200;
     // A name of our own. Line 0 & column 0 would take the compiled script cached for the origin (of the game for one
     // of its files, the first of ours after that): line 1 compiles it every time
@@ -391,19 +391,13 @@ void AgentPreview::Update() {
     if (!Asked(&want))
         return;
 
-    if (!this->engine) {
-        // PanoramaUIEngine001, its AccessUIEngine: mov rax, [rcx + engine]; ret
-        auto iface = p->FindInterface("panorama.dll", "PanoramaUIEngine001");
-        auto access = iface ? p->read<uintptr_t>(p->read<uintptr_t>(iface) + pano::accessUIEngine * 8) : 0;
-        uint8_t bytes[5]{};
-        if (!access || !p->read_raw(access, bytes, sizeof(bytes)) || bytes[0] != 0x48 || bytes[1] != 0x8B || bytes[2] != 0x41 || bytes[4] != 0xC3) {
+    bool broken = false;
+    if (!FindEngine(broken)) {
+        if (broken) {
             this->failures = MAX_FAILURES;
             SetStatus("the engine of Panorama was not found");
-            return;
         }
-        this->engine = p->read<uintptr_t>(iface + bytes[3]);
-        if (!this->engine)
-            return;     // Not made yet
+        return;     // Not made yet
     }
 
     // The enemies first, then the team
@@ -704,6 +698,72 @@ void AgentPreview::Shutdown() {
     i.RemoveFrameHook();
 }
 
+bool AgentPreview::FindEngine(bool& broken) {
+    broken = false;
+    if (this->engine)
+        return true;
+
+    // PanoramaUIEngine001, its AccessUIEngine: mov rax, [rcx + engine]; ret
+    auto p = Engine::GetProcess();
+    auto iface = p->FindInterface("panorama.dll", "PanoramaUIEngine001");
+    auto access = iface ? p->read<uintptr_t>(p->read<uintptr_t>(iface) + pano::accessUIEngine * 8) : 0;
+    uint8_t bytes[5]{};
+    if (!access || !p->read_raw(access, bytes, sizeof(bytes)) || bytes[0] != 0x48 || bytes[1] != 0x8B || bytes[2] != 0x41 || bytes[4] != 0xC3) {
+        broken = true;
+        return false;
+    }
+    this->engine = p->read<uintptr_t>(iface + bytes[3]);
+    return this->engine != 0;
+}
+
+bool AgentPreview::RunScript(const std::string& script) {
+    auto& i = GetInstance();
+    bool broken = false;
+    if (!IsAvailable() || !Engine::GetProcess() || i.stopping || !i.FindEngine(broken))
+        return false;
+
+    auto roots = i.Roots();
+    if (roots.empty())
+        return false;
+    return RunScript(roots.front(), script);
+}
+
+bool AgentPreview::RunScript(uintptr_t panel, const std::string& script) {
+    auto& i = GetInstance();
+    bool broken = false;
+    if (!panel || !IsAvailable() || !Engine::GetProcess() || i.stopping || !i.FindEngine(broken))
+        return false;
+    return i.Run(panel, "(function(){try{" + script + "}catch(e){$.Msg('[cs2ext] script error: '+e);}})();");
+}
+
+bool AgentPreview::Call(uintptr_t function, DWORD timeout_ms) {
+    auto& i = GetInstance();
+    bool broken = false;
+    if (!function || !IsAvailable() || !Engine::GetProcess() || i.stopping || !i.FindEngine(broken))
+        return false;
+
+    std::lock_guard lock(i.run_mutex);
+    if (!i.frame_page && !i.InstallFrameHook())
+        return false;
+    return i.CallInFrame(function, timeout_ms);
+}
+
+uintptr_t AgentPreview::FindPanel(const char* id) {
+    auto& i = GetInstance();
+    bool broken = false;
+    if (!IsAvailable() || !Engine::GetProcess() || !i.FindEngine(broken))
+        return 0;
+    return i.FindRoot(id);
+}
+
+bool AgentPreview::HasPanel(uintptr_t panel) {
+    auto& i = GetInstance();
+    bool broken = false;
+    if (!IsAvailable() || !Engine::GetProcess() || !i.FindEngine(broken))
+        return false;
+    return i.HasContext(panel);
+}
+
 std::vector<uintptr_t> AgentPreview::ContextPanels() {
     auto p = Engine::GetProcess();
     std::vector<uintptr_t> panels;
@@ -856,6 +916,7 @@ bool AgentPreview::InstallFrameHook() {
 }
 
 void AgentPreview::RemoveFrameHook() {
+    std::lock_guard lock(this->run_mutex);
     auto p = Engine::GetProcess();
     if (!p || !this->frame_page)
         return;
@@ -920,8 +981,7 @@ bool AgentPreview::Run(uintptr_t panel, const std::string& script) {
 }
 
 bool AgentPreview::Run(const std::vector<uintptr_t>& panels, const std::string& script) {
-    static std::mutex running;     // The thread & Shutdown share the page
-    std::lock_guard lock(running);
+    std::lock_guard lock(this->run_mutex);
 
     auto p = Engine::GetProcess();
     if (script.size() + 1 > PAGE_SIZE - PAGE_SCRIPT)
@@ -933,20 +993,43 @@ bool AgentPreview::Run(const std::vector<uintptr_t>& panels, const std::string& 
         return false;
 
     auto run_script = p->GetModule("panorama.dll").base + pano::fnRunScript;
+    auto contexts = this->engine + pano::contextMap;
 
-    // RunScript(engine, panel, script, origin, { line 1, column 0 }) for each panel, all in the same frame
+    // RunScript(engine, panel, script, origin, { line 1, column 0 }) for each panel, all in the same frame. Only a panel
+    // still in the contexts of the engine, looked for right then: one removed since is freed, RunScript calls into it
     std::vector<uint8_t> code;
     auto put = [&](std::initializer_list<uint8_t> list) { code.insert(code.end(), list); };
     auto put64 = [&](uint64_t value) { for (int k = 0; k < 8; k++) code.push_back(static_cast<uint8_t>(value >> (k * 8))); };
+    auto land = [&](size_t jump) { code[jump - 1] = static_cast<uint8_t>(code.size() - jump); };   // A jump (rel8) lands here
     put({ 0x48, 0x83, 0xEC, 0x38 });                    // sub rsp, 0x38
     for (auto panel : panels) {
-        put({ 0x48, 0xB9 }); put64(this->engine);       // mov rcx, engine
+        put({ 0x48, 0xB8 }); put64(contexts);           // mov rax, contexts
+        put({ 0x44, 0x8B, 0x50, 0x0C });                // mov r10d, [rax + 0xC]
+        put({ 0x41, 0x81, 0xE2, 0xFF, 0xFF, 0xFF, 0x7F }); // and r10d, 0x7FFFFFFF: nodes
+        put({ 0x4C, 0x8B, 0x58, 0x10 });                // mov r11, [rax + 0x10]
         put({ 0x48, 0xBA }); put64(panel);              // mov rdx, panel
+        put({ 0x31, 0xC9 });                            // xor ecx, ecx
+        put({ 0x4D, 0x85, 0xDB });                      // test r11, r11
+        put({ 0x74, 0x00 }); size_t empty = code.size();    // jz skip
+        size_t loop = code.size();
+        put({ 0x44, 0x39, 0xD1 });                      // loop: cmp ecx, r10d
+        put({ 0x73, 0x00 }); size_t gone = code.size(); // jae skip
+        put({ 0x49, 0x39, 0x53, 0x10 });                // cmp [r11 + 0x10], rdx
+        put({ 0x75, 0x05 });                            // jne next
+        put({ 0x41, 0x39, 0x0B });                      // cmp [r11], ecx: a free node links to itself
+        put({ 0x75, 0x00 }); size_t there = code.size(); // jne run
+        put({ 0xFF, 0xC1 });                            // next: inc ecx
+        put({ 0x49, 0x83, 0xC3, 0x20 });                // add r11, 0x20
+        put({ 0xEB, static_cast<uint8_t>(loop - code.size() - 2) });   // jmp loop
+        land(there);                                    // run:
+        put({ 0x48, 0xB9 }); put64(this->engine);       // mov rcx, engine
         put({ 0x49, 0xB8 }); put64(this->page + PAGE_SCRIPT);   // mov r8, script
         put({ 0x49, 0xB9 }); put64(this->page + PAGE_ORIGIN);   // mov r9, origin
         put({ 0x48, 0xC7, 0x44, 0x24, 0x20, 1, 0, 0, 0 }); // mov qword [rsp + 0x20], 1
         put({ 0x48, 0xB8 }); put64(run_script);         // mov rax, RunScript
         put({ 0xFF, 0xD0 });                            // call rax
+        land(empty);                                    // skip:
+        land(gone);
     }
     put({ 0x48, 0x83, 0xC4, 0x38 });                    // add rsp, 0x38
     put({ 0xC3 });                                      // ret

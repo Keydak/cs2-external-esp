@@ -6,6 +6,7 @@
 #include "core/engine/types/Weapons.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <numbers>
 
 // Mirrors the grenade physics of the game (CBaseCSGrenadeProjectile), see the constants below
@@ -20,6 +21,11 @@ namespace {
     constexpr float ELASTICITY = 0.45f;
     constexpr float MIN_BOUNCE_SPEED = 20.f;
     constexpr float FLOOR_NORMAL_Z = 0.7f;
+    constexpr float SLOPE_NORMAL_Z = 0.1f;      // Steeper than a floor: too slow to bounce off it, it stops like on one
+    // Off a floor this fast (squared, after the elasticity) & mostly straight up from it, the game takes some of the
+    // speed away: times 1.5 minus how straight up (1 straight up, 0.5 at 60 degrees from it)
+    constexpr float DAMP_SPEED_SQR = 96000.f;
+    constexpr float DAMP_ALONG = 0.5f;
     constexpr float STOP_EPSILON = 0.1f;
     constexpr float SURFACE_OFFSET = 0.1f; // Keeps the next trace from starting inside the surface
     // Speed into the surface a bounce is marked from: resting & rolling touch the floor with a few units of a tick
@@ -213,19 +219,42 @@ bool GrenadePrediction::Simulate(GrenadeType type, Vec3_t position, Vec3_t veloc
         path.on_ground = move.hit && move.info.normal.z > FLOOR_NORMAL_Z;
 
         if (move.hit) {
+            const auto normal = move.info.normal;
+
             // Resting on the floor also "hits" it every tick, only real bounces are marked: by the speed into it
-            if (-Dot(velocity, move.info.normal) > MARK_BOUNCE_SPEED)
+            if (-Dot(velocity, normal) > MARK_BOUNCE_SPEED)
                 path.bounces.push_back(move.end);
 
-            auto bounced = ClipVelocity(velocity, move.info.normal, 2.f) * ELASTICITY;
-            if (bounced.length_sqr() < MIN_BOUNCE_SPEED * MIN_BOUNCE_SPEED)
-                bounced = Vec3_t(0.f, 0.f, 0.f);
+            auto bounced = ClipVelocity(velocity, normal, 2.f) * ELASTICITY;
+            float speed_sqr = bounced.length_sqr();
+            float rest = (1.f - move.info.fraction) * TICK_INTERVAL;
+            bool slow = speed_sqr < MIN_BOUNCE_SPEED * MIN_BOUNCE_SPEED;
 
-            velocity = bounced;
+            if (normal.z > FLOOR_NORMAL_Z || (normal.z > SLOPE_NORMAL_Z && slow)) {
+                // Fast & steep off a floor: damped
+                if (speed_sqr > DAMP_SPEED_SQR) {
+                    float along = Dot(bounced, normal) / std::sqrt(speed_sqr);
+                    if (along > DAMP_ALONG)
+                        bounced = bounced * (1.f - along + DAMP_ALONG);
+                }
+                if (slow)
+                    bounced = Vec3_t(0.f, 0.f, 0.f);
 
-            // On floors the rest of the tick is spent sliding along it
-            if (move.info.normal.z > FLOOR_NORMAL_Z)
-                move = PushEntity(move.end, bounced * ((1.f - move.info.fraction) * TICK_INTERVAL));
+                velocity = bounced;
+
+                // The rest of the tick is spent sliding along it
+                move = PushEntity(move.end, bounced * rest);
+            }
+            else {
+                // Off a wall, slow or not: the rest of the tick on the new way. Hit again in its first half, what is
+                // left of that move is turned off the second surface too (the speed stays)
+                velocity = bounced;
+
+                auto again = PushEntity(move.end, bounced * rest);
+                if (again.hit && again.info.fraction < 0.5f)
+                    again = PushEntity(again.end, ClipVelocity(bounced * rest * (1.f - again.info.fraction), again.info.normal, 2.f));
+                move.end = again.end;
+            }
         }
 
         position = move.end;

@@ -48,6 +48,8 @@ private:
 
     // A short conditional jump we turn into jmp: true when it is opcode, put back first when an earlier run left it jmp
     bool RestoreJump(uintptr_t address, uint8_t opcode);
+    // A byte of code we change: true when it is original, put back first when an earlier run left it ours
+    bool RestorePatch(uintptr_t address, uint8_t original, uint8_t ours);
     bool ResolveSkins(ProcessModule client);
     bool ResolveMenuMusic(ProcessModule client);
     bool ResolveButtons(ProcessModule client);

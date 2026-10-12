@@ -101,26 +101,36 @@ bool Bomb::prev_is_planted = false;
 void Bomb::SetGameTime(float now) {
 	using namespace std::chrono;
 
-	if (!this->is_planted || now <= 0.f || this->c4_blow <= 0.f) {
+	if (!this->is_planted || this->c4_blow <= 0.f) {
 		this->timed = false;
+		return;
+	}
+
+	// No game time this time: the times we have go on, the whole seconds since the plant would make it jump
+	if (now <= 0.f) {
+		Tick();
 		return;
 	}
 
 	auto clock = steady_clock::now();
 	auto blow = clock + duration_cast<steady_clock::duration>(duration<float>(this->c4_blow - now));
 
-	// Kept while it agrees, the game time steps by ticks & would make the timer shake
-	constexpr auto DRIFT = milliseconds(150);
-	auto apart = [](steady_clock::time_point a, steady_clock::time_point b) { return a > b ? a - b : b - a; };
+	// The game time is the newest update of a player, so each reading is late by how old that update is & never
+	// early: the earliest one is the closest. Taking any later one made the seconds go back up now & then. One far
+	// later starts over (the game was paused)
+	constexpr auto RESYNC = seconds(1);
+	auto keep = [&](steady_clock::time_point reading, steady_clock::time_point current) {
+		return reading >= current && reading - current <= RESYNC;
+	};
 
-	if (!this->timed || apart(blow, this->blow_at) > DRIFT)
+	if (!this->timed || !keep(blow, this->blow_at))
 		this->blow_at = blow;
 
 	if (this->defusing) {
 		auto defuse = clock + duration_cast<steady_clock::duration>(duration<float>(this->defuse_countdown - now));
 
-		// A new defuse, or one that drifted
-		if (!this->timed || this->defuse_countdown != this->last_countdown || apart(defuse, this->defuse_at) > DRIFT)
+		// A new defuse, or an earlier reading
+		if (!this->timed || this->defuse_countdown != this->last_countdown || !keep(defuse, this->defuse_at))
 			this->defuse_at = defuse;
 	}
 

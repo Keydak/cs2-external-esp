@@ -196,6 +196,7 @@ void Config::ApplySettings(json data) {
 		cfg::esp::grenades::timers = esp["grenades"].value("timers", true);
 		cfg::esp::grenades::prediction = esp["grenades"].value("prediction", true);
 		cfg::esp::grenades::landing = esp["grenades"].value("landing", true);
+		cfg::esp::grenades::landing_line = esp["grenades"].value("landing_line", 0);
 		cfg::esp::grenades::smoke_area = esp["grenades"].value("smoke_area", true);
 		cfg::esp::grenades::fire_area = esp["grenades"].value("fire_area", true);
 		cfg::esp::grenades::glow = esp["grenades"].value("glow", true);
@@ -315,6 +316,7 @@ void Config::ApplySettings(json data) {
 		cfg::misc::jump_bug_mode = std::clamp(data["misc"].value("jump_bug_mode", 1), 0, 2);
 		cfg::misc::jump_bug_key = data["misc"].value("jump_bug_key", VK_XBUTTON1);
 		cfg::misc::auto_accept = data["misc"].value("auto_accept", false);
+		cfg::misc::cancel_queue = data["misc"].value("cancel_queue", true);
 		cfg::misc::clantag = data["misc"].value("clantag", false);
 		cfg::misc::clantag_mode = std::clamp(data["misc"].value("clantag_mode", 0), 0, 11);
 		cfg::misc::clantag_speed = std::clamp(data["misc"].value("clantag_speed", 350.f), 100.f, 1500.f);
@@ -338,6 +340,8 @@ void Config::ApplySettings(json data) {
 		vis::no_flash = from.value("no_flash", false);
 		vis::flash_alpha = std::clamp(from.value("flash_alpha", 0.f), 0.f, 255.f);
 		vis::no_smoke = from.value("no_smoke", false);
+		vis::no_scope_overlay = from.value("no_scope_overlay", false);
+		vis::no_scope_blur = from.value("no_scope_blur", false);
 
 		if (from.contains("chams")) {
 			const auto& chams = from["chams"];
@@ -493,6 +497,45 @@ void Config::ApplySkins(json skins) {
 	}
 }
 
+void Config::ApplySavedSkins(const json& list) {
+	std::lock_guard<std::mutex> lock(cfg::skins::mutex);
+	cfg::skins::saved.clear();
+
+	if (!list.is_array())
+		return;
+
+	for (const auto& entry : list) {
+		if (!entry.is_object())
+			continue;
+
+		cfg::skins::saved_t saved;
+		saved.name = entry.value("name", std::string());
+		saved.definition_index = entry.value("definition_index", 0);
+		saved.item.paint_kit = entry.value("paint_kit", 0);
+		saved.item.wear = entry.value("wear", 0.0001f);
+		saved.item.seed = entry.value("seed", 0);
+
+		if (saved.definition_index > 0 && saved.item.paint_kit > 0)
+			cfg::skins::saved.push_back(saved);
+	}
+}
+
+json Config::SavedSkinsJson() {
+	std::lock_guard<std::mutex> lock(cfg::skins::mutex);
+
+	json list = json::array();
+	for (const auto& saved : cfg::skins::saved)
+		list.push_back({
+			{ "name", saved.name },
+			{ "definition_index", saved.definition_index },
+			{ "paint_kit", saved.item.paint_kit },
+			{ "wear", saved.item.wear },
+			{ "seed", saved.item.seed },
+		});
+
+	return list;
+}
+
 json Config::SettingsJson() {
 	json data;
 
@@ -522,6 +565,7 @@ json Config::SettingsJson() {
 	data["esp"]["grenades"]["timers"] = cfg::esp::grenades::timers;
 	data["esp"]["grenades"]["prediction"] = cfg::esp::grenades::prediction;
 	data["esp"]["grenades"]["landing"] = cfg::esp::grenades::landing;
+	data["esp"]["grenades"]["landing_line"] = cfg::esp::grenades::landing_line;
 	data["esp"]["grenades"]["smoke_area"] = cfg::esp::grenades::smoke_area;
 	data["esp"]["grenades"]["fire_area"] = cfg::esp::grenades::fire_area;
 	data["esp"]["grenades"]["glow"] = cfg::esp::grenades::glow;
@@ -616,6 +660,7 @@ json Config::SettingsJson() {
 	data["misc"]["jump_bug_mode"] = cfg::misc::jump_bug_mode;
 	data["misc"]["jump_bug_key"] = cfg::misc::jump_bug_key;
 	data["misc"]["auto_accept"] = cfg::misc::auto_accept;
+	data["misc"]["cancel_queue"] = cfg::misc::cancel_queue;
 	data["misc"]["clantag"] = cfg::misc::clantag;
 	data["misc"]["clantag_mode"] = cfg::misc::clantag_mode;
 	data["misc"]["clantag_speed"] = cfg::misc::clantag_speed;
@@ -638,6 +683,8 @@ json Config::SettingsJson() {
 		to["no_flash"] = vis::no_flash;
 		to["flash_alpha"] = vis::flash_alpha;
 		to["no_smoke"] = vis::no_smoke;
+		to["no_scope_overlay"] = vis::no_scope_overlay;
+		to["no_scope_blur"] = vis::no_scope_blur;
 
 		auto& chams = to["chams"];
 		chams["enemies"] = vis::chams::enemies;
@@ -793,6 +840,9 @@ bool Config::ReadImpl() {
 
 		if (data.contains("skins"))
 			ApplySkins(data["skins"]);
+
+		if (data.contains("saved_skins"))
+			ApplySavedSkins(data["saved_skins"]);
 	}
 	catch (const std::exception& e) {
 		LOGF(FATAL, "Failed to parse configuration");
@@ -809,6 +859,7 @@ bool Config::WriteImpl() {
 
 	json data = SettingsJson();
 	data["skins"] = SkinsJson();
+	data["saved_skins"] = SavedSkinsJson();
 
 	f << std::setw(4) << data << std::endl;
 	f.close();
