@@ -57,6 +57,10 @@ int main()
     // The loader: the version against GitHub, then on Start the game & the items. Closed, or the game could not be
     // used (it says why): nothing was started, straight out
     if (!Loader::Run()) {
+        // CS2 was updated: a card over the game says so, the loader might be behind it
+        if (Engine::IsOutdated() && Renderer::Init())
+            Renderer::Notice();
+
         LOGF(INFO, "The loader was closed");
         LogHelper::Destroy();
         ExitProcess(0);
@@ -109,17 +113,18 @@ int main()
     KillEffect::Shutdown();
     GameThread::Shutdown();
 
-    // Everything is put back, now say why it stopped. Debug tells what was wrong, release only that it needs an update
+    // Everything is put back, now say why it stopped: a card over the game, kept until it is closed. Debug also tells
+    // what was wrong in its console
     if (Engine::IsOutdated()) {
 #ifdef _DEBUG
         LogHelper::Show();
         LOGF(FATAL, "Stopped, outdated for the running CS2: {}. Everything changed in the game was put back, "
             "run update-project/check.bat to see the rest", Engine::GetOutdated());
-#else
-        // Release has no console
-        MessageBoxA(nullptr, "CS2 was updated, this program has to be updated too before it can be used again.",
-            "Cs2 External", MB_ICONWARNING);
 #endif
+        // Without the overlay window, a box (release has no console)
+        if (!Renderer::Notice())
+            MessageBoxA(nullptr, "CS2 was updated, this program has to be updated too before it can be used again.",
+                "Cs2 External", MB_ICONWARNING);
     }
 
 exit:

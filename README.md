@@ -58,7 +58,7 @@ External ESP for Counter-Strike 2, a fork of [IMXNOOBX/cs2-external-esp](https:/
 
 **Keeping up with CS2 updates**
 * **Offsets from the game itself**: every field the program uses is read from the game files at startup, [cs2-dumper](https://github.com/a2x/cs2-dumper) is only a fallback.
-* **Stops instead of breaking**: when something can't be found after an update, the program puts everything back and stops. A debug build says what was not found, a release build says it needs an update.
+* **Stops instead of breaking**: when something can't be found after an update, the program puts everything back and stops. A card over the game says CS2 was updated and the program has to be too, so it is seen while playing without a look at the desktop; it stays until Insert or Right Shift. A debug build also says what was not found.
 * **Update check**: tells when a newer version of this fork is out.
 
 > [!WARNING]

@@ -624,7 +624,7 @@ bool Loader::Run() {
     LoadFolder();
     CheckVersion();
 
-    std::chrono::steady_clock::time_point finished_at{};
+    std::chrono::steady_clock::time_point finished_at{}, outdated_at{};
     while (!closed) {
         MSG msg;
         while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -633,6 +633,15 @@ bool Loader::Run() {
         }
         if (closed)
             break;
+
+        // CS2 was updated: said here for a moment, then over the game (main), where it is seen while playing
+        if (game == Step::Failed && Engine::IsOutdated()) {
+            auto now = std::chrono::steady_clock::now();
+            if (outdated_at == std::chrono::steady_clock::time_point{})
+                outdated_at = now;
+            else if (now - outdated_at > 2s)
+                break;
+        }
 
         // Done: shown for a moment, then the overlay takes over
         if (finished) {

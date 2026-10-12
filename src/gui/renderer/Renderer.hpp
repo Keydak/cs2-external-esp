@@ -22,6 +22,11 @@ public:
     static void Destroy();
     static void Thread();
 
+    // Outdated for the running CS2 (Engine::IsOutdated): a card over the game says so until Insert or Right Shift, or
+    // until the game closes, then the window goes. Thread() keeps its window for it when it stopped for that, the
+    // features put back what they changed in the meantime. False without a window to show it in
+    static bool Notice();
+
     static bool IsOpen();
     // The menu opened or closed like its key does, from the render thread
     static void SetOpen(bool open);
@@ -41,6 +46,9 @@ private:
     bool InitImpl();
     void ThreadImpl();
     void DestroyImpl();
+    bool NoticeImpl();
+    void RenderNotice();
+    void Teardown();
 
     void Render();
     bool HandleState();
@@ -52,5 +60,6 @@ private:
 
     bool isFocused = false;
     bool gameClosed = false;
+    bool windowUp = false;      // Window, device & ImGui made & not torn down yet
     FrameTimes times;
 };

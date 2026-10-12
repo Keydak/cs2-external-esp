@@ -19,6 +19,10 @@ void Renderer::Thread() {
 
 void Renderer::Destroy() {
     return GetInstance().DestroyImpl();
+}
+
+bool Renderer::Notice() {
+    return GetInstance().NoticeImpl();
 }   
 
 bool Renderer::IsOpen() {
@@ -125,6 +129,7 @@ bool Renderer::InitImpl() {
         LOGF(FATAL, "Failed to create ImGui");
         return false;
     }
+    windowUp = true;
 
     Menu::Init();
     Esp::Init();
@@ -181,10 +186,76 @@ void Renderer::ThreadImpl() {
         watch.Lap(times.window);
     }
 
+    // Outdated: the window stays for the card that says so (Notice), shown at once so nothing of the ESP stays on the
+    // screen while the features put things back
+    if (Engine::IsOutdated() && !this->gameClosed && Window::shouldRun) {
+        RenderNotice();
+        return;
+    }
+
     // Once exited, destroy everything
+    Teardown();
+}
+
+void Renderer::Teardown() {
+    if (!windowUp)
+        return;
+    windowUp = false;
+
     Window::DestroyImGui();
     Window::DestroyDevice();
     Window::DespawnWindow();
+}
+
+void Renderer::RenderNotice() {
+    Window::StartRender();
+    Overlays::RenderOutdated();
+    Window::EndRender();
+}
+
+bool Renderer::NoticeImpl() {
+    if (!windowUp)
+        return false;
+
+    LOGF(INFO, "Outdated for the running CS2, telling it over the game");
+
+    // Clicks go to the game again
+    if (this->isOpen)
+        SetOpenImpl(false);
+
+    auto next_check = std::chrono::steady_clock::now();
+    FrameLimiter limiter;
+
+    // A key held from before does not close it at once
+    bool was_holding = true;
+
+    while (Window::shouldRun) {
+        limiter.Wait();
+
+        // Closing the game closes it too
+        if (auto now = std::chrono::steady_clock::now(); now >= next_check) {
+            next_check = now + std::chrono::milliseconds(500);
+
+            DWORD code = 0;
+            auto p = Engine::GetProcess();
+            if (!p || !p->handle_ || (GetExitCodeProcess(p->handle_, &code) && code != STILL_ACTIVE))
+                break;
+        }
+
+        bool holding = (GetAsyncKeyState(VK_INSERT) & 0x8000) || (GetAsyncKeyState(VK_RSHIFT) & 0x8000);
+        if (holding && !was_holding)
+            break;
+        was_holding = holding;
+
+        RenderNotice();
+
+        HandleWindowOrder();
+        if (this->gameClosed)
+            break;
+    }
+
+    Teardown();
+    return true;
 }
 
 void Renderer::Render() {

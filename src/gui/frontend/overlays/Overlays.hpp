@@ -13,6 +13,9 @@ public:
     static bool Init();
     static void Render();
 
+    // The card over the game when CS2 was updated & this program has to be too, alone on the screen
+    static void RenderOutdated();
+
     // Site & time left of the bomb, measured only when d is null. Also drawn by the menu preview
     static ImVec2 DrawBombCard(ImDrawList* d, ImVec2 pos, const Bomb& bomb);
 

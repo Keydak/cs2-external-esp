@@ -1257,6 +1257,78 @@ void Overlays::RenderEspStatus() {
     d->AddText(this->font, this->font->LegacySize, pos, IM_COL32(255, 255, 255, 255), message, nullptr, max_width);
 }
 
+// CS2 was updated under us: a card at the top of the game that stays until it is closed, seen while playing without a
+// look at the desktop. It fades in, its stripe & sign pulse
+void Overlays::RenderOutdated() {
+    auto& i = GetInstance();
+    auto& io = ImGui::GetIO();
+    auto d = ImGui::GetForegroundDrawList();
+    auto font = i.font_alt;
+
+    static float appear = 0.f;
+    appear = std::min(1.f, appear + io.DeltaTime * 3.f);
+    float alpha = EaseOut(appear);
+    float pulse = 0.65f + 0.35f * std::sin(static_cast<float>(ImGui::GetTime()) * 3.f);
+
+    constexpr float PAD = 16.f, ICON = 30.f, GAP = 12.f, WRAP = 440.f;
+    constexpr float TITLE = 20.f, BODY = 15.f, FOOT = 13.f;
+    constexpr auto title = "CS2 was updated";
+    constexpr auto body = "Cs2 External has to be updated before it can be used again. It no longer touches the game, "
+        "everything it changed was put back.";
+    constexpr auto foot = "Insert or Right Shift closes it";
+
+    // What was not found, for development
+    std::string reason;
+#ifdef _DEBUG
+    reason = Engine::GetOutdated();
+#endif
+
+    auto title_size = font->CalcTextSizeA(TITLE, FLT_MAX, 0.f, title);
+    auto body_size = font->CalcTextSizeA(BODY, FLT_MAX, WRAP, body);
+    auto foot_size = font->CalcTextSizeA(FOOT, FLT_MAX, 0.f, foot);
+    auto reason_size = reason.empty() ? ImVec2() : font->CalcTextSizeA(FOOT, FLT_MAX, WRAP, reason.c_str());
+
+    float text_width = std::max({ title_size.x, body_size.x, foot_size.x, reason_size.x });
+    float height = PAD + title_size.y + 6.f + body_size.y + (reason.empty() ? 0.f : 6.f + reason_size.y) + 10.f + foot_size.y + PAD;
+    auto size = ImVec2(PAD + ICON + GAP + text_width + PAD, height);
+    auto min = ImVec2(std::floor((io.DisplaySize.x - size.x) * 0.5f), std::floor(48.f - (1.f - alpha) * 12.f));
+    auto max = min + size;
+
+    auto color = [&](int r, int g, int b, float a) {
+        return IM_COL32(r, g, b, static_cast<int>(255.f * std::clamp(a * alpha, 0.f, 1.f)));
+    };
+
+    d->AddRectFilled(min, max, color(13, 13, 15, 0.94f), 8.f);
+    d->AddRectFilled(min, ImVec2(min.x + 4.f, max.y), color(255, 170, 40, pulse), 8.f, ImDrawFlags_RoundCornersLeft);
+    d->AddRect(min, max, color(255, 170, 40, 0.35f), 8.f);
+
+    // Warning sign next to the title
+    auto sign = ImVec2(min.x + PAD + ICON * 0.5f, min.y + PAD + title_size.y * 0.5f + 2.f);
+    d->AddTriangleFilled(sign + ImVec2(0.f, -13.f), sign + ImVec2(-14.f, 11.f), sign + ImVec2(14.f, 11.f), color(255, 170, 40, pulse));
+    auto mark_size = font->CalcTextSizeA(17.f, FLT_MAX, 0.f, "!");
+    d->AddText(font, 17.f, sign - mark_size * 0.5f + ImVec2(0.f, 3.f), color(13, 13, 15, 1.f), "!");
+
+    float x = min.x + PAD + ICON + GAP;
+    float y = min.y + PAD;
+
+    // A bit bolder, drawn twice
+    d->AddText(font, TITLE, ImVec2(x, y), color(255, 255, 255, 1.f), title);
+    d->AddText(font, TITLE, ImVec2(x + 0.6f, y), color(255, 255, 255, 1.f), title);
+    y += title_size.y + 6.f;
+
+    d->AddText(font, BODY, ImVec2(x, y), color(220, 220, 225, 1.f), body, nullptr, WRAP);
+    y += body_size.y;
+
+    if (!reason.empty()) {
+        y += 6.f;
+        d->AddText(font, FOOT, ImVec2(x, y), color(255, 170, 40, 0.9f), reason.c_str(), nullptr, WRAP);
+        y += reason_size.y;
+    }
+
+    y += 10.f;
+    d->AddText(font, FOOT, ImVec2(x, y), color(150, 150, 158, 1.f), foot);
+}
+
 namespace {
     // What a vote is about, by the index of its issue on the server (the order Counter-Strike registers them in)
     const char* VoteIssueName(int issue) {

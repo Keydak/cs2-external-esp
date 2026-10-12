@@ -236,6 +236,10 @@ bool Engine::AttachImpl() {
         LOGF(FATAL, "CS2 was updated, this program has to be updated too before it can be used again");
 #endif
         SetProgress("CS2 was updated, this program has to be updated too");
+
+        // Said over the game too
+        const auto& missing = Dumper::Unverified();
+        ReportOutdated(missing.empty() ? std::string("the offsets could not be read") : std::format("not found: {}", missing.front()));
         return false;
     }
 
