@@ -40,6 +40,17 @@ public:
     // Pawns not drawn at all (the bodies of KillEffect). Only the drawing is left out, nothing of the game changes:
     // switching their mesh off crashed it
     static void SetHiddenBodies(const std::vector<uintptr_t>& pawns);
+    // The living player whose eyes we see through (Freecam watching alive): their body & weapons not drawn. 0 for none
+    static void SetHiddenPlayer(uintptr_t pawn);
+    // Our player while a Fortnite dance of Emotes plays: its body, what it holds or wears & the dance model are not
+    // drawn, the copy of the agent that dances on it (shown) is: none of its scene objects is ever left out. 0 for none
+    static void SetDancer(uintptr_t pawn, uintptr_t dance_model, uintptr_t shown = 0);
+    // The scene objects of an entity & the class each has in the table ("-" when not in it), for the logs
+    static std::string Describe(uintptr_t entity);
+    // Hooked, with the scene object of a mesh found: what is hidden is left out from the next frame on
+    static bool CanHide();
+    // The table written now instead of at the next look, for a change that has to show in the next frame
+    static void Refresh();
 
     // The vtable entry of the game back
     static void Shutdown();
@@ -101,6 +112,11 @@ private:
 
     std::mutex bodies_mutex;
     std::vector<uintptr_t> hidden_bodies;
+    uintptr_t hidden_player = 0;
+    uintptr_t dancer = 0, dance_model = 0, dance_shown = 0;
+    std::atomic<int> shown_kept = 0;    // Scene objects of the copy others named, in the last table
+    std::atomic<bool> can_hide = false;
+    std::mutex targets_mutex;   // The table is written by our thread & by Refresh
 
     void SetStatus(const std::string& text);
     std::mutex status_mutex;

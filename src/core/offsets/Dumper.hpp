@@ -45,6 +45,8 @@ private:
     DWORD64 Scan(const std::string sig, ProcessModule module);
     bool ResolveThirdPerson(ProcessModule client);
     bool ResolveCamera(ProcessModule client);
+    // The vtable of a class by its RTTI name (".?AVName@@"), 0 when not found
+    uintptr_t FindVtable(ProcessModule module, std::string_view rtti);
 
     // A short conditional jump we turn into jmp: true when it is opcode, put back first when an earlier run left it jmp
     bool RestoreJump(uintptr_t address, uint8_t opcode);
@@ -55,6 +57,8 @@ private:
     bool ResolveButtons(ProcessModule client);
     // Field offsets from the class infos in client.dll, over the cs2-dumper ones
     bool ResolveSchema(ProcessModule client);
+    // The code of the emotes in client.dll & engine2.dll, & the clip fields in the schema of animationsystem.dll
+    bool ResolveEmotes(ProcessModule client, ProcessModule engine);
     void GetNextArray(std::vector<short>& next, const std::vector<WORD>& signature);
     std::vector<DWORD64> ScanMemory(const std::string& sig, DWORD64 start, DWORD64 end, int number = 1);
     void ScanBlock(byte* buffer, const std::vector<short>& next, const std::vector<WORD>& signature, DWORD64 start, DWORD size, std::vector<DWORD64>& result);

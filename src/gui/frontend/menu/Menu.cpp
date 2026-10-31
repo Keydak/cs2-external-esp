@@ -10,6 +10,7 @@
 #include "core/features/MaterialChams.hpp"
 #include "core/features/AgentPreview.hpp"
 #include "core/features/KillEffect.hpp"
+#include "core/features/Emotes.hpp"
 #include "core/features/Skins.hpp"
 #include "core/features/CustomModels.hpp"
 #include "core/features/ModBrowser.hpp"
@@ -744,8 +745,10 @@ namespace {
 		return std::format("Key {}", key);
 	}
 
-	// Click, then press the key to bind. Escape cancels
-	bool KeybindRow(const char* label, int* key, const char* tooltip = nullptr) {
+	int binding_frame = -10;    // Last frame a keybind row waited for its key
+
+	// Click, then press the key to bind. Escape cancels. none: the name shown while it is 0
+	bool KeybindRow(const char* label, int* key, const char* tooltip = nullptr, const char* none = nullptr) {
 		ImGui::PushID(label);
 
 		auto row = BeginRow(label, tooltip);
@@ -754,7 +757,7 @@ namespace {
 		bool waiting = storage->GetBool(waiting_id);
 		bool changed = false;
 
-		auto text = waiting ? std::string("Press a key") : KeyName(*key);
+		auto text = waiting ? std::string("Press a key") : *key == 0 && none ? std::string(none) : KeyName(*key);
 		auto text_size = ImGui::CalcTextSize(text.c_str());
 		auto box_size = ImVec2(std::max(S(70.f), text_size.x + S(20.f)), S(24.f));
 		auto box_pos = RowSlot(row, box_size);
@@ -768,6 +771,8 @@ namespace {
 		float hover = Animate(ImGui::GetItemID(), ImGui::IsItemHovered() || waiting ? 1.f : 0.f, 16.f);
 
 		if (waiting) {
+			binding_frame = ImGui::GetFrameCount();
+
 			// Skipping the left mouse button, it is the click that started the binding.
 			// Generic modifiers are skipped too, their left & right versions follow
 			for (int vk = VK_RBUTTON; vk <= 0xFE; vk++) {
@@ -3052,6 +3057,10 @@ bool Menu::Init() {
 
 std::string Menu::GetKeyName(int key) {
 	return KeyName(key);
+}
+
+bool Menu::IsBindingKey() {
+	return ImGui::GetCurrentContext() && ImGui::GetFrameCount() - binding_frame <= 1;
 }
 
 void Menu::Render() {
@@ -6094,7 +6103,7 @@ static void ProfilePanel() {
 		InfoLine("SteamID64", std::to_string(player->steam_id), col::text_dim);
 	}
 
-	// Their profile in the browser (Steam, csst.at), their ID, their name for ours. Two rows of two
+	// Their profile in the browser (Steam, csst.at), their ID, their name for ours: two rows of two. Watching them under it
 	ImGui::Dummy(ImVec2(0, S(10.f)));
 	{
 		auto pos = ImGui::GetCursorScreenPos();
@@ -6123,8 +6132,39 @@ static void ProfilePanel() {
 		}
 		ImGui::EndDisabled();
 
+		// Through their eyes while we live too: the menu closes to watch. Their profile or ours ends it (Unspectate),
+		// another one switches to that player at once
+		{
+			auto snapshot = Cache::Current();
+			uintptr_t pawn = 0;
+			bool they_live = false;
+			for (const auto& match_player : snapshot->players) {
+				if (match_player.index == player->index) {
+					pawn = match_player.GetPawnAddress();
+					they_live = match_player.alive;
+					break;
+				}
+			}
+
+			bool ends = Freecam::IsSpectating() && (player->local || (pawn && Freecam::GetTarget() == pawn));
+			const char* why = !Freecam::IsAvailable() ? "Only available when the game is launched with -insecure"
+				: player->local ? "That is you"
+				: !snapshot->local.alive ? "Only while you are alive, dead the spectator camera does it"
+				: !they_live ? "Only a living player" : nullptr;
+
+			ImGui::BeginDisabled(why != nullptr && !ends);
+			if (PillButton(ends ? "Unspectate##spectate" : "Spectate##spectate", pos + below + below, ImVec2(width, button.y), !ends,
+				ends ? nullptr : why)) {
+				if (ends)
+					Freecam::StopSpectate();
+				else if (Freecam::Spectate(pawn))
+					Renderer::SetOpen(false);
+			}
+			ImGui::EndDisabled();
+		}
+
 		ImGui::SetCursorScreenPos(pos);
-		ImGui::Dummy(ImVec2(width, button.y * 2.f + gap));
+		ImGui::Dummy(ImVec2(width, button.y * 3.f + gap * 2.f));
 	}
 
 	EndPanel();
@@ -6255,7 +6295,7 @@ void Menu::RenderMiscTab() {
 
 			ImGui::BeginDisabled(!Freecam::IsDeadAvailable());
 			ToggleMore("Casual Spectate", &cfg::view::dead_spectate, Freecam::IsDeadAvailable()
-				? "Left & right click switch the player, space goes first person, third person, free cam"
+				? "Left & right click switch the player, space goes first person, third person, free cam. The mouse turns third person around them"
 				: Freecam::IsAvailable()
 					? "The spectator camera was not found in this game version"
 					: camera_missing, [&] {
@@ -6297,6 +6337,49 @@ void Menu::RenderMiscTab() {
 					"Weapon: the weapon in your hands in first person");
 				namespace chams = cfg::visuals::material_chams;
 				MaterialChamsRows(part == 0 ? chams::local : chams::weapon, false, "Chams");
+			}
+			EndPanel();
+
+			// Animations of the game on our player, picked on a wheel
+			BeginPanel("EMOTES");
+			{
+				bool available = Emotes::IsAvailable();
+				ImGui::BeginDisabled(!available);
+				ToggleMore("Emote Wheel", &cfg::view::emotes, available
+					? "Hold the key, move the mouse toward an emote & let go. Tapped the wheel stays open: click to play, scroll for more.\n"
+					  "While it plays the mouse turns the camera around you. Moving, shooting or the key again stops it. Only you see it.\n"
+					  "The Fortnite dances & their music come from the Emote Pack in cache\\emotes"
+					: Emotes::WhyUnavailable(), [&] {
+					KeybindRow("Key", &cfg::view::emote_key);
+					Toggle("Dance Music", &cfg::view::emote_music);
+					if (cfg::view::emote_music)
+						SliderInt("Volume", &cfg::view::emote_volume, 0, 100, "%d%%");
+				});
+
+				// The Fortnite dances while files of their pack are missing: from our assets on GitHub
+				bool downloading = Emotes::IsDownloadingPack();
+				if (available && cfg::view::emotes && (downloading || Emotes::GetPackMissing() > 0)) {
+					auto row = BeginRow("Emote Pack", "The Fortnite dances, their icons & music from GitHub into cache\\emotes");
+					const ImVec2 button(S(96.f), S(24.f));
+					auto at = RowSlot(row, button);
+
+					ImGui::BeginDisabled(downloading);
+					if (PillButton(downloading ? "Downloading" : "Download", at, button, true))
+						Emotes::DownloadPack();
+					ImGui::EndDisabled();
+					EndRow(row);
+				}
+				ImGui::EndDisabled();
+
+				// How far the download is, else how the dances load
+				auto status = Emotes::GetStatus();
+				auto dances = Emotes::GetPackStatus();
+				if (dances.empty())
+					dances = Emotes::GetDanceStatus();
+				if (available && cfg::view::emotes && !status.empty())
+					TextBlock(status.c_str());
+				if (available && cfg::view::emotes && !dances.empty())
+					TextBlock(dances.c_str());
 			}
 			EndPanel();
 		}
@@ -6624,6 +6707,11 @@ void Menu::RenderSettingsTab() {
 		int percent = static_cast<int>(std::round(cfg::settings::ui_scale * 20.f)) * 5;
 		if (SliderInt("Menu Scale", &percent, 80, 160, "%d%%"))
 			cfg::settings::ui_scale = std::round(percent / 5.f) * 5.f / 100.f;
+
+		// A mouse button is not taken: every click of the game would open it
+		int menu_key = cfg::settings::menu_key;
+		if (KeybindRow("Menu Key", &menu_key, nullptr, "Insert / Right Shift") && menu_key > VK_XBUTTON2)
+			cfg::settings::menu_key = menu_key;
 		EndPanel();
 
 	#ifdef _DEBUG
@@ -7012,7 +7100,17 @@ void Menu::RenderStartupHelpImpl() {
 		const char* text;
 		bool key;
 	};
-	const Part parts[] = { { "Press", false }, { "INSERT", true }, { "or", false }, { "RIGHT SHIFT", true }, { "to open the menu", false } };
+	// The key of the menu in capitals, like on the key
+	int menu_key = cfg::settings::menu_key;
+	bool bound = menu_key > VK_XBUTTON2 && menu_key < 0xFF;
+	std::string key_name = bound ? KeyName(menu_key) : std::string();
+	std::transform(key_name.begin(), key_name.end(), key_name.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+	std::vector<Part> parts = { { "Press", false } };
+	if (bound)
+		parts.push_back({ key_name.c_str(), true });
+	else
+		parts.insert(parts.end(), { { "INSERT", true }, { "or", false }, { "RIGHT SHIFT", true } });
+	parts.push_back({ "to open the menu", false });
 
 	float line_width = 0.f;
 	for (const auto& part : parts) {

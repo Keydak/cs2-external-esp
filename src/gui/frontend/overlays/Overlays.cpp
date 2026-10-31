@@ -1,4 +1,5 @@
 #include "Overlays.hpp"
+#include "EmoteWheel.hpp"
 #include "core/engine/world/MapCollision.hpp"
 
 #include "updater/Updater.hpp"
@@ -8,6 +9,7 @@
 #include "gui/frontend/images/Avatars.hpp"
 #include "core/features/View.hpp"
 #include "core/features/Freecam.hpp"
+#include "core/features/Emotes.hpp"
 #include "core/features/Subtick.hpp"
 #include "core/features/Movement.hpp"
 
@@ -86,6 +88,9 @@ void Overlays::RenderImpl() {
 
         if (cfg::settings::notifications)
             RenderMapProgress();
+
+        // Over everything while it is open
+        EmoteWheel::Render();
     }
     ImGui::PopFont();
 }
@@ -490,7 +495,8 @@ void Overlays::RenderKeybinds() {
     // The features with a key, while on. With the menu open all of them, to see where the window goes
     static constexpr const char* THIRD_PERSON_MODES[] = { "Toggle", "Hold", "Always" };
     bool free_cam = Freecam::GetMode() == Freecam::Mode::Free && !Freecam::IsDeadCamera();
-    bool third_person = View::IsThirdPersonOn() && Freecam::GetMode() == Freecam::Mode::Off;
+    bool emote = Emotes::IsPlaying();
+    bool third_person = View::IsThirdPersonOn() && Freecam::GetMode() == Freecam::Mode::Off && !emote;
 
     std::vector<Row> rows;
     if (cfg::view::third_person && (third_person || is_menu_open)) {
@@ -499,6 +505,8 @@ void Overlays::RenderKeybinds() {
     }
     if (cfg::view::freecam && (free_cam || is_menu_open))
         rows.push_back({ "Free Cam", Menu::GetKeyName(cfg::view::freecam_key), "Toggle", free_cam });
+    if (cfg::view::emotes && (emote || is_menu_open))
+        rows.push_back({ "Emote", Menu::GetKeyName(cfg::view::emote_key), "Wheel", emote });
 
     // Movement, unless picked to be hidden
     namespace kb = cfg::world::keybinds;
@@ -865,14 +873,26 @@ void Overlays::RenderRadar() {
     d->AddLine(ImVec2(pos.x + 4.f, cy), ImVec2(pos.x + size.x - 4.f, cy), IM_COL32(50, 50, 50, 120));
     d->AddLine(ImVec2(cx, pos.y + 4.f), ImVec2(cx, pos.y + size.y - 4.f), IM_COL32(50, 50, 50, 120));
 
+    // Watching someone alive: around them like the radar of the game, we are a dot then
+    auto watched = Freecam::IsSpectating() ? Freecam::GetTarget() : 0;
+    Vec3_t center = local.pos;
+    uintptr_t centered = 0;
+    for (auto& player : players) {
+        if (watched && player.alive && player.GetPawnAddress() == watched) {
+            center = player.pos;
+            centered = watched;
+        }
+    }
+
     for (auto& player : players) {
         if (!player.alive)
             continue;
 
-        if (player.localplayer)
+        // The one in the middle
+        if (centered ? player.GetPawnAddress() == centered : player.localplayer)
             continue;
 
-        Vec3_t delta = player.pos - local.pos;
+        Vec3_t delta = player.pos - center;
         float dist = sqrtf(delta.x * delta.x + delta.y * delta.y);
 
         if (dist > range)
@@ -1275,7 +1295,8 @@ void Overlays::RenderOutdated() {
     constexpr auto title = "CS2 was updated";
     constexpr auto body = "Cs2 External has to be updated before it can be used again. It no longer touches the game, "
         "everything it changed was put back.";
-    constexpr auto foot = "Insert or Right Shift closes it";
+    auto foot_text = std::format("{} closes it", Renderer::GetMenuKeyName(cfg::settings::menu_key));
+    auto foot = foot_text.c_str();
 
     // What was not found, for development
     std::string reason;

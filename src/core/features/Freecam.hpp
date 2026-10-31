@@ -36,6 +36,28 @@ public:
     static bool IsFirstPerson();
     // We are dead & watch like casual
     static bool IsDeadCamera();
+
+    // Watching a living player through their eyes while we live too (the profile page). Meanwhile the keys that move us &
+    // the mouse stay from the game while it hides the cursor, the rest goes on (Esc, Tab, the chat, buying). Unspectate
+    // in the menu ends it, so does a hit on us. False when it can't be on now
+    static bool Spectate(uintptr_t pawn);
+    static void StopSpectate();
+    static bool IsSpectating();
+
+    // The emote wheel while it is open & we live: the game gets none of the mouse like watching alive, its moves,
+    // clicks & scrolls are kept for the wheel instead (TakeLentMouse). Moves in pixels of the cursor, the wheel in notches.
+    // Lent again each frame: a wheel no longer drawn gives it back by itself
+    struct LentMouse {
+        int dx = 0, dy = 0;
+        int wheel = 0;
+        int left = 0, right = 0;
+    };
+    static void LendMouse(bool lend);
+    static LentMouse TakeLentMouse();
+
+    // While an emote plays: the mouse turns the camera around our player, who stays where it looks (the game gets none
+    // of the mouse, a click still ends the emote). Off gives the camera back to the game
+    static void SetEmoteCamera(bool on);
 private:
     Freecam() {};
 
@@ -52,8 +74,41 @@ private:
 
     void SetMode(Mode mode);
     void UpdateFree(float seconds);
+    bool TurnByMouse(Vec3_t& angles, float multiplier);    // The counts the hook kept, false for none
     void UpdateFollow(float seconds);
     bool PickTarget(int step);  // Next (1) or previous (-1) player, 0 for the first one
+
+    // Alive & watching someone: started & ended from the menu, a hit or the one watched gone
+    void UpdateSpectate(uintptr_t pawn);
+    static bool IsLiving(uintptr_t pawn);  // Another player alive in the snapshot
+    std::atomic<uintptr_t> spectate_request = 0;
+    std::atomic<bool> spectate_stop = false;
+    std::atomic<bool> alive_spectate = false;
+    int spectate_health = 0;    // Ours, less is a hit
+    uintptr_t hidden_body = 0;  // The one whose eyes we see through, not drawn
+    bool holding = false;       // Our view angles kept by the stub
+
+    // Watching alive in first person the game spectates them too, our spectator services written by the stub like
+    // dead: the weapon in their hands, their health & ammo, the radar around them
+    void UpdateAliveView(uintptr_t pawn, bool alive);
+    void EndAliveView(uintptr_t pawn, bool alive);
+    void PatchViewPawn(bool patched);  // The game shows the one we spectate though we live
+    bool view_pawn_patched = false;
+    // Alive our pawn has no spectator services (the game gives them to spectators): one of ours in meanwhile, like the
+    // game's but its vtable a copy whose destructor does nothing, the game never frees our memory
+    uintptr_t MakeServices(uintptr_t pawn);
+    uintptr_t services_page = 0;
+    uintptr_t own_services = 0;         // In our pawn now, 0 when not
+    uintptr_t alive_view_pawn = 0;
+    std::chrono::steady_clock::time_point alive_view_since{};
+    uintptr_t alive_view_services = 0;  // Ours while it is on
+    uint8_t alive_view_mode = 0;        // What they had, put back
+    uint32_t alive_view_target = 0;
+    bool alive_view_told = false;       // Why it can't, said once per watching
+    // Debug: what the game shows, asked on its thread now & then
+    void LogAliveView(uintptr_t pawn);
+    uintptr_t shown_code = 0;
+    std::chrono::steady_clock::time_point shown_next{};
 
     // Dead: on by itself, its own keys
     void StartDead(uintptr_t pawn);
@@ -100,7 +155,23 @@ private:
     std::atomic<bool> blocking = false;     // Keys go to the camera
     std::atomic<bool> held[KEY_COUNT]{};
     bool was_held[KEY_COUNT]{};
+    bool key_taken[KEY_COUNT]{};    // Watching alive: this press is ours, its release too
+    std::atomic<bool> alive_mouse = false;  // Watching alive & the game hides the cursor: the mouse is ours
     bool freecam_key_was_down = false;
+
+    std::atomic<int64_t> lent_until = 0;    // The emote wheel asked for the mouse until then, steady clock ticks
+    std::atomic<bool> lent_mouse = false;   // ... alive & the game hides the cursor: the hook keeps it
+    std::atomic<int> lent_dx = 0, lent_dy = 0, lent_wheel = 0, lent_left = 0, lent_right = 0;
+
+    // The emote camera: the stub follows our own pawn from behind the orbit angles, the C++ mode stays Off
+    void UpdateEmoteCamera(uintptr_t pawn, float seconds);
+    void EndEmoteCamera();
+    std::atomic<bool> emote_camera = false; // Asked by Emotes
+    std::atomic<bool> emote_mouse = false;  // On & the game hides the cursor: the hook keeps the moves
+    bool emote_orbit = false;               // The stub shows it
+    Vec3_t emote_angles{};
+    float emote_distance = 0.f;
+    uintptr_t ideal_distance_convar = 0;    // cam_idealdist, how far the third person camera of the game goes
 
     uintptr_t local_pawn = 0;   // The camera turns off with a new pawn
     bool local_alive = false;
@@ -122,6 +193,8 @@ private:
     Vec3_t position{};          // Free cam
     Vec3_t free_angles{};
     std::atomic<int> mouse_dx = 0, mouse_dy = 0;    // Counts the hook kept from the game
+    std::atomic<bool> orbiting = false;     // Dead in third person: the mouse turns the camera around them
+    Vec3_t orbit_angles{};
     uintptr_t sensitivity_convar = 0;
 
     // The spectator keys of the game, sending nothing while we choose who to watch
@@ -132,9 +205,11 @@ private:
     // The mouse & key presses of the game, off in SDL (SDL_SetEventEnabled) while the free cam is on: the game reads
     // the mouse in ways the hook does not keep from it. Our hooks still see them
     bool SetupGameInput();
-    void BlockGameInput(bool blocked, bool force = false);
+    // All of it (free cam), the mouse only (watching alive, keys going down still reach the game) or none
+    enum class Input : uint8_t { None, Mouse, All };
+    void BlockGameInput(Input level, bool force = false);
     uintptr_t input_code = 0;
-    bool input_blocked = false;
+    Input input_blocked = Input::None;
 
     std::atomic<uintptr_t> target = 0;
     std::atomic<bool> first_person = false;

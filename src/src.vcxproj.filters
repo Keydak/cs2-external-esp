@@ -102,6 +102,12 @@
     <ClCompile Include="gui\frontend\overlays\Overlays.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="gui\frontend\overlays\EmoteWheel.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="core\features\Emotes.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="updater\Updater.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -378,6 +384,15 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="gui\frontend\overlays\Overlays.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="gui\frontend\overlays\EmoteWheel.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="core\features\Emotes.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="core\features\EmoteDances.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="updater\Updater.hpp">

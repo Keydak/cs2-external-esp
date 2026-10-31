@@ -224,6 +224,7 @@
     <ClCompile Include="gui\frontend\esp\GameCrosshair.cpp" />
     <ClCompile Include="gui\frontend\menu\Menu.cpp" />
     <ClCompile Include="gui\frontend\overlays\Overlays.cpp" />
+    <ClCompile Include="gui\frontend\overlays\EmoteWheel.cpp" />
     <ClCompile Include="gui\renderer\Renderer.cpp" />
     <ClCompile Include="gui\renderer\window\Window.cpp" />
     <ClCompile Include="main.cpp" />
@@ -239,6 +240,7 @@
     <ClCompile Include="core\features\MaterialChams.cpp" />
     <ClCompile Include="core\features\AgentPreview.cpp" />
     <ClCompile Include="core\features\KillEffect.cpp" />
+    <ClCompile Include="core\features\Emotes.cpp" />
     <ClCompile Include="core\features\HitEffects.cpp" />
     <ClCompile Include="core\features\Sounds.cpp" />
     <ClCompile Include="core\features\Subtick.cpp" />
@@ -268,6 +270,8 @@
     <ClInclude Include="core\features\MaterialChams.hpp" />
     <ClInclude Include="core\features\AgentPreview.hpp" />
     <ClInclude Include="core\features\KillEffect.hpp" />
+    <ClInclude Include="core\features\Emotes.hpp" />
+    <ClInclude Include="core\features\EmoteDances.hpp" />
     <ClInclude Include="core\features\HitEffects.hpp" />
     <ClInclude Include="core\features\Sounds.hpp" />
     <ClInclude Include="core\features\Subtick.hpp" />
@@ -375,6 +379,7 @@
     <ClInclude Include="gui\frontend\esp\GameCrosshair.hpp" />
     <ClInclude Include="gui\frontend\menu\Menu.hpp" />
     <ClInclude Include="gui\frontend\overlays\Overlays.hpp" />
+    <ClInclude Include="gui\frontend\overlays\EmoteWheel.hpp" />
     <ClInclude Include="gui\renderer\Renderer.hpp" />
     <ClInclude Include="gui\renderer\window\Window.hpp" />
     <ClInclude Include="updater\http\HttpHelper.hpp" />

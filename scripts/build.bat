@@ -64,6 +64,7 @@ set SRCS=scripts\msvc\compatibility.cpp ^
          src/core/engine/GameThread.cpp ^
          src/core/features/Skins.cpp ^
          src/core/features/KillEffect.cpp ^
+         src/core/features/Emotes.cpp ^
          src/core/engine/resource/Resource.cpp ^
          src/core/features/AgentPreview.cpp ^
          src/core/features/CustomModels.cpp ^
@@ -98,6 +99,7 @@ set SRCS=scripts\msvc\compatibility.cpp ^
          src/gui/frontend/esp/GameCrosshair.cpp ^
          src/gui/frontend/menu/Menu.cpp ^
          src/gui/frontend/overlays/Overlays.cpp ^
+         src/gui/frontend/overlays/EmoteWheel.cpp ^
          src/gui/renderer/Renderer.cpp ^
          src/gui/loader/Loader.cpp ^
          src/gui/renderer/window/Window.cpp ^

@@ -71,6 +71,8 @@ FIELD_MAP = {
     ("observerServices", "m_iObserverMode"): "CPlayer_ObserverServices",
     ("observerServices", "m_hObserverTarget"): "CPlayer_ObserverServices",
     ("rules", "m_nRoundStartCount"): "C_CSGameRules",
+    ("econ", "m_angRotation"): "CGameSceneNode",
+    ("econ", "m_hierarchyAttachName"): "CGameSceneNode",
 }
 
 def fetch_classes():

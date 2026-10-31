@@ -20,9 +20,9 @@ namespace offsets
 	// Game rules, fallbacks overwritten by Dumper::FetchRemote()
 	namespace rules {
 		inline std::ptrdiff_t dwGameRules = 0x255D650; // C_CSGameRules*
-		inline std::ptrdiff_t m_pGameModeRules = 0xD98; // CCSGameModeRules* - C_CSGameRules, its class tells the game mode
+		inline std::ptrdiff_t m_pGameModeRules = 0xDA0; // CCSGameModeRules* - C_CSGameRules, its class tells the game mode
 		inline std::ptrdiff_t m_gamePhase = 0x84; // int32 - C_CSGameRules, 5 once the match ended
-		inline std::ptrdiff_t m_nRoundStartCount = 0xF4C; // uint8 - C_CSGameRules, one up at every round start, in the tick the players spawn again
+		inline std::ptrdiff_t m_nRoundStartCount = 0xF54; // uint8 - C_CSGameRules, one up at every round start, in the tick the players spawn again
 	}
 
 	// client.dll button states, fallbacks overwritten by Dumper::FetchRemote()
@@ -64,7 +64,7 @@ namespace offsets
 		inline std::ptrdiff_t m_fFlags = 0x3F4; // uint32
 		inline std::ptrdiff_t m_iTeamNum = 0x3E7; // uint8
 		inline std::ptrdiff_t m_bIsScoped = 0x1EA0; // bool
-		inline std::ptrdiff_t m_ArmorValue = 0x1ECC; // int32
+		inline std::ptrdiff_t m_ArmorValue = 0x1ED0; // int32
 		inline std::ptrdiff_t m_bIsDefusing = 0x1EA2; // bool
 		inline std::ptrdiff_t m_pItemServices = 0x12F8; // CPlayer_ItemServices* - C_BasePlayerPawn
 		inline std::ptrdiff_t m_bHasDefuser = 0x48; // bool - CCSPlayer_ItemServices
@@ -124,6 +124,10 @@ namespace offsets
 		inline std::ptrdiff_t ccommandArgc = 0x438;
 		inline std::ptrdiff_t ccommandArgv = 0x440;
 		inline std::ptrdiff_t fileSystemAddSearchPath = 31; // vtable index, (path, path id, add type, priority, flags)
+		// soundsystem.dll, the music of the dances: the sound started last (its guid, written by every start of a sound
+		// under the lock of the channels) & StopSoundByGuid(this (unused), int guid). 0 when not found
+		inline std::ptrdiff_t dwLastSoundGuid = 0;
+		inline std::ptrdiff_t fnStopSoundByGuid = 0;
 	}
 
 	// Custom player models (-insecure): loading a model no manifest of the game lists
@@ -179,6 +183,78 @@ namespace offsets
 		inline std::ptrdiff_t fnSetControlPointForward = 0; // (manager, int index, int point, const Vector*, const Vector* forward, float), 0 when not found
 	}
 
+	// Emotes (-insecure): animations of the game played on our own player, only we see them. Found at startup, 0 when not
+	namespace emotes {
+		// client.dll, bool CSkeletonInstance::ApplyAnimGraphPose(skeleton, CNmPose*): every final pose of a skeleton
+		// passes here before its bones are set. Our jump goes over its first 6 bytes (push rdi; push r13; push r14)
+		inline std::ptrdiff_t fnApplyPose = 0;
+		// client.dll, void CNmClip::GetPose(clip, Percentage_t (the float in edx), CNmPose*, bool all bones, bool float channels)
+		inline std::ptrdiff_t fnClipGetPose = 0;
+		// client.dll, bool CResourceName::Set(name, const char* path)
+		inline std::ptrdiff_t fnResourceName = 0;
+		// client.dll, IResourceSystem*, & the vtable offset of its find by name (system, const CResourceName*, int),
+		// which gives the binding of a resource: its data first
+		inline std::ptrdiff_t dwResourceSystem = 0;
+		inline std::ptrdiff_t resourceFind = 0;
+		// engine2.dll, IGameResourceService: CreateGameResourceManifest(service, int count, const char** names, uint8 load,
+		// const char* reason, uint8 priority), IsManifestLoaded & DestroyResourceManifest (service, manifest). Checked
+		// against its vtable (entries 27, 29 & 31) before they are called
+		inline std::ptrdiff_t fnCreateManifest = 0;
+		inline std::ptrdiff_t fnManifestLoaded = 0;
+		inline std::ptrdiff_t fnDestroyManifest = 0;
+		constexpr std::ptrdiff_t manifestPending = 0xA0;   // Of a manifest, 0 once loaded: what IsManifestLoaded reads
+
+		// CNmClip of animationsystem.dll, read from its schema
+		inline std::ptrdiff_t m_skeleton = 0x0;         // CStrongHandle<InfoForResourceTypeCNmSkeleton>
+		inline std::ptrdiff_t m_nNumFrames = 0x8;       // uint32
+		inline std::ptrdiff_t m_flDuration = 0xC;       // float32, seconds
+		inline std::ptrdiff_t m_bIsAdditive = 0x1C0;    // bool
+
+		// CNmPose: its skeleton, bone count, transforms & state (0 not set). GetPose writes as many transforms as the
+		// skeleton has bones, the bone counts of CNmSkeleton the pose has to match
+		constexpr std::ptrdiff_t poseSkeleton = 0x0;
+		constexpr std::ptrdiff_t poseBones = 0x8;
+		constexpr std::ptrdiff_t poseTransforms = 0x10;
+		constexpr std::ptrdiff_t poseState = 0x38;
+		constexpr std::ptrdiff_t skeletonBones = 0x8;
+		constexpr std::ptrdiff_t skeletonReferenceBones = 0x30;
+		constexpr std::ptrdiff_t bindingFlags = 0x18;   // uint8 of a resource binding, 2 = it failed to load
+
+		// The Fortnite dances: a client-only prop_dynamic_override of the dance model plays one, a copy of our agent
+		// bonemerged onto it, spawned the way the portrait world of the game spawns its props. client.dll, 0 when not found:
+		// CEntityKeyValues constructor (kv, context, alloc type), destructor (kv), FindOrCreate(kv, const KV3MemberName*)
+		// & SetString(kv, value, const char*)
+		inline std::ptrdiff_t fnKvConstruct = 0;
+		inline std::ptrdiff_t fnKvDestruct = 0;
+		inline std::ptrdiff_t fnKvFind = 0;
+		inline std::ptrdiff_t fnKvSetString = 0;
+		// CGameEntitySystem: CreateEntityByName(system, spawn group, const char* class, int 0 = client only, int index -1,
+		// int serial -1, bool), QueueSpawnEntity(system, identity, kv), ExecuteQueuedCreation(system), its spawn group
+		// getter (mov eax, [rcx + x]; ret) & the global of the system
+		inline std::ptrdiff_t fnCreateEntity = 0;
+		inline std::ptrdiff_t fnQueueSpawn = 0;
+		inline std::ptrdiff_t fnExecuteQueued = 0;
+		inline std::ptrdiff_t fnSpawnGroup = 0;
+		inline std::ptrdiff_t dwEntitySystem = 0;
+		// UTIL_Remove(entity), SetLocalOrigin & SetLocalAngles(scene node, const float[3]), FollowEntity(child, parent,
+		// bool bonemerge), C_BaseAnimGraph SetAnimation(prop, const char* sequence, int 1 = looping)
+		inline std::ptrdiff_t fnRemoveEntity = 0;
+		inline std::ptrdiff_t fnSetLocalOrigin = 0;
+		inline std::ptrdiff_t fnSetLocalAngles = 0;
+		inline std::ptrdiff_t fnFollowEntity = 0;
+		inline std::ptrdiff_t fnSetAnimation = 0;
+		// engine2.dll, IGameResourceService::PrecacheEntitiesAndConfirmResourcesAreLoaded (service, spawn group, int count,
+		// const EntitySpawnInfo_t*, const matrix3x4_t*), checked against entry 35 of its vtable before it is called
+		inline std::ptrdiff_t fnPrecacheEntities = 0;
+		constexpr std::ptrdiff_t precacheEntitiesIndex = 35;
+		constexpr std::ptrdiff_t entityIdentity = 0x10;     // CEntityIdentity* of an entity
+		constexpr std::ptrdiff_t identityHandle = 0x10;     // uint32 of an identity, its entity handle
+		constexpr std::ptrdiff_t identityFlags = 0x30;      // uint32, 0x200 = being deleted
+		constexpr std::ptrdiff_t identityStride = 0x70;     // Identities of a chunk of the entity list
+		constexpr std::ptrdiff_t kvRefCount = 0x20;         // int16 of a CEntityKeyValues
+		constexpr std::ptrdiff_t kvSize = 56;
+	}
+
 	// What the server sends of a vote: the counts in the vote controller, who voted what in the vote_cast event
 	namespace votes {
 		inline std::ptrdiff_t dwGameEventManager = 0; // CGameEventManager* - client.dll, found by signature
@@ -203,7 +279,7 @@ namespace offsets
 		// Throw prediction
 		inline std::ptrdiff_t m_bPinPulled = 0x1F23; // bool - C_BaseCSGrenade
 		inline std::ptrdiff_t m_flThrowStrength = 0x1F30; // float32 - C_BaseCSGrenade
-		inline std::ptrdiff_t m_angEyeAngles = 0x35F0; // QAngle - C_CSPlayerPawn
+		inline std::ptrdiff_t m_angEyeAngles = 0x3600; // QAngle - C_CSPlayerPawn
 		inline std::ptrdiff_t m_vInitialPosition = 0x12B0; // Vector - C_BaseCSGrenadeProjectile
 		inline std::ptrdiff_t m_vInitialVelocity = 0x12BC; // Vector - C_BaseCSGrenadeProjectile
 
@@ -299,6 +375,8 @@ namespace offsets
 		inline std::ptrdiff_t m_pChild = 0x40; // CGameSceneNode* - CGameSceneNode
 		inline std::ptrdiff_t m_pNextSibling = 0x48; // CGameSceneNode* - CGameSceneNode
 		inline std::ptrdiff_t m_pOwner = 0x30; // CEntityInstance* - CGameSceneNode
+		inline std::ptrdiff_t m_angRotation = 0xB8; // QAngle - CGameSceneNode
+		inline std::ptrdiff_t m_hierarchyAttachName = 0x120; // CUtlStringToken - CGameSceneNode
 		inline std::ptrdiff_t m_hOwnerEntity = 0x520; // CHandle<C_BaseEntity> - C_BaseEntity
 		inline std::ptrdiff_t m_pInventoryServices = 0x820; // CCSPlayerController_InventoryServices* - CCSPlayerController
 		inline std::ptrdiff_t m_unMusicID = 0x58; // uint16 - CCSPlayerController_InventoryServices
@@ -376,6 +454,9 @@ namespace offsets
 		inline std::ptrdiff_t m_angViewAngles = 0x688; // QAngle
 		inline std::ptrdiff_t m_bInThirdPerson = 0x229; // bool
 		inline std::ptrdiff_t m_vecCameraOffset = 0x230; // pitch, yaw, distance, moved by the game every frame
+		// QAngle* (input, slot 0): where its view angles are right now, the last of its list when it has one. 0 when
+		// not found
+		inline std::ptrdiff_t viewAnglesPtr = 0;
 
 		// "jne" letting third person stay on while sv_cheats is set, the camera code turns it off otherwise. 0 when not found
 		inline std::ptrdiff_t cheatsCheckJump = 0;
@@ -395,6 +476,9 @@ namespace offsets
 		inline std::ptrdiff_t observerViewJump = 0;
 		// The call of the spectator camera right after it (call rel32), 0 when not found
 		inline std::ptrdiff_t observerViewCall = 0;
+		// Where in the vtable of the spectator services the function asked first is: true, the spectator camera runs
+		// (a spectator's do, the ones of a player pawn never). 0 when not found
+		inline std::ptrdiff_t observerViewCheck = 0;
 
 		// Keys of a spectator: +attack sends spec_next, +attack2 spec_prev, the wheel, slot keys, +jump spec_mode...
 		// Returns 1 for keys it leaves alone. 0 when not found
@@ -406,6 +490,30 @@ namespace offsets
 		// CCSPlayer_CameraServices::CalcView(services, Vector* origin, QAngle* angles, float* fov): the eyes of that
 		// player & where they look, moved between the ticks by the game each frame. 0 when not found
 		inline std::ptrdiff_t calcView = 0;
+
+		// The player the game shows (its HUD, the radar): a player pawn of ours is always it, before our spectator
+		// services are looked at. The second byte of that jne (0x85), jo (0x80) never jumps after a test. 0 when not
+		// found
+		inline std::ptrdiff_t viewPawnAlive = 0;
+		// The player seen in first person (their arms & weapon, the scope), its start: the same, a player pawn of
+		// ours is it (je over that return at +51, jmp 0xEB skips it) & only a spectator pawn looks at the services
+		// (je at +76, jo 0x70 never jumps). 0 when not found
+		inline std::ptrdiff_t viewPawnFirstPerson = 0;
+
+		// The vtable of CPlayer_ObserverServices (from its RTTI): alive our pawn has none, watching alive puts one of
+		// ours in. 0 when not found
+		inline std::ptrdiff_t observerServicesVtable = 0;
+		// The one of CCSObserver_ObserverServices, what a spectator has, & its camera in first person: the camera
+		// services of the one watched (their aim punch, their zoom). Ours take that & its keys (F their loadout).
+		// 0 when not found
+		inline std::ptrdiff_t spectatorServicesVtable = 0;
+		inline std::ptrdiff_t observerInEye = 0;
+
+		// The radar of the HUD around a player pawn of ours, before the camera: "je" (0x74) to the camera of the
+		// one where it is centered & the one for the floor of the map shown. jmp (0xEB) takes the camera. 0 when not
+		// found
+		inline std::ptrdiff_t radarCenter = 0;
+		inline std::ptrdiff_t radarLevel = 0;
 	}
 
 	// Accepting a found match like the button does: LobbyAPI.SetLocalPlayerReady("accept") of panorama calls
@@ -501,6 +609,31 @@ namespace offsets
 		const std::string overrideView = "40 53 57 48 83 EC 58 48 8B FA E8 ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 80 78 58 00 0F 84";
 		// CCSPlayer_CameraServices::CalcView, entry 34 of its vtable
 		const std::string calcView = "40 55 56 57 41 56 41 57 48 8D 6C 24 C9 48 81 EC 90 00 00 00 48 83 79 38 00 4D 8B F9 4D 8B F0 48 8B F2 48 8B F9";
+		// The player the game shows: mov rax, [rbx]; mov rcx, rbx; call [rax + IsAlive]; test al, al; jne <ours> (+14);
+		// mov rbx, [rbx + observer services]; test rbx, rbx; jz; mov rax, [rbx]; mov rcx, rbx; call [rax + mode]; cmp eax, 2
+		const std::string viewPawnAlive =
+			"48 8B 03 48 8B CB FF 90 ?? ?? ?? ?? 84 C0 0F ?? ?? ?? ?? ?? 48 8B 9B ?? ?? ?? ?? 48 85 DB 0F 84 ?? ?? ?? ?? 48 8B 03 48 8B CB FF 90 ?? ?? ?? ?? 83 F8 02";
+		// The player seen in first person: push rbx; sub rsp, 0x20; xor ecx, ecx; call GetLocalPawn; is a player pawn;
+		// is a CS player pawn -> je (+51) over "mov rax, rbx; ret"; is a spectator pawn -> je <none> (+76); then
+		// jmp <the target of its services>
+		const std::string viewPawnFirstPerson =
+			"40 53 48 83 EC 20 33 C9 E8 ?? ?? ?? ?? 48 8B D8 48 85 C0 74 ?? 48 8B 00 48 8B CB FF 90 ?? ?? ?? ?? 84 C0 74 ?? 48 8B 03 48 8B CB FF 90 ?? ?? ?? ?? 84 C0 ?? ?? "
+			"48 8B C3 48 83 C4 20 5B C3 48 8B 03 48 8B CB FF 90 ?? ?? ?? ?? 84 C0 ?? ?? 48 8B CB 48 83 C4 20 5B E9";
+		// The view angles of the input: mov r8, rcx; test edx, edx; jz; lea rax, [other slots]; ret; mov eax, [rcx + count];
+		// test; jz; ... last of the list; ret; lea rax, [rcx + view angles]; ret
+		const std::string viewAnglesPtr =
+			"4C 8B C1 85 D2 74 ?? 48 8D 05 ?? ?? ?? ?? C3 8B 81 ?? ?? ?? ?? 85 C0 74 ?? FF C8 48 63 C8 49 8B 80 ?? ?? ?? ?? 48 69 D1 ?? ?? ?? ?? 48 05 ?? ?? ?? ?? 48 03 C2 C3 48 8D 81 ?? ?? ?? ?? C3";
+		// The camera in first person of CCSObserver_ObserverServices: mov rax, [rcx]; ... call [rax + target]; test;
+		// jz; call [r10 + is a player pawn]; test; je; mov edx, 1; mov dword [rbx + chase distance], 0
+		const std::string observerInEye =
+			"48 89 5C 24 10 48 89 6C 24 18 56 57 41 56 48 83 EC 30 48 8B 01 49 8B F1 4D 8B F0 48 8B EA 48 8B D9 FF 90 ?? ?? ?? ?? 48 8B F8 48 85 C0 0F 84 ?? ?? ?? ?? 4C 8B 10 48 8B C8 41 FF 92 ?? ?? ?? ?? 84 C0 74 ?? BA 01 00 00 00 C7 43 ?? 00 00 00 00";
+		// The radar of the HUD: test <a pawn of ours>, itself (rax, r13...); je <camera> (+3, may be our jmp);
+		// mov rcx, <it>; call <where it is>; jmp; mov ecx, [rbp + slot]; call <the camera>, then its center (movsd) or
+		// the height for the floor (movss xmm6, [rax + 8])
+		const std::string radarCenter =
+			"?? 85 ?? ?? ?? ?? 8B ?? E8 ?? ?? ?? ?? EB ?? 8B 4D ?? E8 ?? ?? ?? ?? F2 0F 10 00";
+		const std::string radarLevel =
+			"?? 85 ?? ?? ?? ?? 8B ?? E8 ?? ?? ?? ?? EB ?? 8B 4D ?? E8 ?? ?? ?? ?? F3 0F 10 70 08";
 
 		// panorama.dll, CUIEngine::RunScript (compile & run): arguments saved, mov r12, r8 (the script)
 		// Particle manager: its getter (a global, right before a function with a 0x1240 stack), CreateEffectIndex,
@@ -509,6 +642,67 @@ namespace offsets
 		const std::string createEffectIndex = "40 57 48 83 EC 20 49 8B 00 48 8B FA 48 85 C0 74 ?? 80 38 00 74 ?? 48 89 5C 24 30 8B 99";
 		const std::string setControlPoint = "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 50 F3 0F 10 1D ?? ?? ?? ?? 41 8B F8 8B DA 4C 8D 05";
 		const std::string setControlPointForward = "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 60 48 8B E9 49 8B F9 48 8D 4C 24 40 41 8B F0 8B DA E8 ?? ?? ?? ?? 48 8B 84 24 90 00 00 00 48 8D 54 24 30";
+		// CSkeletonInstance::ApplyAnimGraphPose: push rdi; push r13; push r14; sub rsp, 0x30; mov rdi, rdx; mov r14, rcx;
+		// test rdx, rdx; je; cmp dword ptr [rdx + 0x38], 0 (the pose is set); je; mov rax, [rcx + ...]
+		const std::string applyAnimGraphPose = "40 57 41 55 41 56 48 83 EC 30 48 8B FA 4C 8B F1 48 85 D2 0F 84 ?? ?? ?? ?? 83 7A 38 00 0F 84 ?? ?? ?? ?? 48 8B 81";
+		// The same with our jmp rel32 & nop over its first 6 bytes, left by a run that did not put them back
+		const std::string applyAnimGraphPoseHooked = "E9 ?? ?? ?? ?? 90 48 83 EC 30 48 8B FA 4C 8B F1 48 85 D2 0F 84 ?? ?? ?? ?? 83 7A 38 00 0F 84 ?? ?? ?? ?? 48 8B 81";
+		// CNmClip::GetPose: ...; sub rsp, 0x40; mov ebx, [rcx + 8] (frames); xorps xmm0, xmm0; dec ebx; movd xmm1, edx (the percent)
+		const std::string clipGetPose = "48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 48 83 EC 40 8B 59 08 0F 57 C0 FF CB 66 0F 6E CA";
+		// CResourceName::Set: the path copied into its buffer string (and dword ptr [rcx], 0xC0000000 keeps the flags),
+		// then normalized & hashed
+		const std::string resourceNameSet = "48 89 5C 24 10 57 48 83 EC 30 8B 41 04 48 8D 79 08 48 8B D9 A9 FF FF FF 3F 76 0F 0F BA E0 1E 48 8B C7 72 03 48 8B 07 C6 00 00 81 21 00 00 00 C0";
+		// A resource looked up by name: mov rcx, [rip + resource system]; lea rdx, [rbp + name]; xor r8d, r8d;
+		// mov rax, [rcx]; call [rax + find] (at +17); mov rsi, rax
+		const std::string resourceFind = "48 8B 0D ?? ?? ?? ?? 48 8D 55 ?? 45 33 C0 48 8B 01 FF 90 ?? ?? ?? ?? 48 8B F0";
+		// engine2.dll, CreateGameResourceManifest: ...; cmp qword ptr [rcx + 0x58], 0; movzx r14d, r9b; mov rbx, r8; mov esi, edx
+		const std::string createManifest = "48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 41 54 41 55 41 56 41 57 48 83 EC 70 48 83 79 58 00 45 0F B6 F1 49 8B D8 8B F2 48 8B F9";
+		// engine2.dll, IsManifestLoaded: test rdx, rdx; je; cmp qword ptr [rdx + 0xA0], 0; sete al; ret; mov al, 1; ret
+		const std::string manifestLoaded = "48 85 D2 74 0C 48 83 BA A0 00 00 00 00 0F 94 C0 C3 B0 01 C3";
+		// engine2.dll, DestroyResourceManifest: test rdx, rdx; je; push rbx; sub rsp, 0x20; mov rcx, [rdx + 0xA0]; mov rbx, rdx
+		const std::string destroyManifest = "48 85 D2 74 4D 53 48 83 EC 20 48 8B 8A A0 00 00 00 48 8B DA 48 85 C9 74";
+		// The Fortnite dances, client.dll. CEntityKeyValues constructor: xor edi, edi; mov rbx, rcx; mov [rcx + 28h], rdi;
+		// mov [rcx + 30h], rdi; mov [rcx + 25h], r8b (alloc type)
+		const std::string kvConstruct = "48 89 5C 24 08 57 48 83 EC 20 33 FF 48 8B D9 48 89 79 28 48 89 79 30 44 88 41 25";
+		// Its destructor: ...; mov rdi, [rcx + 8]; mov rbx, rcx; test rdi, rdi; je
+		const std::string kvDestruct = "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20 48 8B 79 08 48 8B D9 48 85 FF 74 27";
+		// FindOrCreate of a member: the KV3MemberName { hash, -1, name } copied to the stack, then the real one called
+		const std::string kvFind = "48 83 EC 38 8B 02 45 33 C0 89 44 24 20 8B 42 04 89 44 24 24 48 8B 42 08 48 8D 54 24 20 48 89 44 24 28 E8 ?? ?? ?? ?? 48 83 C4 38 C3";
+		// SetString of a member: ...; cmp qword ptr [rcx], 0; mov rsi, r8 (the text); mov rbp, rdx (the member)
+		const std::string kvSetString = "48 89 5C 24 10 48 89 6C 24 18 56 48 83 EC 20 48 83 39 00 49 8B F0 48 8B EA 48 8B D9";
+		// CreateEntityByName: ...; sub rsp, 50h; mov rdi, r8 (the class); mov r14d, edx (the spawn group); xor ebx, ebx
+		const std::string createEntity = "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 50 49 8B F8 44 8B F2 33 DB";
+		// QueueSpawnEntity: push rsi; push rdi; push r14; sub rsp, 30h; test dword ptr [rdx + 30h], 800h (the identity)
+		const std::string queueSpawn = "40 56 57 41 56 48 83 EC 30 F7 42 30 00 08 00 00 49 8B F0 4C 8B F2 48 8B F9";
+		// ExecuteQueuedCreation: ...; sub rsp, 100h; inc dword ptr [rcx + 0C48h]; lea rax, [rsp + 28h]
+		const std::string executeQueued = "48 89 5C 24 08 57 48 81 EC 00 01 00 00 FF 81 48 0C 00 00 48 8D 44 24 28";
+		// The spawn group of the entity system: mov rcx, [rip + system]; test rcx, rcx; je; call <mov eax, [rcx + x]; ret>
+		// (at +12); mov rcx, [rip + ...]
+		const std::string spawnGroup = "48 8B 0D ?? ?? ?? ?? 48 85 C9 74 0E E8 ?? ?? ?? ?? 48 8B 0D";
+		// UTIL_Remove: sub rsp, 28h; test rcx, rcx; je; mov rdx, [rcx + 10h] (identity); mov eax, [rdx + 30h]; bt eax, 0Bh
+		const std::string removeEntity = "48 83 EC 28 48 85 C9 0F 84 ?? ?? ?? ?? 48 8B 51 10 8B 42 30 0F BA E0 0B";
+		// CGameSceneNode::SetLocalOrigin: ...; mov rbx, rcx; mov rsi, rdx; sub rcx, -80h; call; test al, al
+		const std::string setLocalOrigin = "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 20 48 8B D9 48 8B F2 48 83 E9 80 E8 ?? ?? ?? ?? 84 C0";
+		// CGameSceneNode::SetLocalAngles: ...; movsd xmm0, [rdx]; lea rdi, [rcx + m_angRotation] (at +27); mov eax, [rdx + 8]
+		const std::string setLocalAngles = "48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 57 48 83 EC ?? F2 0F 10 02 48 8D B9 ?? ?? ?? ?? 8B 42 08 48 8B F2 48 8B D9";
+		// FollowEntity(child, parent, bonemerge): ...; test r8b, r8b; ... the attachment it gets is the token of "!bonemerge"
+		// (mov ebx, 1C9748E6h at the end)
+		const std::string followEntity =
+			"48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 33 DB 48 8B F2 48 8B F9 45 84 C0 74 ?? 48 8B 41 10 4C 8B 00 4D 85 C0 74 ?? "
+			"48 8B 40 08 48 63 15 ?? ?? ?? ?? 48 8B 88 ?? ?? ?? ?? 0F B7 04 51 B9 FF FF 00 00 66 3B C1 74 ?? 4A 8B 0C 00 EB ?? 48 8B CB 48 8B "
+			"49 08 48 8B 01 FF 50 ?? 48 85 C0 74 ?? 48 39 98 ?? ?? ?? ?? 74 ?? BB E6 48 97 1C";
+		// SetAnimation: test rdx, rdx (the sequence); je; push rbp; push rsi; push r14; sub rsp, 50h; mov byte ptr [rcx + x], 0;
+		// mov r14d, r8d (looping); cmp byte ptr [rdx], 0
+		const std::string setAnimation = "48 85 D2 0F 84 ?? ?? ?? ?? 55 56 41 56 48 83 EC 50 C6 81 ?? ?? 00 00 00 45 8B F0 80 3A 00";
+		// engine2.dll, PrecacheEntitiesAndConfirmResourcesAreLoaded: ...; sub rsp, 0F0h; cmp qword ptr [rcx + 58h], 0;
+		// mov rsi, r9; mov edi, r8d; mov ebp, edx
+		const std::string precacheEntities = "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 81 EC F0 00 00 00 48 83 79 58 00 49 8B F1 41 8B F8 8B EA 48 8B D9 74 ?? 45 85 C0 74";
+		// soundsystem.dll, starting a sound: the new guid from the stack ([rsp + 0D8h]), xchg [rip + last guid], eax (at +7);
+		// mov ecx, ...
+		const std::string lastSoundGuid = "8B 84 24 ?? ?? 00 00 87 05 ?? ?? ?? ?? 8B 0D";
+		// StopSoundByGuid: ...; mov rsi, [rip + channels]; mov ebx, edx (the guid); sub rsi, -80h (their lock);
+		// call [GetCurrentThreadId]; mov edx, eax; cmp [rsi + 8], eax (its owner)
+		const std::string stopSoundByGuid = "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B 35 ?? ?? ?? ?? 8B DA 48 83 EE 80 FF 15 ?? ?? ?? ?? 8B D0 39 46 08";
 		const std::string runScript = "4C 89 4C 24 20 4C 89 44 24 18 48 89 54 24 10 55 53 56 57 41 54 41 56 41 57 48 8D 6C 24 ?? 48 81 EC ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? 48 C7 44 24 38 ?? ?? ?? ?? 48 89 44 24 30 4D 8B E0";
 		// panorama.dll, CUIEngine::PanelDestroyed: mov r13, rdx; ...; mov rsi, rcx; ...; add rcx, contexts (+17)
 		const std::string panelDestroyed = "4C 8B EA 48 89 55 ?? 48 8B F1 48 89 55 ?? 48 81 C1 ?? ?? ?? ??";
@@ -520,9 +714,10 @@ namespace offsets
 		const std::string observerView =
 			"48 8B B7 ?? ?? ?? ?? 48 85 F6 74 ?? 48 8B 06 48 8B CE FF 90 ?? ?? ?? ?? 84 C0 ?? ?? 4C 8D 83 ?? ?? ?? ?? 48 8B CE 48 8D 93";
 		// The spectator keys, from its 7th byte (the first 6 are the ones we patch): push rsi; push rdi; push r14;
-		// push r15; mov rbp, rsp; sub rsp, 0x60; mov rax, [rcx]; mov esi, r8d; mov rbx, rdx; mov rdi, rcx; call [rax + ...]
+		// push r15; mov rbp, rsp; sub rsp, 0x60; mov rax, [rcx]; mov e<si/di>, r8d; mov rbx, rdx; mov r<di/si>, rcx;
+		// call [rax + ...]
 		const std::string spectatorBinds =
-			"56 57 41 56 41 57 48 8B EC 48 83 EC 60 48 8B 01 41 8B F0 48 8B DA 48 8B F9 FF 90 ?? ?? ?? ?? 85 C0 0F 84";
+			"56 57 41 56 41 57 48 8B EC 48 83 EC 60 48 8B 01 41 8B ?? 48 8B DA 48 8B ?? FF 90 ?? ?? ?? ?? 85 C0 0F 84";
 		// LobbyAPI.SetLocalPlayerReady(string): "deferred", else with the matchmaking "prematch:..." or accept:
 		// cmp qword ptr [rip + matchmaking], 0 at +0x31; ... mov dl, 1; ...; jmp <accept> at +0x6B
 		// The matchmaking status of the menu: the string purged, then the session settings of the match framework
@@ -541,8 +736,9 @@ namespace offsets
 			"48 8D 55 ?? 48 89 B4 24 ?? ?? ?? ?? C6 81";
 		// CSkeletonInstance::SetMeshGroupMask, does nothing when the mask in memory already matches
 		const std::string setMeshGroupMask = "48 89 5C 24 ?? 48 89 74 24 ?? 57 48 83 EC ?? 48 8D 99 ?? ?? ?? ?? 48 8B 71";
-		// Pawn update: "lea rcx, [rbx + glove helper]; call ApplyGloves; mov rcx, rbx; call ...; mov rdi, [rbx + ...]"
-		const std::string applyGlovesCall = "48 8D 8B ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8B CB E8 ?? ?? ?? ?? 48 8B BB";
+		// Pawn update: "lea rcx, [rbx + glove helper]; call ApplyGloves; mov rcx, rbx; call ...; mov rsi, [rbx + ...]"
+		// (rdi before 1.41.9.3)
+		const std::string applyGlovesCall = "48 8D 8B ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8B CB E8 ?? ?? ?? ?? 48 8B B3";
 		// The item of an id: push rbx; ...; mov rcx, [inventory]; test rcx, rcx; je; mov rdx, rbx; call; test rax, rax;
 		// jne; mov rax, 0xF000000000000000 (made up ids from here on)
 		const std::string getItemView = "40 53 48 83 EC 20 48 8B D9 48 8B 0D ?? ?? ?? ?? 48 85 C9 74 ?? 48 8B D3 E8 ?? ?? ?? ?? 48 85 C0 75 ?? 48 B8 00 00 00 00 00 00 00 F0";

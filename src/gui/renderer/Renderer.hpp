@@ -22,12 +22,16 @@ public:
     static void Destroy();
     static void Thread();
 
-    // Outdated for the running CS2 (Engine::IsOutdated): a card over the game says so until Insert or Right Shift, or
+    // Outdated for the running CS2 (Engine::IsOutdated): a card over the game says so until the menu key, or
     // until the game closes, then the window goes. Thread() keeps its window for it when it stopped for that, the
     // features put back what they changed in the meantime. False without a window to show it in
     static bool Notice();
 
     static bool IsOpen();
+    // The key of the menu held (cfg::settings::menu_key, Insert or Right Shift while it is 0)
+    static bool IsMenuKeyDown();
+    // Its name for a text, of the key given (0 for Insert or Right Shift)
+    static std::string GetMenuKeyName(int key);
     // The menu opened or closed like its key does, from the render thread
     static void SetOpen(bool open);
     static bool IsFocused();

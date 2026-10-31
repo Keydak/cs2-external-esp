@@ -33,6 +33,8 @@ public:
 
     // Name of a key like the keybind rows show it: "Mouse 5", "F6"
     static std::string GetKeyName(int key);
+    // A keybind row waits for its key (this frame or the last): keys pressed go to it, not to what they do
+    static bool IsBindingKey();
 private:
     Menu() {};
 

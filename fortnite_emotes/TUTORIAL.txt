@@ -1,0 +1,248 @@
+FORTNITE EMOTES FOR CS2 - HOW TO USE
+====================================
+
+79 Fortnite dances, 39 emotes with their music, and CS2's own celebration
+animations, on a Fortnite-style emote wheel. Only you see and hear them.
+
+
+WHAT YOU NEED
+-------------
+- emotes.dll
+- The Emote Pack (a zip with the dance model, the music and the icons)
+- A DLL injector that works with CS2
+
+
+SETUP
+-----
+1. Open your Documents folder and make a folder called:  Emotes
+
+2. Extract the Emote Pack zip into Documents\Emotes.
+   You don't need to tidy it up: the DLL looks up to 3 folders deep for
+   the folder that has "csgo_addons" in it. It should look like this:
+
+     Documents\Emotes\
+       csgo_addons\characters\kolka\fortnite_dance.vmdl_c   (the dances)
+       music\*.wav                                        (the songs)
+       icons\*.png                                        (the wheel pictures)
+       fonts\                                             (optional)
+
+   Optional: put the "Burbank Big Condensed Black" font in the fonts folder
+   (or install it in Windows) to get Fortnite's font on the wheel.
+
+3. Start CS2 and inject emotes.dll into cs2.exe.
+   The first time, it makes emotes.ini (your settings) and emotes.log
+   in Documents\Emotes.
+
+4. Join a match and press B.
+
+
+CONTROLS
+--------
+B (tap)             Opens the wheel and keeps it open.
+B (hold)            Opens the wheel; point at an emote and let go to play it.
+Left click          Plays the emote under the mouse.
+                    Clicking the round arrows under the wheel changes page.
+Mouse wheel         Next / previous page.
+Right click / Esc   Closes the wheel.
+B (while dancing)   Stops the emote.
+End                 Unloads the DLL.
+
+Moving, shooting, dying or a new round also stops the emote.
+The camera goes to third person while you emote, then back.
+
+Wheel pages:
+  FAVOURITES  your 6 picks from emotes.ini (page one)
+  DANCES      the 79 Fortnite dances
+  EMOTES      the 39 Fortnite emotes
+  CS2         the game's own celebrations and poses (these have NO music)
+
+
+SETTINGS (Documents\Emotes\emotes.ini)
+--------------------------------------
+Open it in Notepad, change a line, save, then press End and inject again.
+
+  wheel_key=0x42     the wheel key (B), as a key code (see below)
+  unload_key=0x23    unloads the DLL (End); 0 turns it off
+  music=1            1 = dance music on, 0 = off
+  volume=70          music volume, 0 to 100
+  slot1=0 ... slot6=5
+                     the Favourites page:
+                       0 to 18    = a CS2 animation
+                       1000 and up = a Fortnite dance or emote (list below)
+                       -1          = empty slot
+
+Key codes: a letter is its capital letter in hex
+  A=0x41 B=0x42 C=0x43 ... G=0x47 H=0x48 ... T=0x54 V=0x56 X=0x58 Z=0x5A
+  Mouse 4=0x05  Mouse 5=0x06  Middle mouse=0x04  Caps Lock=0x14
+  Insert=0x2D  Home=0x24  End=0x23  F1=0x70 ... F12=0x7B
+
+
+IF SOMETHING DOESN'T WORK
+-------------------------
+Check Documents\Emotes\emotes.log first. The same lines also show in the
+CS2 console (~) starting with [emotes].
+
+"Emote Pack not found"
+  The pack isn't in Documents\Emotes, or it's more than 3 folders deep.
+  Move the folder that has csgo_addons closer to the top.
+
+Only the CS2 pages show on the wheel
+  The dance model hasn't loaded yet. It loads a few seconds after you
+  join a match. If it never does, check the log.
+
+No music
+  The Favourites page starts with CS2 animations, which never have
+  music. Try something from the DANCES page. Check music=1 in
+  emotes.ini, and that CS2 isn't muted in the Windows volume mixer.
+  The log says "playing ....wav" each time a song starts.
+
+The emote stops straight away
+  Moving or shooting stops it. Stand still before you pick an emote.
+
+
+EMOTE NUMBERS (for slot1 ... slot6)
+-----------------------------------
+Example: slot1=1034 puts the Floss on your Favourites page.
+
+FORTNITE DANCES
+  1000  Dance Moves
+  1001  Electro Shuffle
+  1002  Aerobic
+  1008  Capoeira
+  1010  Flapper
+  1016  Break Dance
+  1017  Disco Fever
+  1018  Take The L
+  1019  Boneless
+  1020  Pump
+  1021  Ride The Pony
+  1022  Hype
+  1023  Swipe It
+  1024  The Worm
+  1025  Disco Fever 2
+  1028  Eastern Bloc
+  1030  Dream Feet
+  1034  Floss
+  1036  Fresh
+  1038  Groove Jam
+  1039  Guitar
+  1041  Shuffle
+  1042  Hip Hop
+  1044  Hula Hop
+  1047  Infinite Dab
+  1048  Intensity
+  1049  Irish Jig
+  1050  Eagle
+  1051  True Heart
+  1052  Laugh
+  1053  Living Large
+  1056  Maracas
+  1057  Orange Justice
+  1059  Pop Lock
+  1060  Star Power
+  1061  Robot
+  1067  Drive Car
+  1070  Reanimated
+  1073  Twist
+  1074  Warehouse
+  1076  Wiggle
+  1078  You're Awesome
+  1079  Rambunctious
+  1080  Boogie Down
+  1083  T-Rex
+  1084  Smooth Moves
+  1085  California Gurls
+  1086  Gangnam Style
+  1087  In Da Party
+  1088  Blinding Lights
+  1089  Get Griddy
+  1090  I Like To Move It
+  1091  The Macarena
+  1092  Never Gonna
+  1093  Ninja Style
+  1094  Pump It Up
+  1095  Pump up the Jam
+  1096  The Renegade
+  1097  Rushin' Around
+  1098  Say So
+  1099  Stuck
+  1100  Toosie Slide
+  1101  Air Shredder
+  1102  Crossbounce
+  1103  Distraction Dance
+  1104  Head Banger
+  1105  Hitchhiker
+  1106  It's Go Time!
+  1107  Knee Slapper
+  1108  Showstopper
+  1109  Sprinkler
+  1110  Ghostbusters
+  1111  Marsh Walk
+  1112  Forget me not
+  1113  Rollie
+  1114  Scenario
+  1115  John Cena
+  1116  The Silencer
+  1117  Walky Walk
+
+FORTNITE EMOTES
+  1003  Best Mates
+  1004  Bendy
+  1005  Blow Kiss
+  1006  Come To Me
+  1007  Calculated
+  1009  Celebration
+  1011  Chicken
+  1012  Chug
+  1013  Confused
+  1014  Cry
+  1015  Dab
+  1026  Dust Off Hands
+  1027  Dust Off Shoulders
+  1029  Facepalm
+  1031  On the Hook
+  1032  Flex
+  1033  Flippin
+  1035  Finger Guns
+  1037  Golf Clap
+  1040  Hand Signals
+  1043  Hot Stuff
+  1045  Breaking Point
+  1046  True Love
+  1054  Luchador
+  1055  Make It Rain
+  1058  Not Today
+  1062  Rock
+  1063  Paper
+  1064  Scissors
+  1065  Salt
+  1066  Salute
+  1068  Snap
+  1069  Stage Bow
+  1071  Thumbs Down
+  1072  Thumbs Up
+  1075  Wave
+  1077  Yeet
+  1081  Heel Click
+  1082  Respect
+
+CS2 ANIMATIONS (no music)
+  0     Celebrate 1
+  1     Celebrate 2
+  2     Celebrate 3
+  3     Celebrate 4
+  4     Knife backflip
+  5     Knife tricks
+  6     Shrug
+  7     Look at watch
+  8     Butt scratch
+  9     Head scratch
+  10    Belly rub
+  11    C4 bobble
+  12    Victory 1
+  13    Victory 2
+  14    Defeat
+  15    Pose 1
+  16    Pose 2
+  17    Flashed
+  18    Dead

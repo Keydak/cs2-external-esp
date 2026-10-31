@@ -436,6 +436,11 @@ void Config::ApplySettings(json data) {
 		cfg::view::freecam_sensitivity = std::clamp(data["view"].value("freecam_sensitivity", 1.f), 0.1f, 5.f);
 		cfg::view::spectate_distance = std::clamp(data["view"].value("spectate_distance", 100.f), 40.f, 300.f);
 		cfg::view::dead_spectate = data["view"].value("dead_spectate", true);
+		cfg::view::emotes = data["view"].value("emotes", false);
+		cfg::view::emote_key = data["view"].value("emote_key", static_cast<int>('J'));
+		cfg::view::emote_music = data["view"].value("emote_music", true);
+		cfg::view::emote_volume = std::clamp(data["view"].value("emote_volume", 60), 0, 100);
+		cfg::view::emote_pack_download = data["view"].value("emote_pack_download", true);
 		cfg::view::viewmodel_enabled = data["view"].value("viewmodel_enabled", false);
 		cfg::view::viewmodel_fov = data["view"].value("viewmodel_fov", 68.f);
 		cfg::view::viewmodel_x = data["view"].value("viewmodel_x", 2.5f);
@@ -459,7 +464,8 @@ void Config::ApplySettings(json data) {
 		logs::skins = log.value("skins", true);
 		logs::other = log.value("other", true);
 	}
-	//cfg::settings::open_menu_key = data["utils"].value("open_menu_key", 0);
+	int menu_key = data["utils"].value("menu_key", 0);
+	cfg::settings::menu_key = menu_key > VK_XBUTTON2 && menu_key < 0xFF ? menu_key : 0;
 }
 
 void Config::ApplySkins(json skins) {
@@ -758,6 +764,11 @@ json Config::SettingsJson() {
 	data["view"]["freecam_sensitivity"] = cfg::view::freecam_sensitivity;
 	data["view"]["spectate_distance"] = cfg::view::spectate_distance;
 	data["view"]["dead_spectate"] = cfg::view::dead_spectate;
+	data["view"]["emotes"] = cfg::view::emotes;
+	data["view"]["emote_key"] = cfg::view::emote_key;
+	data["view"]["emote_music"] = cfg::view::emote_music;
+	data["view"]["emote_volume"] = cfg::view::emote_volume;
+	data["view"]["emote_pack_download"] = cfg::view::emote_pack_download;
 	data["view"]["viewmodel_enabled"] = cfg::view::viewmodel_enabled;
 	data["view"]["viewmodel_fov"] = cfg::view::viewmodel_fov;
 	data["view"]["viewmodel_x"] = cfg::view::viewmodel_x;
@@ -777,7 +788,7 @@ json Config::SettingsJson() {
 		{ "skins", cfg::settings::logs::skins },
 		{ "other", cfg::settings::logs::other },
 	};
-	//data["utils"]["open_menu_key"] = cfg::settings::open_menu_key;
+	data["utils"]["menu_key"] = cfg::settings::menu_key;
 
 	return data;
 }

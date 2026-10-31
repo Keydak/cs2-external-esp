@@ -17,6 +17,7 @@
 #include "core/features/AgentPreview.hpp"
 #include "core/features/KillEffect.hpp"
 #include "core/features/Freecam.hpp"
+#include "core/features/Emotes.hpp"
 #include "core/engine/GameThread.hpp"
 
 #include <algorithm>
@@ -279,6 +280,7 @@ void Engine::StartImpl() {
     AgentPreview::Init();
     KillEffect::Init();
     Freecam::Init();
+    Emotes::Init();
 
     LOGF(INFO, "Successfully initialized engine...");
 }

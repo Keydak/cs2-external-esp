@@ -283,6 +283,13 @@ namespace cfg {
 		// Dead: anyone like casual, clicks switch the player, space goes first person, third person, free cam
 		inline bool dead_spectate = true;
 		inline float spectate_distance = 100.f;         // Behind them in third person
+
+		// Animations of the game on our player in third person, picked on a wheel, see Emotes
+		inline bool emotes = false;
+		inline int emote_key = 'J';                     // Held or tapped opens the wheel, again while one plays stops it
+		inline bool emote_music = true;                 // The songs of the Fortnite dances, played by the game
+		inline int emote_volume = 60;                   // 0 - 100
+		inline bool emote_pack_download = true;         // The loader downloads the Emote Pack after Start, else Download in game
 	}
 
 	namespace skins {
@@ -434,6 +441,7 @@ namespace cfg {
 		inline color_t accent = { 1.f, 1.f, 1.f, 1.f }; // Menu, white by default
 		inline float menu_opacity = 0.86f;	// Of the menu background, the group boxes stay solid
 		inline float ui_scale = 1.15f; // Menu size
+		inline int menu_key = 0;       // Opens & closes the menu, 0 for Insert or Right Shift
 
 		// Which debug lines of the console are shown, warnings, errors & info lines always are
 		namespace logs {
@@ -445,7 +453,6 @@ namespace cfg {
 	// Not stored, just for testing
 	namespace dev {
 		inline bool console = true;
-		inline int open_menu_key = false;
 		inline int cache_refresh_rate = 5;
 		inline bool force_show_flags = false;
 	}

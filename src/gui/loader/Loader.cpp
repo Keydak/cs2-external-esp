@@ -1,8 +1,11 @@
 #include "Loader.hpp"
 
+#include "config/Config.hpp"
 #include "core/engine/Engine.hpp"
+#include "core/features/Emotes.hpp"
 #include "core/features/Skins.hpp"
 #include "gui/frontend/images/ImageCache.hpp"
+#include "gui/renderer/Renderer.hpp"
 #include "updater/Updater.hpp"
 #include "assets/fonts/Inter.h"
 
@@ -31,8 +34,12 @@ namespace {
     constexpr const char* SUBTITLE = "Counter-Strike 2";
 #endif
 
-    // Size of the window before the scale of the screen, the title bar moves it
-    constexpr float WIDTH = 400.f, HEIGHT = 620.f, TITLE_HEIGHT = 72.f, CLOSE_WIDTH = 84.f;
+    // Size of the window before the scale of the screen & of the menu, the title bar moves it
+    constexpr float WIDTH = 400.f, HEIGHT = 734.f, TITLE_HEIGHT = 72.f, CLOSE_WIDTH = 84.f;
+
+    // The text as the menu has it: its page title, card names, rows & buttons, small lines, the labels over a group
+    constexpr float TITLE_SIZE = 19.f, NAME_SIZE = 16.f, TEXT_SIZE = 15.f, SMALL_SIZE = 13.f, LABEL_SIZE = 11.5f;
+    constexpr float MENU_SCALE = 1.15f;     // The size of the menu when the config has none
 
     constexpr ImU32 BACKGROUND = IM_COL32(8, 8, 10, 255);      // Amoled, like the menu
     constexpr ImU32 PANEL = IM_COL32(19, 19, 22, 255);
@@ -83,6 +90,40 @@ namespace {
             folder = std::filesystem::path(std::u8string(text.begin(), text.end()));
     }
 
+    // A value of the config in the folder, before the program reads it on Start. fallback when it has none
+    template<typename T>
+    T ConfigValue(const char* group, const char* key, T fallback) {
+        std::ifstream file(folder / "config.json", std::ios::binary);
+        auto data = nlohmann::json::parse(file, nullptr, false);
+        if (!data.is_object() || !data.contains(group) || !data[group].is_object() || !data[group].contains(key))
+            return fallback;
+        const auto& value = data[group][key];
+        if constexpr (std::is_same_v<T, bool>)
+            return value.is_boolean() ? value.get<bool>() : fallback;
+        else
+            return value.is_number() ? value.get<T>() : fallback;
+    }
+
+    // The size the menu is used at, so the text looks the same in both
+    float MenuScale() {
+        float scale = ConfigValue("utils", "ui_scale", MENU_SCALE);
+        return std::clamp(std::isfinite(scale) ? scale : MENU_SCALE, 0.8f, 1.6f);
+    }
+
+    // Picked here, from the config of the folder & written to it once the program has read it: the box of the Emote
+    // Pack (downloaded after Start, else with Download in the Emotes panel in game), the key of the menu (0 for Insert
+    // or Right Shift)
+    bool pack_download = true;
+    int menu_key = 0;
+    bool binding_menu_key = false;
+
+    void LoadChoices() {
+        pack_download = ConfigValue("view", "emote_pack_download", true);
+        menu_key = ConfigValue("utils", "menu_key", 0);
+        if (menu_key <= VK_XBUTTON2 || menu_key >= 0xFF)
+            menu_key = 0;
+    }
+
     // Next to the .exe again: the file goes
     void SaveFolder() {
         std::error_code error;
@@ -119,6 +160,7 @@ namespace {
                     folder = path;
                     folder_error.clear();
                     SaveFolder();
+                    LoadChoices();
                     CoTaskMemFree(path);
                 }
                 picked->Release();
@@ -179,14 +221,27 @@ namespace {
     std::atomic<bool> finished = false;
 
     void Work() {
-        // The items need no game: they load while it is found
+        // The items need no game: they load while it is found. The Emote Pack too, in the background: the overlay does
+        // not wait for it (nothing comes when it is all there)
         Skins::FetchList();
         ImageCache::StartPrefetch();
+        if (pack_download)
+            Emotes::DownloadPack();
+
+        // The key of the menu already for the card of an update, when the game turns out to be newer than this
+        cfg::settings::menu_key = menu_key;
 
         game = Step::Running;
         if (!Engine::Attach()) {
             game = Step::Failed;
             return;
+        }
+
+        // What was picked here kept, in the config Attach read
+        if (cfg::view::emote_pack_download != pack_download || cfg::settings::menu_key != menu_key) {
+            cfg::view::emote_pack_download = pack_download;
+            cfg::settings::menu_key = menu_key;
+            Config::Write();
         }
         game = Engine::IsInsecure() ? Step::Done : Step::Warning;
 
@@ -246,13 +301,16 @@ namespace {
     bool Create() {
         ImGui_ImplWin32_EnableDpiAwareness();
 
-        // In the middle of the screen the mouse is on, in its scale
+        // In the middle of the screen the mouse is on, in its scale & the one of the menu, never bigger than the screen
         POINT cursor{};
         GetCursorPos(&cursor);
         HMONITOR monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
-        scale = std::max(1.f, ImGui_ImplWin32_GetDpiScaleForMonitor(monitor));
         MONITORINFO info{ sizeof(info) };
         GetMonitorInfoA(monitor, &info);
+        scale = std::max(1.f, ImGui_ImplWin32_GetDpiScaleForMonitor(monitor)) * MenuScale();
+        scale = std::max(1.f, std::min({ scale,
+            (info.rcWork.right - info.rcWork.left) * 0.95f / WIDTH,
+            (info.rcWork.bottom - info.rcWork.top) * 0.95f / HEIGHT }));
         int width = static_cast<int>(S(WIDTH)), height = static_cast<int>(S(HEIGHT));
         int x = (info.rcWork.left + info.rcWork.right - width) / 2;
         int y = (info.rcWork.top + info.rcWork.bottom - height) / 2;
@@ -307,11 +365,21 @@ namespace {
         auto& io = ImGui::GetIO();
         io.IniFilename = nullptr;
 
-        // The fonts of the menu, kept by us
-        ImFontConfig config;
-        config.FontDataOwnedByAtlas = false;
-        font_regular = io.Fonts->AddFontFromMemoryTTF(inter_medium_font, static_cast<int>(inter_medium_font_len), S(15.f), &config);
-        font_bold = io.Fonts->AddFontFromMemoryTTF(inter_bold_font, static_cast<int>(inter_bold_font_len), S(15.f), &config);
+        // The fonts of the menu, made the same way: Inter kept by us, the letters it does not have (other alphabets in the
+        // folder) from Segoe UI
+        auto font_path = [](const char* preferred, const char* fallback) {
+            return std::filesystem::exists(preferred) ? preferred : fallback;
+        };
+        ImFontConfig text_config;
+        text_config.FontDataOwnedByAtlas = false;
+        ImFontConfig fallback_config;
+        fallback_config.MergeMode = true;
+
+        font_regular = io.Fonts->AddFontFromMemoryTTF(inter_medium_font, static_cast<int>(inter_medium_font_len), 16.f, &text_config);
+        io.Fonts->AddFontFromFileTTF(font_path("C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\arial.ttf"), 16.f, &fallback_config);
+        font_bold = io.Fonts->AddFontFromMemoryTTF(inter_bold_font, static_cast<int>(inter_bold_font_len), 16.f, &text_config);
+        io.Fonts->AddFontFromFileTTF(font_path("C:\\Windows\\Fonts\\seguisb.ttf",
+            font_path("C:\\Windows\\Fonts\\segoeuib.ttf", "C:\\Windows\\Fonts\\arialbd.ttf")), 16.f, &fallback_config);
         if (!font_regular || !font_bold)
             return false;
 
@@ -326,9 +394,9 @@ namespace {
         return true;
     }
 
-    // Text with its top left there
-    void Text(ImDrawList* d, ImFont* font, float size, ImVec2 at, ImU32 color, const char* text) {
-        d->AddText(font, S(size), ImVec2(floorf(at.x), floorf(at.y)), color, text);
+    // Text with its top left there, onto more lines past wrap when it is given
+    void Text(ImDrawList* d, ImFont* font, float size, ImVec2 at, ImU32 color, const char* text, float wrap = 0.f) {
+        d->AddText(font, S(size), ImVec2(floorf(at.x), floorf(at.y)), color, text, nullptr, wrap);
     }
 
     float TextWidth(ImFont* font, float size, const char* text) {
@@ -352,8 +420,34 @@ namespace {
             d->AddRect(min, max, BORDER, S(8.f));
 
         ImU32 color = primary ? (enabled ? IM_COL32(8, 8, 10, 255) : FAINT) : (enabled ? TEXT : FAINT);
-        float width = TextWidth(font_bold, 14.f, label);
-        Text(d, font_bold, 14.f, ImVec2(min.x + (size.x - width) * 0.5f, min.y + (size.y - S(14.f)) * 0.5f - S(1.f)), color, label);
+        float width = TextWidth(font_regular, TEXT_SIZE, label);
+        Text(d, font_regular, TEXT_SIZE, ImVec2(min.x + (size.x - width) * 0.5f, min.y + (size.y - S(TEXT_SIZE)) * 0.5f - S(1.f)), color, label);
+        return pressed;
+    }
+
+    // A box ticked or not, drawn by us: filled in the accent with a check when ticked
+    bool CheckBox(ImDrawList* d, const char* id, ImVec2 center, bool* value, bool enabled) {
+        const float size = S(18.f);
+        auto min = center - ImVec2(size, size) * 0.5f;
+        ImGui::SetCursorScreenPos(min);
+        bool pressed = ImGui::InvisibleButton(id, ImVec2(size, size)) && enabled;
+        bool hovered = ImGui::IsItemHovered();
+        if (hovered && enabled)
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        if (pressed)
+            *value = !*value;
+
+        auto max = min + ImVec2(size, size);
+        if (*value) {
+            d->AddRectFilled(min, max, enabled ? ACCENT : TRACK, S(5.f));
+            ImU32 mark = enabled ? BACKGROUND : FAINT;
+            d->AddLine(center + ImVec2(-S(4.f), 0.f), center + ImVec2(-S(1.f), S(3.f)), mark, S(2.f));
+            d->AddLine(center + ImVec2(-S(1.f), S(3.f)), center + ImVec2(S(4.5f), -S(3.f)), mark, S(2.f));
+        }
+        else {
+            d->AddRectFilled(min, max, hovered && enabled ? PANEL_HOVER : PANEL, S(5.f));
+            d->AddRect(min, max, BORDER, S(5.f), 0, S(1.f));
+        }
         return pressed;
     }
 
@@ -400,6 +494,9 @@ namespace {
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollWithMouse);
         ImGui::PopStyleVar(2);
 
+        // The tooltip of the folder in the text of the menu
+        ImGui::PushFont(font_regular, S(SMALL_SIZE));
+
         auto d = ImGui::GetWindowDrawList();
         const float w = io.DisplaySize.x, h = io.DisplaySize.y;
         const float margin = S(24.f);
@@ -407,8 +504,8 @@ namespace {
         d->AddRect(ImVec2(0.f, 0.f), ImVec2(w, h), BORDER);
 
         // The name, minimize & close at the right
-        Text(d, font_bold, 19.f, ImVec2(margin, S(20.f)), TEXT, TITLE);
-        Text(d, font_regular, 12.f, ImVec2(margin, S(44.f)), FAINT, SUBTITLE);
+        Text(d, font_bold, TITLE_SIZE, ImVec2(margin, S(20.f)), TEXT, TITLE);
+        Text(d, font_regular, SMALL_SIZE, ImVec2(margin, S(44.f)), FAINT, SUBTITLE);
 
         const float button = S(30.f);
         auto close_min = ImVec2(w - margin - button + S(6.f), S(20.f));
@@ -441,7 +538,7 @@ namespace {
         // Written by the check while it runs
         auto status = state != Version::Checking ? Updater::GetStatus() : Status{};
         auto title = std::format("Version {}", Updater::GetVersion());
-        Text(d, font_bold, 14.f, card_min + ImVec2(S(16.f), S(14.f)), TEXT, title.c_str());
+        Text(d, font_bold, NAME_SIZE, card_min + ImVec2(S(16.f), S(13.f)), TEXT, title.c_str());
 
         std::string line;
         ImU32 line_color = DIM;
@@ -452,11 +549,11 @@ namespace {
         case Version::Unsafe: line = "This version is marked unsafe"; line_color = BAD; break;
         case Version::Offline: line = "Could not reach GitHub to check"; line_color = BAD; break;
         }
-        Text(d, font_regular, 12.f, card_min + ImVec2(S(16.f), S(36.f)), line_color, line.c_str());
+        Text(d, font_regular, SMALL_SIZE, card_min + ImVec2(S(16.f), S(36.f)), line_color, line.c_str());
 
         if (state == Version::Newer || state == Version::Offline) {
             const char* label = state == Version::Newer ? "Download" : "Retry";
-            auto size = ImVec2(TextWidth(font_bold, 14.f, label) + S(28.f), S(32.f));
+            auto size = ImVec2(TextWidth(font_regular, TEXT_SIZE, label) + S(28.f), S(32.f));
             auto at = ImVec2(card_max.x - S(16.f) - size.x, (card_min.y + card_max.y - size.y) * 0.5f);
             if (Button(d, "##version_action", at, size, label, true, false)) {
                 if (state == Version::Newer)
@@ -475,10 +572,10 @@ namespace {
             auto folder_min = ImVec2(margin, S(164.f)), folder_max = ImVec2(w - margin, S(216.f));
             d->AddRectFilled(folder_min, folder_max, PANEL, S(10.f));
             d->AddRect(folder_min, folder_max, folder_error.empty() ? BORDER : BAD, S(10.f));
-            Text(d, font_bold, 11.f, folder_min + ImVec2(S(16.f), S(10.f)), FAINT, "FOLDER");
+            Text(d, font_bold, LABEL_SIZE, folder_min + ImVec2(S(16.f), S(10.f)), FAINT, "FOLDER");
 
             const char* label = "Change";
-            auto size = ImVec2(TextWidth(font_bold, 14.f, label) + S(28.f), S(32.f));
+            auto size = ImVec2(TextWidth(font_regular, TEXT_SIZE, label) + S(28.f), S(32.f));
             auto at = ImVec2(folder_max.x - S(10.f) - size.x, (folder_min.y + folder_max.y - size.y) * 0.5f);
             if (Button(d, "##folder", at, size, label, !started, false))
                 PickFolder();
@@ -486,8 +583,8 @@ namespace {
             // The end of a long path shows, its start cut
             auto text = folder_error.empty() ? std::string(reinterpret_cast<const char*>(folder.u8string().c_str())) : folder_error;
             float room = at.x - S(12.f) - (folder_min.x + S(16.f));
-            if (folder_error.empty() && TextWidth(font_regular, 12.f, text.c_str()) > room) {
-                while (text.size() > 4 && TextWidth(font_regular, 12.f, ("..." + text).c_str()) > room)
+            if (folder_error.empty() && TextWidth(font_regular, SMALL_SIZE, text.c_str()) > room) {
+                while (text.size() > 4 && TextWidth(font_regular, SMALL_SIZE, ("..." + text).c_str()) > room)
                     text.erase(0, 1);
                 text = "..." + text;
             }
@@ -496,16 +593,48 @@ namespace {
             ImGui::InvisibleButton("##folder_path", ImVec2(std::max(1.f, room), S(16.f)));
             if (ImGui::IsItemHovered() && folder_error.empty())
                 ImGui::SetTooltip("%s", reinterpret_cast<const char*>(folder.u8string().c_str()));
-            Text(d, font_regular, 12.f, text_min, folder_error.empty() ? DIM : BAD, text.c_str());
+            Text(d, font_regular, SMALL_SIZE, text_min, folder_error.empty() ? DIM : BAD, text.c_str());
+        }
+
+        // The key of the menu: Change, then the key (Escape or Cancel keeps the one there). Not a mouse button: every
+        // click of the game would open it
+        {
+            auto key_min = ImVec2(margin, S(228.f)), key_max = ImVec2(w - margin, S(280.f));
+            d->AddRectFilled(key_min, key_max, PANEL, S(10.f));
+            d->AddRect(key_min, key_max, binding_menu_key ? ACCENT : BORDER, S(10.f));
+            Text(d, font_bold, LABEL_SIZE, key_min + ImVec2(S(16.f), S(10.f)), FAINT, "MENU KEY");
+
+            if (started)
+                binding_menu_key = false;
+            if (binding_menu_key) {
+                for (int vk = VK_BACK; vk <= 0xFE; vk++) {
+                    if (vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU || !(GetAsyncKeyState(vk) & 0x8000))
+                        continue;
+                    if (vk != VK_ESCAPE)
+                        menu_key = vk;
+                    binding_menu_key = false;
+                    break;
+                }
+            }
+
+            const char* label = binding_menu_key ? "Cancel" : "Change";
+            auto size = ImVec2(TextWidth(font_regular, TEXT_SIZE, label) + S(28.f), S(32.f));
+            auto at = ImVec2(key_max.x - S(10.f) - size.x, (key_min.y + key_max.y - size.y) * 0.5f);
+            if (Button(d, "##menu_key", at, size, label, !started, false))
+                binding_menu_key = !binding_menu_key;
+
+            auto text = binding_menu_key ? std::string("Press a key") : Renderer::GetMenuKeyName(menu_key);
+            Text(d, font_regular, SMALL_SIZE, key_min + ImVec2(S(16.f), S(27.f)), binding_menu_key ? TEXT : DIM, text.c_str());
         }
 
         // The checks of Start
-        Text(d, font_bold, 11.f, ImVec2(margin, S(236.f)), FAINT, "CHECKS");
+        Text(d, font_bold, LABEL_SIZE, ImVec2(margin, S(300.f)), FAINT, "CHECKS");
 
         struct Row {
             const char* name;
             Step step;
             std::string detail;
+            bool* check = nullptr;          // A box at its right, changed until Start
         };
 
         Step game_step = game;
@@ -515,7 +644,7 @@ namespace {
         else if (game_step == Step::Done)
             game_detail = "Found, launched with -insecure";
         else if (game_step == Step::Warning)
-            game_detail = "Found, without -insecure: only the reading features";
+            game_detail = "Found, without -insecure: reading only";
         else if (game_step == Step::Failed)
             game_detail = Engine::GetProgress();
 
@@ -524,7 +653,7 @@ namespace {
             : Skins::HasFailed() ? Step::Warning : Step::Running;
         std::string list_detail = list_step == Step::Pending ? "Waiting for Start"
             : list_step == Step::Done ? std::format("{} weapons, {} agents, {} music kits", Skins::GetItems().size(), Skins::GetAgents().size(), Skins::GetMusicKits().size())
-            : list_step == Step::Warning ? "Could not be loaded, the skin changer works by ids" : "Loading the skins, agents & music kits";
+            : list_step == Step::Warning ? "Not loaded, the skin changer works by ids" : "Loading the skins, agents & music kits";
 
         float pictures = ImageCache::GetPrefetchPercent();
         Step pictures_step = !started ? Step::Pending : ImageCache::IsPrefetched() ? Step::Done : Step::Running;
@@ -536,19 +665,51 @@ namespace {
         else if (pictures_detail.rfind("Loading ", 0) == 0)
             pictures_detail = "Downloading " + pictures_detail.substr(8);
 
+        // The Fortnite dances: from Start on while its box is ticked, else with Download in the Emotes panel in game.
+        // Not waited for
+        Step pack_step = Step::Pending;
+        std::string pack_detail;
+        if (!pack_download)
+            pack_detail = "Not here: Download in the Emotes panel in game";
+        else if (!started)
+            pack_detail = "Waiting for Start";
+        else if (Emotes::IsDownloadingPack() || Emotes::GetPackMissing() < 0) {
+            pack_step = Step::Running;
+            pack_detail = Emotes::GetPackStatus();
+            if (pack_detail.empty())
+                pack_detail = "Looking for its files";
+        }
+        else if (Emotes::GetPackMissing() == 0) {
+            pack_step = Step::Done;
+            pack_detail = "On the disk";
+        }
+        else {
+            pack_step = Step::Warning;
+            pack_detail = Emotes::GetPackStatus();
+            if (pack_detail.empty())
+                pack_detail = "Not all of it is there, Download in Emotes tries again";
+        }
+
         const Row rows[] = {
             { "Game", game_step, game_detail },
             { "Item list", list_step, list_detail },
             { "Item pictures", pictures_step, pictures_detail },
+            { "Emote Pack", pack_step, pack_detail, &pack_download },
         };
 
-        float y = S(260.f);
+        float y = S(324.f);
         for (const auto& row : rows) {
             StepIcon(d, ImVec2(margin + S(9.f), y + S(16.f)), row.step, time);
-            Text(d, font_bold, 14.f, ImVec2(margin + S(30.f), y + S(1.f)), row.step == Step::Pending ? DIM : TEXT, row.name);
+            Text(d, font_regular, TEXT_SIZE, ImVec2(margin + S(30.f), y + S(1.f)), row.step == Step::Pending ? DIM : TEXT, row.name);
             ImU32 detail_color = row.step == Step::Failed ? BAD : row.step == Step::Warning ? WARN : FAINT;
-            d->PushClipRect(ImVec2(margin + S(30.f), y), ImVec2(w - margin, y + S(44.f)), true);
-            Text(d, font_regular, 12.f, ImVec2(margin + S(30.f), y + S(20.f)), detail_color, row.detail.c_str());
+            float right = w - margin;
+            if (row.check) {
+                CheckBox(d, row.name, ImVec2(right - S(9.f), y + S(16.f)), row.check, !started);
+                right -= S(30.f);
+            }
+            // Two lines at most, a long reason why it failed included
+            d->PushClipRect(ImVec2(margin + S(30.f), y), ImVec2(right, y + S(48.f)), true);
+            Text(d, font_regular, SMALL_SIZE, ImVec2(margin + S(30.f), y + S(20.f)), detail_color, row.detail.c_str(), right - margin - S(30.f));
             d->PopClipRect();
             y += S(50.f);
         }
@@ -566,8 +727,8 @@ namespace {
             float pulse = 0.5f + 0.5f * sinf(time * 3.f);
             d->AddRectFilled(notice_min, notice_max, IM_COL32(240, 180, 60, 22), S(10.f));
             d->AddRect(notice_min, notice_max, IM_COL32(240, 180, 60, static_cast<int>(110 + 90 * pulse)), S(10.f), 0, S(1.5f));
-            Text(d, font_bold, 14.f, notice_min + ImVec2(S(16.f), S(11.f)), WARN, "Launch CS2");
-            Text(d, font_regular, 12.f, notice_min + ImVec2(S(16.f), S(31.f)), DIM, "It is used as soon as it opens, keep this open");
+            Text(d, font_bold, NAME_SIZE, notice_min + ImVec2(S(16.f), S(10.f)), WARN, "Launch CS2");
+            Text(d, font_regular, SMALL_SIZE, notice_min + ImVec2(S(16.f), S(32.f)), DIM, "Used as soon as it opens, keep this open");
         }
 
         // How far, then Start
@@ -583,8 +744,8 @@ namespace {
             d->AddRectFilled(bar_min, bar_max, TRACK, S(2.f));
             d->AddRectFilled(bar_min, ImVec2(bar_min.x + (bar_max.x - bar_min.x) * shown, bar_max.y), ACCENT, S(2.f));
             auto text = std::format("{}%", static_cast<int>(shown * 100.f + 0.5f));
-            Text(d, font_regular, 12.f, ImVec2(bar_max.x - TextWidth(font_regular, 12.f, text.c_str()), bar_min.y - S(20.f)), DIM, text.c_str());
-            Text(d, font_regular, 12.f, ImVec2(margin, bar_min.y - S(20.f)), DIM, finished ? "Ready" : "Checking...");
+            Text(d, font_regular, SMALL_SIZE, ImVec2(bar_max.x - TextWidth(font_regular, SMALL_SIZE, text.c_str()), bar_min.y - S(20.f)), DIM, text.c_str());
+            Text(d, font_regular, SMALL_SIZE, ImVec2(margin, bar_min.y - S(20.f)), DIM, finished ? "Ready" : "Checking...");
         }
 
         const char* label = "Start";
@@ -610,18 +771,21 @@ namespace {
             }
         }
 
+        ImGui::PopFont();
         ImGui::End();
     }
 }
 
 bool Loader::Run() {
+    // The folder first: its config has the size of the menu, the window takes it, & the box of the Emote Pack
+    LoadFolder();
+    LoadChoices();
     if (!Create()) {
         Destroy();
         MessageBoxA(nullptr, "The window of the loader could not be made (DirectX 11).", TITLE, MB_ICONERROR);
         return false;
     }
 
-    LoadFolder();
     CheckVersion();
 
     std::chrono::steady_clock::time_point finished_at{}, outdated_at{};

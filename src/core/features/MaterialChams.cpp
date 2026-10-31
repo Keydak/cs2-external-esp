@@ -141,6 +141,66 @@ void MaterialChams::SetHiddenBodies(const std::vector<uintptr_t>& pawns) {
     i.hidden_bodies = pawns;
 }
 
+void MaterialChams::SetHiddenPlayer(uintptr_t pawn) {
+    auto& i = GetInstance();
+    std::lock_guard lock(i.bodies_mutex);
+    i.hidden_player = pawn;
+}
+
+void MaterialChams::SetDancer(uintptr_t pawn, uintptr_t dance_model, uintptr_t shown) {
+    auto& i = GetInstance();
+    std::lock_guard lock(i.bodies_mutex);
+    i.dancer = pawn;
+    i.dance_model = dance_model;
+    i.dance_shown = shown;
+}
+
+std::string MaterialChams::Describe(uintptr_t entity) {
+    auto& i = GetInstance();
+    auto p = Engine::GetProcess();
+    if (!p || !entity || !vis::m_pSceneNode || !vis::sceneNodeList || !vis::sceneHandleObject)
+        return "?";
+
+    // The table as the stub reads it
+    std::vector<uint64_t> table;
+    uint32_t count = i.page ? std::min<uint32_t>(p->read<uint32_t>(i.page + DATA_COUNT), MAX_ENTRIES) : 0;
+    table.resize(count * 2);
+    if (count)
+        p->read_raw(i.page + TABLE, table.data(), table.size() * sizeof(uint64_t));
+
+    auto node = p->read<uintptr_t>(entity + vis::m_pSceneNode);
+    int objects = node ? std::clamp(p->read<int32_t>(node + vis::sceneNodeCount), 0, 16) : 0;
+    auto list = objects ? p->read<uintptr_t>(node + vis::sceneNodeList) : 0;
+    std::string text = std::format("{} objects", objects);
+    for (int k = 0; list && k < objects; k++) {
+        auto handle = p->read<uintptr_t>(list + k * sizeof(uintptr_t));
+        auto object = handle ? p->read<uintptr_t>(handle + vis::sceneHandleObject) : 0;
+        std::string kind = "-";
+        for (uint32_t e = 0; object && e < count; e++)
+            if (table[e * 2] == object) {
+                kind = std::format("0x{:X}", table[e * 2 + 1]);
+                break;
+            }
+        text += std::format(" 0x{:X}:{}", object, kind);
+    }
+
+    // The copy of a dance: what would have left it out
+    std::lock_guard lock(i.bodies_mutex);
+    if (entity == i.dance_shown)
+        text += std::format(", {} entries of others kept out", i.shown_kept.load());
+    return text;
+}
+
+bool MaterialChams::CanHide() {
+    return GetInstance().can_hide;
+}
+
+void MaterialChams::Refresh() {
+    auto& i = GetInstance();
+    if (i.installed && i.page)
+        i.WriteTargets();
+}
+
 bool MaterialChams::Wanted(const cfg::visuals::material_chams::group_t& group) {
     return group.visible.enabled || Hidden(group);
 }
@@ -187,7 +247,7 @@ void MaterialChams::Update() {
     bool bodies = false;
     {
         std::lock_guard lock(this->bodies_mutex);
-        bodies = !this->hidden_bodies.empty();
+        bodies = !this->hidden_bodies.empty() || this->hidden_player || this->dancer;
     }
     bool wanted = bodies;
     for (uint32_t kind = 1; kind <= CLASS_COUNT; kind++) {
@@ -216,6 +276,7 @@ void MaterialChams::Update() {
 
     if (!wanted) {
         p->write<uint32_t>(this->page + DATA_ENABLED, 0);
+        this->can_hide = false;
         return;
     }
 
@@ -227,6 +288,7 @@ void MaterialChams::Update() {
     WriteTargets();
     Calibrate();
     p->write<uint32_t>(this->page + DATA_ENABLED, 1);
+    this->can_hide = p->read<int32_t>(this->page + DATA_OWNER) != -1;
 }
 
 bool MaterialChams::Install() {
@@ -755,6 +817,7 @@ bool MaterialChams::UpdateMaterials() {
 }
 
 void MaterialChams::WriteTargets() {
+    std::lock_guard targets_lock(this->targets_mutex);
     auto p = Engine::GetProcess();
     auto snapshot = Cache::CopySnapshot();
     const auto& local = snapshot.local;
@@ -763,16 +826,40 @@ void MaterialChams::WriteTargets() {
     uint32_t count = 0;
 
     // The scene objects of the model of an entity
-    auto add = [&](uintptr_t entity, uint64_t kind) {
+    auto objects_of = [&](uintptr_t entity) {
+        std::vector<uintptr_t> found;
         auto node = entity ? p->read<uintptr_t>(entity + vis::m_pSceneNode) : 0;
         int objects = node ? std::clamp(p->read<int32_t>(node + vis::sceneNodeCount), 0, 16) : 0;
         auto list = objects ? p->read<uintptr_t>(node + vis::sceneNodeList) : 0;
-
-        for (int k = 0; list && k < objects && count < MAX_ENTRIES; k++) {
+        for (int k = 0; list && k < objects; k++) {
             auto handle = p->read<uintptr_t>(list + k * sizeof(uintptr_t));
-            auto object = handle ? p->read<uintptr_t>(handle + vis::sceneHandleObject) : 0;
-            if (!object)
+            if (auto object = handle ? p->read<uintptr_t>(handle + vis::sceneHandleObject) : 0)
+                found.push_back(object);
+        }
+        return found;
+    };
+
+    // The copy dancing for our player: drawn as it is, whatever else names its scene objects (the dance it hangs on, a
+    // scene object freed & made again for it)
+    std::vector<uintptr_t> shown;
+    int kept = 0;
+    if (vis::m_pSceneNode && vis::sceneNodeList && vis::sceneHandleObject) {
+        uintptr_t entity = 0;
+        {
+            std::lock_guard lock(this->bodies_mutex);
+            entity = this->dancer ? this->dance_shown : 0;
+        }
+        shown = objects_of(entity);
+    }
+
+    auto add = [&](uintptr_t entity, uint64_t kind) {
+        for (auto object : objects_of(entity)) {
+            if (count >= MAX_ENTRIES)
+                break;
+            if (std::find(shown.begin(), shown.end(), object) != shown.end()) {
+                kept++;
                 continue;
+            }
 
             uint64_t entry[2] = { object, kind };
             table.insert(table.end(), reinterpret_cast<uint8_t*>(entry), reinterpret_cast<uint8_t*>(entry) + sizeof(entry));
@@ -781,11 +868,52 @@ void MaterialChams::WriteTargets() {
     };
 
     if (vis::m_pSceneNode && vis::sceneNodeList && vis::sceneHandleObject) {
-        // The bodies left undrawn first: a pawn that is one is dead, never in the players below
+        // The bodies left undrawn first: a pawn that is one is dead, never in the players below. The one watched alive
+        // too, with what it holds or wears: the first entry of an object wins, its chams below never draw it
         {
             std::lock_guard lock(this->bodies_mutex);
             for (auto pawn : this->hidden_bodies)
                 add(pawn, SKIP | NO_HIDDEN);
+
+            if (auto pawn = this->hidden_player) {
+                add(pawn, SKIP | NO_HIDDEN);
+                auto weapon_services = p->read<uintptr_t>(pawn + offsets::pawn::m_pWeaponServices);
+                int weapons = weapon_services ? std::clamp(p->read<int32_t>(weapon_services + offsets::econ::m_hMyWeapons), 0, 16) : 0;
+                auto handles = weapons ? p->read<uintptr_t>(weapon_services + offsets::econ::m_hMyWeapons + 0x8) : 0;
+                for (int k = 0; handles && k < weapons && count < MAX_ENTRIES; k++)
+                    add(Engine::GetEntityFromHandle(p->read<uint32_t>(handles + k * sizeof(uint32_t))), SKIP | NO_HIDDEN);
+            }
+
+            // Our dancing player & what hangs on it (gloves, the charms of its weapons...): it would all stay standing
+            // where the player is
+            if (auto pawn = this->dancer) {
+                constexpr int MAX_CHILDREN = 32;
+                auto add_tree = [&](uintptr_t entity) {
+                    add(entity, SKIP | NO_HIDDEN);
+                    auto node = entity ? p->read<uintptr_t>(entity + offsets::pawn::m_pGameSceneNode) : 0;
+                    auto child = node ? p->read<uintptr_t>(node + offsets::econ::m_pChild) : 0;
+                    for (int k = 0; child && k < MAX_CHILDREN && count < MAX_ENTRIES; k++, child = p->read<uintptr_t>(child + offsets::econ::m_pNextSibling)) {
+                        auto owner = p->read<uintptr_t>(child + offsets::econ::m_pOwner);
+                        if (!owner || owner == entity)
+                            continue;
+                        add(owner, SKIP | NO_HIDDEN);
+                        auto inner = p->read<uintptr_t>(child + offsets::econ::m_pChild);
+                        for (int j = 0; inner && j < MAX_CHILDREN && count < MAX_ENTRIES; j++, inner = p->read<uintptr_t>(inner + offsets::econ::m_pNextSibling))
+                            if (auto attached = p->read<uintptr_t>(inner + offsets::econ::m_pOwner); attached && attached != owner)
+                                add(attached, SKIP | NO_HIDDEN);
+                    }
+                };
+
+                add_tree(pawn);
+                auto weapon_services = p->read<uintptr_t>(pawn + offsets::pawn::m_pWeaponServices);
+                int weapons = weapon_services ? std::clamp(p->read<int32_t>(weapon_services + offsets::econ::m_hMyWeapons), 0, 16) : 0;
+                auto handles = weapons ? p->read<uintptr_t>(weapon_services + offsets::econ::m_hMyWeapons + 0x8) : 0;
+                for (int k = 0; handles && k < weapons && count < MAX_ENTRIES; k++)
+                    add_tree(Engine::GetEntityFromHandle(p->read<uint32_t>(handles + k * sizeof(uint32_t))));
+
+                if (this->dance_model)
+                    add(this->dance_model, SKIP | NO_HIDDEN);
+            }
         }
 
         for (const auto& player : snapshot.players) {
@@ -881,6 +1009,8 @@ void MaterialChams::WriteTargets() {
             }
         }
     }
+
+    this->shown_kept = kept;
 
     // The entries first, then how many: the stub reads them any time
     if (!table.empty())

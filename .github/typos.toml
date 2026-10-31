@@ -3,4 +3,6 @@ extend-exclude = [
   "**/include/**",
   "**/classes/**",
   "**/x64/**",
+  # Names of Fortnite dances & the sequences of the dance model, spelled as they are
+  "**/EmoteDances.hpp",
 ]

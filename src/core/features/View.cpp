@@ -5,6 +5,7 @@
 #include "core/features/Movement.hpp"
 #include "core/features/Visuals.hpp"
 #include "core/features/Freecam.hpp"
+#include "core/features/Emotes.hpp"
 
 #include <bit>
 
@@ -154,8 +155,11 @@ void View::UpdateThirdPerson(uintptr_t pawn) {
     if (wanted && cfg::view::third_person_scoped_off && Visuals::IsZoomed(pawn))
         wanted = false;
 
-    // The camera away from us shows our player, without the weapon in our hands
-    if (pawn && Freecam::GetMode() != Freecam::Mode::Off)
+    // The camera away from us shows our player, without the weapon in our hands. Watching alive the game spectates
+    // them too, first person draws the weapon in their hands. An emote is only seen from behind us
+    if (pawn && Freecam::IsSpectating())
+        wanted = false;
+    else if (pawn && (Freecam::GetMode() != Freecam::Mode::Off || Emotes::IsPlaying()))
         wanted = true;
 
     if (!wanted) {

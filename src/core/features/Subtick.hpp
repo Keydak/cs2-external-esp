@@ -132,7 +132,20 @@ private:
         bool took_off = false;
         bool a_placed = false; int a_build = 0; float a_when = 0.f; int a_sequence = -1;
         bool b_placed = false; int b_build = 0;
+        int moved = 0;      // Times its part of the tick changed
+        int stale = 0;      // Reads of the landing before it, while prediction ran again
     } landing;
+
+#ifdef _DEBUG
+    // Debug: each command near a landing as we saw it, by tickbase
+    struct Seen {
+        int looks = 0;
+        bool fresh = false;     // Not run yet by the game at some look
+        bool falling = false;
+        float contact = -2.f;   // Where the map put the feet down, -1 nowhere, -2 not asked
+    };
+    std::map<int, Seen> seen_builds;
+#endif
 
     // A press written before the game had a landing to write it from
     struct Pending {

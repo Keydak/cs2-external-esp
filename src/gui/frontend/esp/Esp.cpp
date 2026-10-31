@@ -808,11 +808,12 @@ void Esp::RenderScope(const Snapshot& snapshot) {
 	const auto& local = snapshot.local;
 	const Player* viewed = nullptr;
 
-	if (local.alive)
+	// Alive & watching someone (the profile page) their eyes too
+	if (local.alive && !Freecam::IsSpectating())
 		viewed = Freecam::GetMode() == Freecam::Mode::Off ? &local : nullptr;
 	else {
 		for (const auto& player : snapshot.players) {
-			bool watched = (local.observer_services.target == player.pawn_controller_addr && local.observer_services.mode == ObserverMode::First)
+			bool watched = (!local.alive && local.observer_services.target == player.pawn_controller_addr && local.observer_services.mode == ObserverMode::First)
 				|| (Freecam::IsFirstPerson() && Freecam::GetTarget() == player.GetPawnAddress());
 			if (watched && player.alive) {
 				viewed = &player;

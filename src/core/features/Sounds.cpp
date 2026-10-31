@@ -53,6 +53,22 @@ namespace {
     constexpr size_t GAME_PATH_ID = 0x6C0;
     constexpr size_t GAME_FOLDER = 0x700;      // To the end
 
+    // Page of the music: playvol with the guid of the sound it started kept (the last one before & after: the same when
+    // nothing started), & its stop by that guid
+    constexpr size_t MUSIC_PAGE_SIZE = 0x100;
+    constexpr size_t MUSIC_PLAY_CODE = 0x00;
+    constexpr size_t MUSIC_STOP_CODE = 0x60;
+    constexpr size_t MUSIC_GUID_BEFORE = 0xC0;
+    constexpr size_t MUSIC_GUID = 0xC4;
+    constexpr DWORD MUSIC_CALL_TIMEOUT = 1000; // ms, a long song takes the game a moment to open
+    constexpr auto MUSIC_PREFIX = "music_";
+
+    // A sound of the game that has the old DATA block with plain samples (version 4: format, samples, duration, size
+    // of the samples): the blocks of ours are copied from it
+    constexpr auto SOUND_TEMPLATE = "sounds/weapons/incgrenade/inc_grenade_detonate_air_01.vsnd_c";
+    // Loudness the songs are turned down to (RMS of 16 bit samples), never up: some are mastered much louder
+    constexpr double MUSIC_LOUDNESS = 3000.0;
+
     // A resource name the game takes: lowercase letters, digits & underscores
     std::string SafeName(const std::string& stem) {
         std::string out;
@@ -387,6 +403,116 @@ namespace {
         out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
         return !out.empty();
     }
+
+    // csgo/ of the running game: game/bin/win64/cs2.exe -> game/csgo
+    std::filesystem::path GameFolder() {
+        auto p = Engine::GetProcess();
+        wchar_t image[MAX_PATH]{};
+        DWORD size = MAX_PATH;
+        if (!p || !QueryFullProcessImageNameW(p->handle_, 0, image, &size))
+            return {};
+        return std::filesystem::path(image).parent_path().parent_path().parent_path() / "csgo";
+    }
+
+    // Files out of the vpk of a game folder (pak01_dir.vpk, the data in it or in its numbered archives), by their
+    // path. The ones not found are left out
+    std::unordered_map<std::string, std::string> ReadVpkFiles(const std::filesystem::path& folder, const std::vector<std::string>& wanted) {
+        std::unordered_map<std::string, std::string> found;
+        std::ifstream f(folder / "pak01_dir.vpk", std::ios::binary);
+        uint32_t header[3]{};
+        f.read(reinterpret_cast<char*>(header), sizeof(header));
+        if (!f || header[0] != 0x55AA1234)
+            return found;
+
+        uint32_t header_size = 12;
+        if (header[1] == 2) {
+            f.seekg(16, std::ios::cur);
+            header_size += 16;
+        }
+        std::vector<char> tree(header[2]);
+        f.read(tree.data(), tree.size());
+        if (!f)
+            return found;
+
+        struct Entry {
+            std::string preload;
+            uint16_t archive;
+            uint32_t offset, length;
+        };
+        std::unordered_map<std::string, Entry> entries;
+        size_t p = 0;
+        auto read_string = [&]() {
+            std::string out;
+            while (p < tree.size() && tree[p])
+                out += tree[p++];
+            p++;
+            return out;
+        };
+        for (std::string extension; p < tree.size() && !(extension = read_string()).empty();) {
+            for (std::string directory; p < tree.size() && !(directory = read_string()).empty();) {
+                for (std::string name; p < tree.size() && !(name = read_string()).empty();) {
+                    if (p + 18 > tree.size())
+                        return found;
+                    uint16_t preload, archive;
+                    uint32_t offset, length;
+                    std::memcpy(&preload, &tree[p + 4], 2);
+                    std::memcpy(&archive, &tree[p + 6], 2);
+                    std::memcpy(&offset, &tree[p + 8], 4);
+                    std::memcpy(&length, &tree[p + 12], 4);
+                    auto path = (directory == " " ? std::string() : directory + "/") + name + "." + extension;
+                    if (std::find(wanted.begin(), wanted.end(), path) != wanted.end() && p + 18 + preload <= tree.size())
+                        entries[path] = { std::string(&tree[p + 18], preload), archive, offset, length };
+                    p += 18 + preload;
+                }
+            }
+        }
+
+        for (const auto& [path, entry] : entries) {
+            std::string data(entry.length, '\0');
+            if (entry.archive == 0x7FFF) {
+                f.clear();
+                f.seekg(static_cast<std::streamoff>(header_size) + header[2] + entry.offset);
+                f.read(data.data(), data.size());
+                if (!f)
+                    continue;
+            }
+            else {
+                std::ifstream archive(folder / std::format("pak01_{:03}.vpk", entry.archive), std::ios::binary);
+                archive.seekg(entry.offset);
+                archive.read(data.data(), data.size());
+                if (!archive)
+                    continue;
+            }
+            found[path] = entry.preload + data;
+        }
+        return found;
+    }
+
+    // Where the blocks of a Source 2 resource end (the sound comes after) & where its DATA block is, false when it is
+    // not one
+    bool ResourceBlocks(const std::string& bytes, size_t& end, size_t& data, size_t& data_size) {
+        if (bytes.size() < 16 || At<uint16_t>(bytes, 4) != 12)
+            return false;
+        size_t table = 8 + At<uint32_t>(bytes, 8);
+        uint32_t count = At<uint32_t>(bytes, 12);
+        if (count > 64)
+            return false;
+        end = 16;
+        data = data_size = 0;
+        for (uint32_t i = 0; i < count; i++) {
+            size_t entry = table + i * 12;
+            if (entry + 12 > bytes.size())
+                return false;
+            size_t start = entry + 4 + At<uint32_t>(bytes, entry + 4);
+            size_t size = At<uint32_t>(bytes, entry + 8);
+            end = std::max({ end, entry + 12, start + size });
+            if (bytes.compare(entry, 4, "DATA") == 0) {
+                data = start;
+                data_size = size;
+            }
+        }
+        return end <= bytes.size();
+    }
 }
 
 bool Sounds::Init() {
@@ -484,6 +610,265 @@ void Sounds::Play(const std::string& file, int volume, int count) {
     sounds.wake.notify_one();
 }
 
+void Sounds::PlayMusic(const std::filesystem::path& file, int volume) {
+    auto& sounds = GetInstance();
+    {
+        std::lock_guard lock(sounds.mutex);
+        Request request{ file, std::clamp(volume, 0, 100), std::chrono::steady_clock::now() };
+        request.kind = Kind::Music;
+        request.generation = sounds.music_generation;
+        sounds.queue.push_back(std::move(request));
+    }
+    sounds.wake.notify_one();
+}
+
+void Sounds::StopMusic() {
+    auto& sounds = GetInstance();
+    sounds.music_generation++;
+
+    std::lock_guard lock(sounds.music_mutex);
+    if (!sounds.music_playing || !sounds.music_page)
+        return;
+    sounds.music_playing = false;
+    if (!GameThread::Call(sounds.music_page + MUSIC_STOP_CODE, MUSIC_CALL_TIMEOUT))
+        LOGF(WARNING, "Music: the game did not take the stop in time");
+}
+
+void Sounds::PrepareMusic() {
+    auto& sounds = GetInstance();
+    {
+        std::lock_guard lock(sounds.mutex);
+        Request request{ {}, 0, std::chrono::steady_clock::now() };
+        request.kind = Kind::PrepareMusic;
+        sounds.queue.push_back(std::move(request));
+    }
+    sounds.wake.notify_one();
+}
+
+void Sounds::PlayMusicNow(const Request& request) {
+    if (request.generation != this->music_generation)
+        return;
+
+    // Our calls run in a match only, the first adds our folder to the game
+    if (!Cache::Current()->globals.in_match)
+        return;
+
+    auto told = [&](const char* why) {
+        if (!this->music_told)
+            LOGF(WARNING, "Music: {}, the dances stay silent", why);
+        this->music_told = true;
+    };
+    if (!EnsureGameSound()) {
+        told("the sound system of the game cannot be used");
+        return;
+    }
+    if (!EnsureMusic()) {
+        told("the stop of a sound was not found");
+        return;
+    }
+
+    // Made before the stop: the music before plays on meanwhile
+    auto name = MusicName(request.path);
+    if (name.empty() || name.size() + 1 > GAME_ARG_VOLUME - GAME_ARG_NAME)
+        return;
+
+    std::lock_guard lock(this->music_mutex);
+    if (request.generation != this->music_generation)
+        return;
+
+    if (this->music_playing) {
+        this->music_playing = false;
+        GameThread::Call(this->music_page + MUSIC_STOP_CODE, MUSIC_CALL_TIMEOUT);
+    }
+
+    // Loudness rises gently like the volume slider of the game, as the hit & kill sounds
+    auto p = Engine::GetProcess();
+    float level = request.volume / 100.f;
+    auto volume_text = std::format("{:.3f}", level * level);
+
+    std::vector<uint8_t> args(GAME_ARG_VOLUME + 32 - GAME_ARG_NAME, 0);
+    std::memcpy(args.data(), name.c_str(), name.size() + 1);
+    std::memcpy(args.data() + (GAME_ARG_VOLUME - GAME_ARG_NAME), volume_text.c_str(), volume_text.size() + 1);
+    p->write_bytes(this->game_page + GAME_ARG_NAME, args);
+
+    if (!GameThread::Call(this->music_page + MUSIC_PLAY_CODE, MUSIC_CALL_TIMEOUT)) {
+        LOGF(WARNING, "Music: the game did not take {} in time", name);
+        return;
+    }
+
+    // A new guid: it started
+    auto before = p->read<uint32_t>(this->music_page + MUSIC_GUID_BEFORE);
+    auto guid = p->read<uint32_t>(this->music_page + MUSIC_GUID);
+    this->music_playing = guid != before;
+    if (this->music_playing)
+        LOGF(INFO, "Music: the game plays {} (sound {})", name, guid);
+    else
+        LOGF(WARNING, "Music: the game did not start {}", name);
+}
+
+bool Sounds::EnsureMusic() {
+    if (this->music_page)
+        return true;
+    if (!this->game_page || !offsets::sounds::dwLastSoundGuid || !offsets::sounds::fnStopSoundByGuid)
+        return false;
+
+    auto p = Engine::GetProcess();
+    auto sound = p->GetModule("soundsystem.dll");
+    if (!sound.base)
+        return false;
+    auto page = p->allocate_remote(MUSIC_PAGE_SIZE, PAGE_EXECUTE_READWRITE);
+    if (!page)
+        return false;
+
+    std::vector<uint8_t> data(MUSIC_PAGE_SIZE, 0);
+    std::vector<uint8_t> code;
+    auto emit = [&](std::initializer_list<uint8_t> bytes) { code.insert(code.end(), bytes); };
+    auto emit64 = [&](uint64_t value) { for (int i = 0; i < 8; i++) code.push_back(static_cast<uint8_t>(value >> (i * 8))); };
+    auto last = sound.base + offsets::sounds::dwLastSoundGuid;
+
+    // The last guid kept before & after playvol(0, &command): every sound started writes it, under the lock of the
+    // channels, this one right before playvol gives the lock back
+    emit({ 0x48, 0x83, 0xEC, 0x28 });                           // sub rsp, 0x28
+    emit({ 0x48, 0xB8 }); emit64(last);                         // mov rax, last guid
+    emit({ 0x8B, 0x00 });                                       // mov eax, [rax]
+    emit({ 0x48, 0xB9 }); emit64(page + MUSIC_GUID_BEFORE);     // mov rcx, before
+    emit({ 0x89, 0x01 });                                       // mov [rcx], eax
+    emit({ 0x31, 0xC9 });                                       // xor ecx, ecx
+    emit({ 0x48, 0xBA }); emit64(this->game_page + GAME_COMMAND); // mov rdx, command
+    emit({ 0x48, 0xB8 }); emit64(sound.base + offsets::sounds::fnPlayVol); // mov rax, playvol
+    emit({ 0xFF, 0xD0 });                                       // call rax
+    emit({ 0x48, 0xB8 }); emit64(last);                         // mov rax, last guid
+    emit({ 0x8B, 0x00 });                                       // mov eax, [rax]
+    emit({ 0x48, 0xB9 }); emit64(page + MUSIC_GUID);            // mov rcx, guid
+    emit({ 0x89, 0x01 });                                       // mov [rcx], eax
+    emit({ 0x48, 0x83, 0xC4, 0x28 });                           // add rsp, 0x28
+    emit({ 0xC3 });                                             // ret
+    if (code.size() > MUSIC_STOP_CODE - MUSIC_PLAY_CODE)
+        return false;
+    std::copy(code.begin(), code.end(), data.begin() + MUSIC_PLAY_CODE);
+
+    // StopSoundByGuid(0, guid): a sound already over is not found & left alone
+    code.clear();
+    emit({ 0x48, 0x83, 0xEC, 0x28 });                           // sub rsp, 0x28
+    emit({ 0x48, 0xB8 }); emit64(page + MUSIC_GUID);            // mov rax, guid
+    emit({ 0x8B, 0x10 });                                       // mov edx, [rax]
+    emit({ 0x31, 0xC9 });                                       // xor ecx, ecx
+    emit({ 0x48, 0xB8 }); emit64(sound.base + offsets::sounds::fnStopSoundByGuid); // mov rax, StopSoundByGuid
+    emit({ 0xFF, 0xD0 });                                       // call rax
+    emit({ 0x48, 0x83, 0xC4, 0x28 });                           // add rsp, 0x28
+    emit({ 0xC3 });                                             // ret
+    if (code.size() > MUSIC_GUID_BEFORE - MUSIC_STOP_CODE)
+        return false;
+    std::copy(code.begin(), code.end(), data.begin() + MUSIC_STOP_CODE);
+
+    p->write_bytes(page, data);
+    FlushInstructionCache(p->handle_, reinterpret_cast<void*>(page), MUSIC_PAGE_SIZE);
+    std::lock_guard lock(this->music_mutex);
+    this->music_page = page;
+    return true;
+}
+
+bool Sounds::LoadSoundTemplate() {
+    if (this->template_tried)
+        return !this->sound_template.empty();
+    this->template_tried = true;
+
+    auto folder = GameFolder();
+    auto found = folder.empty() ? std::unordered_map<std::string, std::string>{} : ReadVpkFiles(folder, { SOUND_TEMPLATE });
+    auto it = found.find(SOUND_TEMPLATE);
+    size_t end = 0, data = 0, data_size = 0;
+    if (it == found.end() || !ResourceBlocks(it->second, end, data, data_size) || data_size < 0x20
+        || ((At<uint32_t>(it->second, data) >> 16) & 0xFF) != 0) {
+        LOGF(WARNING, "Music: no sound of the game to make the songs like");
+        return false;
+    }
+
+    this->sound_template = it->second.substr(0, end);
+    this->template_data = data;
+    return true;
+}
+
+std::string Sounds::MusicName(const std::filesystem::path& source) {
+    std::error_code ec;
+    auto stem = SafeName(Utf8(source.stem()));
+    auto name = std::string(GAME_SOUND_DIR) + "/" + MUSIC_PREFIX + stem;
+    auto target = game_dir / (name + ".vsnd_c");
+
+    // Made before from the same song
+    auto made = std::filesystem::last_write_time(target, ec);
+    if (!ec) {
+        auto changed = std::filesystem::last_write_time(source, ec);
+        if (!ec && made >= changed)
+            return name;
+    }
+
+    if (!LoadSoundTemplate())
+        return {};
+
+    std::vector<uint8_t> pcm, format;
+    if (!Decode(source.wstring(), pcm, format) || format.size() < sizeof(WAVEFORMATEX)) {
+        LOGF(WARNING, "Music: could not read {}", Utf8(source));
+        return {};
+    }
+    auto wave = reinterpret_cast<const WAVEFORMATEX*>(format.data());
+    int channels = wave->nChannels;
+    uint32_t rate = wave->nSamplesPerSec;
+    if (wave->wBitsPerSample != 16 || channels < 1 || rate == 0 || rate > 0xFFFF) {
+        LOGF(WARNING, "Music: {} is not a song the game can play ({} Hz, {} channels)", Utf8(source), rate, channels);
+        return {};
+    }
+
+    // Stereo at most: more channels mixed into two
+    size_t frames = pcm.size() / (2 * static_cast<size_t>(channels));
+    int out_channels = std::min(channels, 2);
+    std::vector<int16_t> samples(frames * out_channels);
+    for (size_t f = 0; f < frames; f++) {
+        for (int c = 0; c < out_channels; c++) {
+            int sum = 0, from = 0;
+            for (int k = c; k < channels; k += out_channels, from++) {
+                int16_t value;
+                std::memcpy(&value, pcm.data() + (f * channels + k) * 2, 2);
+                sum += value;
+            }
+            samples[f * out_channels + c] = static_cast<int16_t>(sum / std::max(from, 1));
+        }
+    }
+
+    double sum = 0.0;
+    size_t counted = 0;
+    for (size_t i = 0; i < samples.size(); i += 7, counted++)
+        sum += static_cast<double>(samples[i]) * samples[i];
+    double rms = counted ? std::sqrt(sum / static_cast<double>(counted)) : 0.0;
+    if (rms > MUSIC_LOUDNESS) {
+        double scale = MUSIC_LOUDNESS / rms;
+        for (auto& sample : samples)
+            sample = static_cast<int16_t>(std::lround(sample * scale));
+    }
+
+    std::string bytes = this->sound_template;
+    auto put32 = [&](size_t at, uint32_t value) { std::memcpy(bytes.data() + at, &value, 4); };
+    auto count = static_cast<uint32_t>(frames);
+    float duration = static_cast<float>(frames) / rate;
+    put32(this->template_data + 0x00, rate | (0u << 16) | (static_cast<uint32_t>(out_channels) << 24)); // Rate, 16 bit samples, channels
+    put32(this->template_data + 0x04, 0xFFFFFFFF);                                                          // No loop
+    put32(this->template_data + 0x08, count);
+    std::memcpy(bytes.data() + this->template_data + 0x0C, &duration, 4);
+    put32(this->template_data + 0x1C, static_cast<uint32_t>(samples.size() * 2));                           // Bytes of samples
+    bytes.append(reinterpret_cast<const char*>(samples.data()), samples.size() * 2);
+
+    std::filesystem::create_directories(game_dir / GAME_SOUND_DIR, ec);
+    std::ofstream out(target, std::ios::binary | std::ios::trunc);
+    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    if (!out.good()) {
+        LOGF(WARNING, "Music: could not write {}", name);
+        return {};
+    }
+
+    LOGF(INFO, "Music: {} made for the game ({:.1f} s, {} Hz, {} channels{})", name, duration, rate, out_channels,
+        rms > MUSIC_LOUDNESS ? std::format(", turned down {:.1f} dB", 20.0 * std::log10(rms / MUSIC_LOUDNESS)) : "");
+    return name;
+}
+
 // The sounds play through XAudio2 on this thread, from samples decoded once: playing one is only handing its buffer
 // to a voice, a few ms. Their volume follows the one of the game in the volume mixer of Windows
 void Sounds::Thread() {
@@ -534,8 +919,14 @@ void Sounds::Thread() {
             this->game_volume = GameVolume(p ? static_cast<DWORD>(p->pid_) : 0);
         }
 
-        for (const auto& request : work)
-            PlayNow(request.path, request.volume, request.count);
+        for (const auto& request : work) {
+            if (request.kind == Kind::Music)
+                PlayMusicNow(request);
+            else if (request.kind == Kind::PrepareMusic)
+                LoadSoundTemplate();
+            else
+                PlayNow(request.path, request.volume, request.count);
+        }
     }
 
     for (auto& [file, sound] : this->loaded)

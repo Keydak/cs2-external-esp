@@ -32,6 +32,15 @@ public:
     // Opened ahead, so the first time it plays has no delay
     static void Preload(const std::string& file);
 
+    // The music of a dance (Emotes), played by the game like the hit & kill sounds: the .wav (or .mp3) is made once into
+    // a sound of the game in our folder of it. The music before is stopped first. Volume 0 - 100, nothing without
+    // -insecure or out of a match
+    static void PlayMusic(const std::filesystem::path& file, int volume);
+    // Stopped now (on the main thread of the game), a music still being made is dropped
+    static void StopMusic();
+    // The game sound ours are made like read ahead, so the first music is not late
+    static void PrepareMusic();
+
     // The sounds of our GitHub repository that are not in the folder yet, on a thread of its own
     static void Download();
     static bool IsDownloading();
@@ -58,12 +67,33 @@ private:
     std::string GameName(const std::filesystem::path& source);
     void DownloadThread();
 
+    enum class Kind : uint8_t { Sound, Music, PrepareMusic };
+
     struct Request {
         std::filesystem::path path;
         int volume;
         std::chrono::steady_clock::time_point at{};  // Played from then on
         int count = 1;
+        Kind kind = Kind::Sound;
+        uint32_t generation = 0;    // Music: dropped once StopMusic came after it
     };
+
+    // Sound thread: the music made & started, our code that keeps its guid & stops it
+    void PlayMusicNow(const Request& request);
+    bool EnsureMusic();
+    // The blocks of a sound of the game with plain samples, ours are made like it
+    bool LoadSoundTemplate();
+    // The .vsnd_c made of a .wav or .mp3, its resource name. Empty when it can't be
+    std::string MusicName(const std::filesystem::path& source);
+    std::string sound_template;
+    size_t template_data = 0;
+    bool template_tried = false;
+    bool music_told = false;        // Why there is none, said once
+
+    std::mutex music_mutex;         // Starting & stopping
+    std::atomic<uint32_t> music_generation = 0;
+    uintptr_t music_page = 0;
+    bool music_playing = false;
 
     struct Listing {
         std::vector<std::string> files;

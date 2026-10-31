@@ -242,7 +242,7 @@ bool Renderer::NoticeImpl() {
                 break;
         }
 
-        bool holding = (GetAsyncKeyState(VK_INSERT) & 0x8000) || (GetAsyncKeyState(VK_RSHIFT) & 0x8000);
+        bool holding = IsMenuKeyDown();
         if (holding && !was_holding)
             break;
         was_holding = holding;
@@ -282,13 +282,20 @@ bool Renderer::HandleState() {
     isRunning = Window::shouldRun && !Engine::IsOutdated(); // From the window event handler, or outdated for the game
 
     static bool was_holding = false;
+    static int last_key = -1;
 
-    bool pressed_insert = (GetAsyncKeyState(VK_INSERT) & 0x8000);
-    bool pressed_rshift = (GetAsyncKeyState(VK_RSHIFT) & 0x8000);
+    bool pressed_menu = IsMenuKeyDown();
 
     bool pressed_end = (GetAsyncKeyState(VK_END) & 0x8000);
 
-    bool should_toggle = !was_holding && (pressed_insert || pressed_rshift);
+    // Another key just bound, still held: it opens or closes the menu once it is let go & pressed again. Binding a key
+    // in the menu never toggles it either, whatever key is pressed for it
+    if (cfg::settings::menu_key != last_key || Menu::IsBindingKey()) {
+        last_key = cfg::settings::menu_key;
+        was_holding = true;
+    }
+
+    bool should_toggle = !was_holding && pressed_menu;
 
     // Opens once the program is ready (the loading card is gone), closing always works. In a match there is no card:
     // the pictures load in a corner, the agents wait for the main menu
@@ -298,15 +305,26 @@ bool Renderer::HandleState() {
         should_toggle = false;
 
     if (should_toggle || pressed_end) { // Toggle when pressing end to trigger the config save :v
-        LOGF(VERBOSE, "Captured global VK_INSERT or VK_RSHIFT, toggling menu state to {}", !this->isOpen);
+        LOGF(VERBOSE, "Captured the menu key, toggling menu state to {}", !this->isOpen);
         SetOpenImpl(!this->isOpen);
     }
 
     if (pressed_end)
         this->isRunning = false;
 
-    was_holding = pressed_insert || pressed_rshift;
+    was_holding = pressed_menu || Menu::IsBindingKey();
     return should_toggle;
+}
+
+bool Renderer::IsMenuKeyDown() {
+    int key = cfg::settings::menu_key;
+    if (key > VK_XBUTTON2 && key < 0xFF)
+        return GetAsyncKeyState(key) & 0x8000;
+    return (GetAsyncKeyState(VK_INSERT) & 0x8000) || (GetAsyncKeyState(VK_RSHIFT) & 0x8000);
+}
+
+std::string Renderer::GetMenuKeyName(int key) {
+    return key > VK_XBUTTON2 && key < 0xFF ? Menu::GetKeyName(key) : "Insert or Right Shift";
 }
 
 void Renderer::SetOpenImpl(bool open) {

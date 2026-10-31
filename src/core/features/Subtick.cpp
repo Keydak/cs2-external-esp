@@ -51,6 +51,9 @@ namespace {
     constexpr float LEAD = LAST - STEP;         // Last point A may take, B needs one of its own after it
     constexpr int JUMP_OFFSET = 3;              // Steps A stands past the landing
     constexpr int B_CATCH_UP = 4;               // Commands after its own B may still go in, the tickbase skips online
+    // Prediction runs the commands the server has not answered yet again from the last one it did: meanwhile the
+    // landing record names the landing before for a moment. Further back than this is another timeline
+    constexpr int STALE_TICKS = 64 * 60;
     constexpr auto LEAD_WINDOW = 250ms;
     constexpr float STANDABLE = 0.7f;           // Normal z of ground the feet stay on
     constexpr float HULL_EDGE = 15.9f;          // Half the width of the player, a bit inside
@@ -567,9 +570,36 @@ Subtick::JumpPlan Subtick::PlanJump(uintptr_t pawn, int sequence, const Build& c
     if (this->pending.live && build > this->pending.build)
         this->pending.live = false;
 
-    // A record naming another tick is the next landing
-    if (landed_tick > 0 && std::isfinite(landed_frac) && landed_frac >= 0.f && landed_frac <= 1.f
-        && (!this->landing.valid || this->landing.tick != landed_tick)) {
+#ifdef _DEBUG
+    // What each command looked like to us, for a landing seen only after the command of its A went
+    {
+        auto& seen = this->seen_builds[build];
+        seen.looks++;
+        seen.fresh = seen.fresh || fresh;
+        seen.falling = seen.falling || falling;
+        if (fresh && !on_ground && falling)
+            seen.contact = PredictContact(pawn);
+        while (this->seen_builds.size() > 16)
+            this->seen_builds.erase(this->seen_builds.begin());
+    }
+#endif
+
+    // A record naming another tick is the next landing, never one before it: that is prediction running again, it
+    // took the presses of the landing for gone & put B within a tick of A, where the game turns it away
+    bool usable = landed_tick > 0 && std::isfinite(landed_frac) && landed_frac >= 0.f && landed_frac <= 1.f;
+    if (usable && this->landing.valid && landed_tick < this->landing.tick && this->landing.tick - landed_tick <= STALE_TICKS) {
+        this->landing.stale++;
+        usable = false;
+    }
+
+    // The same landing elsewhere in its tick: the server answered otherwise than predicted. A still being built moves
+    // with it, B stays a step past A
+    if (usable && this->landing.valid && this->landing.tick == landed_tick && this->landing.frac != landed_frac) {
+        this->landing.frac = landed_frac;
+        this->landing.moved++;
+    }
+
+    if (usable && (!this->landing.valid || this->landing.tick != landed_tick)) {
         Landing opened;
         opened.valid = true;
         opened.tick = landed_tick;
@@ -584,6 +614,25 @@ Subtick::JumpPlan Subtick::PlanJump(uintptr_t pawn, int sequence, const Build& c
 
         this->pending.live = false;
         this->landing = opened;
+
+#ifdef _DEBUG
+        // Its A goes in the command after it: gone already, why. Never seen is a frame of the game that built two
+        // commands at once, seen means the game had no landing in it while we looked
+        if (build > landed_tick + 1) {
+            auto it = this->seen_builds.find(landed_tick + 1);
+            if (it == this->seen_builds.end()) {
+                LOGF(VERBOSE, "Landing {} + {:.4f} seen late in tickbase {}: tickbase {} never seen, it went within a moment",
+                    landed_tick, landed_frac, build, landed_tick + 1);
+            }
+            else {
+                const auto& seen = it->second;
+                LOGF(VERBOSE, "Landing {} + {:.4f} seen late in tickbase {}: tickbase {} seen {} times, {}, {}, the map {}",
+                    landed_tick, landed_frac, build, landed_tick + 1, seen.looks, seen.fresh ? "not run yet at times" : "always run already",
+                    seen.falling ? "falling" : "not falling", seen.contact >= 0.f ? std::format("had the feet down at {:.3f}", seen.contact)
+                    : seen.contact == -1.f ? "found no ground" : "was not asked");
+            }
+        }
+#endif
     }
     this->landing.took_off = this->landing.took_off || !on_ground;
 
@@ -1283,8 +1332,10 @@ void Subtick::Thread() {
                 }
                 else {
                     const char* kinds[] = { "-", "A", "B", "guess" };
-                    LOGF(VERBOSE, "Jump {} at {:.4f} in command {} (tickbase {}), landed {} + {:.4f}", kinds[plan.kind],
-                        plan.when, sequence, plan.build, this->landing.tick, this->landing.frac);
+                    LOGF(VERBOSE, "Jump {} at {:.4f} in command {} (tickbase {}), landed {} + {:.4f}{}{}", kinds[plan.kind],
+                        plan.when, sequence, plan.build, this->landing.tick, this->landing.frac,
+                        this->landing.moved ? std::format(", moved {}x by the server", this->landing.moved) : std::string(),
+                        this->landing.stale ? std::format(", {} reads of the landing before ignored", this->landing.stale) : std::string());
                 }
 
                 int count = p->read<int>(slot + SLOT_EVENTS);

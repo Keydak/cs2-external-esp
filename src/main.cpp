@@ -26,6 +26,7 @@
 #include "gui/renderer/Renderer.hpp"
 #include "core/features/View.hpp"
 #include "core/features/Freecam.hpp"
+#include "core/features/Emotes.hpp"
 #include "core/features/Skins.hpp"
 #include "core/features/CustomModels.hpp"
 #include "core/features/ModBrowser.hpp"
@@ -95,6 +96,7 @@ int main()
         ExitProcess(0);
     }
 
+    Emotes::Shutdown();
     Freecam::Shutdown();
     View::Shutdown();
     Skins::Shutdown();

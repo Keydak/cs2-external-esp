@@ -141,6 +141,8 @@ namespace {
             { offsets::econ::m_pChild,                          "CGameSceneNode",                           "m_pChild" },
             { offsets::econ::m_pNextSibling,                    "CGameSceneNode",                           "m_pNextSibling" },
             { offsets::econ::m_pOwner,                          "CGameSceneNode",                           "m_pOwner" },
+            { offsets::econ::m_angRotation,                     "CGameSceneNode",                           "m_angRotation" },
+            { offsets::econ::m_hierarchyAttachName,             "CGameSceneNode",                           "m_hierarchyAttachName" },
             { offsets::econ::m_hOwnerEntity,                    "C_BaseEntity",                             "m_hOwnerEntity" },
             { offsets::econ::m_pInventoryServices,              "CCSPlayerController",                      "m_pInventoryServices" },
             { offsets::econ::m_fEffects,                        "C_BaseEntity",                             "m_fEffects" },
@@ -197,6 +199,134 @@ namespace {
         }
 
         return std::nullopt;
+    }
+
+    // CNmClip of animationsystem.dll, for the emotes. Not in the client.dll output of cs2-dumper: from the game only
+    const std::vector<SchemaField>& AnimationSchemaFields() {
+        static const std::vector<SchemaField> fields = {
+            { offsets::emotes::m_skeleton,                      "CNmClip",                                  "m_skeleton" },
+            { offsets::emotes::m_nNumFrames,                    "CNmClip",                                  "m_nNumFrames" },
+            { offsets::emotes::m_flDuration,                    "CNmClip",                                  "m_flDuration" },
+            { offsets::emotes::m_bIsAdditive,                   "CNmClip",                                  "m_bIsAdditive" },
+        };
+        return fields;
+    }
+
+    struct SchemaRead {
+        size_t classes = 0;     // Classes of the fields found, 0 when the schema could not be read
+        int found = 0;
+        int differ = 0;
+        std::string missing;    // "Class::field, ..." not in it, those keep their value
+    };
+
+    // Field offsets from the class infos in a module, over the values the fields hold
+    SchemaRead ReadSchema(ProcessModule module, const std::vector<SchemaField>& fields) {
+        SchemaRead result;
+        auto process = Engine::GetProcess();
+        if (!process || !module.base || !module.size)
+            return result;
+
+        // The class infos are data of the module itself: one read of the whole image, then everything is looked up in it
+        std::vector<uint8_t> image(module.size);
+        constexpr size_t CHUNK = 1 << 20;
+        for (size_t at = 0; at < module.size; at += CHUNK)
+            process->read_raw(module.base + at, image.data() + at, std::min(CHUNK, module.size - at));
+
+        auto u8 = [&](size_t rva) -> uint8_t { return rva < image.size() ? image[rva] : 0; };
+        auto u16 = [&](size_t rva) -> uint16_t { return rva + 2 <= image.size() ? *reinterpret_cast<uint16_t*>(&image[rva]) : 0; };
+        auto i32 = [&](size_t rva) -> int32_t { return rva + 4 <= image.size() ? *reinterpret_cast<int32_t*>(&image[rva]) : 0; };
+        auto u64 = [&](size_t rva) -> uint64_t { return rva + 8 <= image.size() ? *reinterpret_cast<uint64_t*>(&image[rva]) : 0; };
+
+        // Pointers in the image are addresses in the game, into the image when they point into the module
+        auto to_rva = [&](uint64_t address) -> std::optional<size_t> {
+            if (address < module.base || address >= module.base + module.size)
+                return std::nullopt;
+            return static_cast<size_t>(address - module.base);
+        };
+
+        auto text = [&](size_t rva) {
+            size_t end = rva;
+            while (end < image.size() && end - rva < 128 && image[end])
+                end++;
+            return std::string_view(reinterpret_cast<const char*>(image.data() + rva), end - rva);
+        };
+
+        // SchemaClassInfoData_t: name +0x08, size +0x20, field count +0x24, base count +0x29, fields +0x30, bases +0x38
+        constexpr size_t CLASS_NAME = 0x08, CLASS_SIZE = 0x20, CLASS_FIELD_COUNT = 0x24, CLASS_BASE_COUNT = 0x29;
+        constexpr size_t CLASS_FIELDS = 0x30, CLASS_BASES = 0x38;
+        // SchemaClassFieldData_t, 0x20 each: name +0x00, offset +0x10. A base class: offset +0x00, class +0x08, 0x10 each
+        constexpr size_t FIELD_SIZE = 0x20, FIELD_OFFSET = 0x10, BASE_SIZE = 0x10, BASE_CLASS = 0x08;
+
+        std::set<std::string_view> wanted;
+        for (const auto& f : fields)
+            wanted.insert(f.klass);
+
+        // Every 8 byte value pointing into the image may be the name of a class info, the rest of it has to fit
+        std::unordered_map<std::string_view, size_t> classes;
+        for (size_t at = CLASS_NAME; at + CLASS_BASES + 8 <= image.size(); at += 8) {
+            auto name = to_rva(u64(at));
+            if (!name)
+                continue;
+
+            size_t info = at - CLASS_NAME;
+            auto field_list = to_rva(u64(info + CLASS_FIELDS));
+            auto count = u16(info + CLASS_FIELD_COUNT);
+            auto size = i32(info + CLASS_SIZE);
+            if (!field_list || *field_list % 8 || count == 0 || count > 4096 || size <= 0 || size > 0x100000)
+                continue;
+
+            auto class_name = text(*name);
+            if (wanted.contains(class_name))
+                classes.try_emplace(class_name, info);
+        }
+
+        result.classes = classes.size();
+        if (classes.empty())
+            return result;
+
+        // The field in the class or one it derives from, with the offset of that base added
+        std::function<std::optional<std::ptrdiff_t>(size_t, std::string_view, int)> find = [&](size_t info, std::string_view field, int depth) -> std::optional<std::ptrdiff_t> {
+            if (depth > 16)
+                return std::nullopt;
+
+            auto field_list = to_rva(u64(info + CLASS_FIELDS));
+            for (uint16_t i = 0, count = u16(info + CLASS_FIELD_COUNT); field_list && i < count; i++) {
+                auto entry = *field_list + i * FIELD_SIZE;
+                auto name = to_rva(u64(entry));
+                if (name && text(*name) == field)
+                    return i32(entry + FIELD_OFFSET);
+            }
+
+            auto bases = to_rva(u64(info + CLASS_BASES));
+            for (uint8_t i = 0, count = u8(info + CLASS_BASE_COUNT); bases && i < count; i++) {
+                auto entry = *bases + i * BASE_SIZE;
+                if (auto base = to_rva(u64(entry + BASE_CLASS))) {
+                    if (auto value = find(*base, field, depth + 1))
+                        return static_cast<std::ptrdiff_t>(static_cast<uint32_t>(i32(entry))) + *value;
+                }
+            }
+
+            return std::nullopt;
+        };
+
+        for (const auto& f : fields) {
+            auto info = classes.find(f.klass);
+            auto value = info != classes.end() ? find(info->second, f.field, 0) : std::nullopt;
+
+            if (!value) {
+                result.missing += std::format("{}{}::{}", result.missing.empty() ? "" : ", ", f.klass, f.field);
+                continue;
+            }
+
+            result.found++;
+            if (*value != f.value) {
+                LOGF(VERBOSE, "Schema '{}::{}' at 0x{:X} (was 0x{:X})", f.klass, f.field, *value, f.value);
+                f.value = *value;
+                result.differ++;
+            }
+        }
+
+        return result;
     }
 }
 
@@ -506,6 +636,18 @@ bool Dumper::InitImpl() {
             LOGF(VERBOSE, "Found 'playvol' of the sound system at 0x{:X}", offsets::sounds::fnPlayVol);
         } else
             Missing("Could not find 'playvol' of the sound system, hit & kill sounds play through Windows");
+
+        // The music of the dances, optional: started through playvol too, stopped by its guid
+        auto guid = sound.base ? ScanMemory(offsets::signatures::lastSoundGuid, sound.base, sound.base + sound.size) : std::vector<DWORD64>{};
+        auto stop = sound.base ? ScanMemory(offsets::signatures::stopSoundByGuid, sound.base, sound.base + sound.size) : std::vector<DWORD64>{};
+        if (guid.size() == 1 && stop.size() == 1) {
+            auto at = guid.at(0) + 7; // xchg [rip + last guid], eax
+            offsets::sounds::dwLastSoundGuid = at + 6 + Engine::GetProcess()->read<int32_t>(at + 2) - sound.base;
+            offsets::sounds::fnStopSoundByGuid = stop.at(0) - sound.base;
+            LOGF(VERBOSE, "Found the last sound at 0x{:X} & its stop at 0x{:X}", offsets::sounds::dwLastSoundGuid,
+                offsets::sounds::fnStopSoundByGuid);
+        } else
+            LOGF(WARNING, "Could not find how the game stops a sound ({} {}), the dances have no music", guid.size(), stop.size());
     }
 
     // Precache of the resource system, optional: custom player models are loaded with it
@@ -626,6 +768,9 @@ bool Dumper::InitImpl() {
         else
             LOGF(WARNING, "Could not find the particle direction ({}), the blood sprays one way", forward.size());
     }
+
+    // Emotes, optional: the poses of skeletons, sampling a clip & loading resources of the game
+    ResolveEmotes(client, engine);
 
     // Name, optional
     if (auto found = ScanMemory(offsets::signatures::updateName, client.base, client.base + client.size); !found.empty()) {
@@ -803,118 +948,138 @@ const std::vector<std::string>& Dumper::Unverified() {
 }
 
 bool Dumper::ResolveSchema(ProcessModule client) {
-    auto process = Engine::GetProcess();
-    if (!process || !client.base || !client.size)
+    if (!Engine::GetProcess() || !client.base || !client.size)
         return false;
 
-    // The class infos are data of client.dll itself: one read of the whole image, then everything is looked up in it
-    std::vector<uint8_t> image(client.size);
-    constexpr size_t CHUNK = 1 << 20;
-    for (size_t at = 0; at < client.size; at += CHUNK)
-        process->read_raw(client.base + at, image.data() + at, std::min(CHUNK, client.size - at));
-
-    auto u8 = [&](size_t rva) -> uint8_t { return rva < image.size() ? image[rva] : 0; };
-    auto u16 = [&](size_t rva) -> uint16_t { return rva + 2 <= image.size() ? *reinterpret_cast<uint16_t*>(&image[rva]) : 0; };
-    auto i32 = [&](size_t rva) -> int32_t { return rva + 4 <= image.size() ? *reinterpret_cast<int32_t*>(&image[rva]) : 0; };
-    auto u64 = [&](size_t rva) -> uint64_t { return rva + 8 <= image.size() ? *reinterpret_cast<uint64_t*>(&image[rva]) : 0; };
-
-    // Pointers in the image are addresses in the game, into the image when they point into client.dll
-    auto to_rva = [&](uint64_t address) -> std::optional<size_t> {
-        if (address < client.base || address >= client.base + client.size)
-            return std::nullopt;
-        return static_cast<size_t>(address - client.base);
-    };
-
-    auto text = [&](size_t rva) {
-        size_t end = rva;
-        while (end < image.size() && end - rva < 128 && image[end])
-            end++;
-        return std::string_view(reinterpret_cast<const char*>(image.data() + rva), end - rva);
-    };
-
-    // SchemaClassInfoData_t: name +0x08, size +0x20, field count +0x24, base count +0x29, fields +0x30, bases +0x38
-    constexpr size_t CLASS_NAME = 0x08, CLASS_SIZE = 0x20, CLASS_FIELD_COUNT = 0x24, CLASS_BASE_COUNT = 0x29;
-    constexpr size_t CLASS_FIELDS = 0x30, CLASS_BASES = 0x38;
-    // SchemaClassFieldData_t, 0x20 each: name +0x00, offset +0x10. A base class: offset +0x00, class +0x08, 0x10 each
-    constexpr size_t FIELD_SIZE = 0x20, FIELD_OFFSET = 0x10, BASE_SIZE = 0x10, BASE_CLASS = 0x08;
-
-    std::set<std::string_view> wanted;
-    for (const auto& f : SchemaFields())
-        wanted.insert(f.klass);
-
-    // Every 8 byte value pointing into the image may be the name of a class info, the rest of it has to fit
-    std::unordered_map<std::string_view, size_t> classes;
-    for (size_t at = CLASS_NAME; at + CLASS_BASES + 8 <= image.size(); at += 8) {
-        auto name = to_rva(u64(at));
-        if (!name)
-            continue;
-
-        size_t info = at - CLASS_NAME;
-        auto fields = to_rva(u64(info + CLASS_FIELDS));
-        auto count = u16(info + CLASS_FIELD_COUNT);
-        auto size = i32(info + CLASS_SIZE);
-        if (!fields || *fields % 8 || count == 0 || count > 4096 || size <= 0 || size > 0x100000)
-            continue;
-
-        auto class_name = text(*name);
-        if (wanted.contains(class_name))
-            classes.try_emplace(class_name, info);
-    }
-
-    if (classes.empty()) {
+    auto read = ReadSchema(client, SchemaFields());
+    if (!read.classes) {
         Missing("Could not read the schema of the game, the class layout might have changed: using cs2-dumper offsets");
         return false;
     }
 
-    // The field in the class or one it derives from, with the offset of that base added
-    std::function<std::optional<std::ptrdiff_t>(size_t, std::string_view, int)> find = [&](size_t info, std::string_view field, int depth) -> std::optional<std::ptrdiff_t> {
-        if (depth > 16)
-            return std::nullopt;
+    if (!read.missing.empty())
+        Missing("Not in the schema of the game, kept from cs2-dumper: {}", read.missing);
 
-        auto fields = to_rva(u64(info + CLASS_FIELDS));
-        for (uint16_t i = 0, count = u16(info + CLASS_FIELD_COUNT); fields && i < count; i++) {
-            auto entry = *fields + i * FIELD_SIZE;
-            auto name = to_rva(u64(entry));
-            if (name && text(*name) == field)
-                return i32(entry + FIELD_OFFSET);
-        }
+    LOGF(INFO, "Read {} of {} field offsets from the game itself ({} classes), {} differ from cs2-dumper", read.found, SchemaFields().size(), read.classes, read.differ);
+    return read.missing.empty();
+}
 
-        auto bases = to_rva(u64(info + CLASS_BASES));
-        for (uint8_t i = 0, count = u8(info + CLASS_BASE_COUNT); bases && i < count; i++) {
-            auto entry = *bases + i * BASE_SIZE;
-            if (auto base = to_rva(u64(entry + BASE_CLASS))) {
-                if (auto value = find(*base, field, depth + 1))
-                    return static_cast<std::ptrdiff_t>(static_cast<uint32_t>(i32(entry))) + *value;
-            }
-        }
+bool Dumper::ResolveEmotes(ProcessModule client, ProcessModule engine) {
+    namespace em = offsets::emotes;
+    auto process = Engine::GetProcess();
+    auto client_end = client.base + client.size;
+    auto engine_end = engine.base + engine.size;
 
-        return std::nullopt;
-    };
-
-    int found = 0, differ = 0;
-    std::string missing;
-    for (const auto& f : SchemaFields()) {
-        auto info = classes.find(f.klass);
-        auto value = info != classes.end() ? find(info->second, f.field, 0) : std::nullopt;
-
-        if (!value) {
-            missing += std::format("{}{}::{}", missing.empty() ? "" : ", ", f.klass, f.field);
-            continue;
-        }
-
-        found++;
-        if (*value != f.value) {
-            LOGF(VERBOSE, "Schema '{}::{}' at 0x{:X} (cs2-dumper 0x{:X})", f.klass, f.field, *value, f.value);
-            f.value = *value;
-            differ++;
+    auto pose = ScanMemory(offsets::signatures::applyAnimGraphPose, client.base, client_end);
+    if (pose.empty()) {
+        // Our jump from an earlier run, its stub may still play an emote on a pawn long gone: the start back first
+        constexpr uint8_t ORIGINAL[] = { 0x40, 0x57, 0x41, 0x55, 0x41, 0x56 };
+        auto left = ScanMemory(offsets::signatures::applyAnimGraphPoseHooked, client.base, client_end);
+        if (!left.empty() && process->patch_code(left.at(0), ORIGINAL, sizeof(ORIGINAL))) {
+            LOGF(INFO, "ApplyAnimGraphPose still jumped to our stub from an earlier run, put back");
+            pose = left;
         }
     }
 
-    if (!missing.empty())
-        Missing("Not in the schema of the game, kept from cs2-dumper: {}", missing);
+    auto sample = ScanMemory(offsets::signatures::clipGetPose, client.base, client_end);
+    auto name = ScanMemory(offsets::signatures::resourceNameSet, client.base, client_end);
+    auto find = ScanMemory(offsets::signatures::resourceFind, client.base, client_end);
+    auto create = engine.base ? ScanMemory(offsets::signatures::createManifest, engine.base, engine_end) : std::vector<DWORD64>{};
+    auto loaded = engine.base ? ScanMemory(offsets::signatures::manifestLoaded, engine.base, engine_end) : std::vector<DWORD64>{};
+    auto destroy = engine.base ? ScanMemory(offsets::signatures::destroyManifest, engine.base, engine_end) : std::vector<DWORD64>{};
 
-    LOGF(INFO, "Read {} of {} field offsets from the game itself ({} classes), {} differ from cs2-dumper", found, SchemaFields().size(), classes.size(), differ);
-    return missing.empty();
+    if (pose.empty() || sample.empty() || name.empty() || find.empty() || create.empty() || loaded.empty() || destroy.empty()) {
+        LOGF(WARNING, "Could not find the code of the emotes ({} {} {} {} {} {} {}), they are disabled",
+            pose.size(), sample.size(), name.size(), find.size(), create.size(), loaded.size(), destroy.size());
+        return false;
+    }
+
+    // call [rax + find]: a vtable offset
+    auto find_offset = process->read<int32_t>(find.at(0) + 19);
+    if (find_offset <= 0 || find_offset >= 0x1000 || find_offset % 8) {
+        LOGF(WARNING, "The resource lookup of the emotes is not what was expected (0x{:X}), they are disabled", find_offset);
+        return false;
+    }
+
+    // The clips they play, from the schema of the animation system
+    auto animation = process->GetModule("animationsystem.dll");
+    auto read = ReadSchema(animation, AnimationSchemaFields());
+    if (!read.classes || !read.missing.empty()) {
+        LOGF(WARNING, "Could not read the animation clips in the schema of the game ({}), the emotes are disabled",
+            read.classes ? read.missing : "no CNmClip");
+        return false;
+    }
+
+    em::fnApplyPose = pose.at(0) - client.base;
+    em::fnClipGetPose = sample.at(0) - client.base;
+    em::fnResourceName = name.at(0) - client.base;
+    em::dwResourceSystem = find.at(0) + 7 + process->read<int32_t>(find.at(0) + 3) - client.base;
+    em::resourceFind = find_offset;
+    em::fnCreateManifest = create.at(0) - engine.base;
+    em::fnManifestLoaded = loaded.at(0) - engine.base;
+    em::fnDestroyManifest = destroy.at(0) - engine.base;
+
+    LOGF(VERBOSE, "Found the emotes: pose 0x{:X}, clip 0x{:X}, name 0x{:X}, resources 0x{:X} (find 0x{:X}), manifests 0x{:X} 0x{:X} 0x{:X}",
+        em::fnApplyPose, em::fnClipGetPose, em::fnResourceName, em::dwResourceSystem, em::resourceFind,
+        em::fnCreateManifest, em::fnManifestLoaded, em::fnDestroyManifest);
+
+    // The Fortnite dances, optional: the game's emotes work without them
+    struct Pattern {
+        const std::string& pattern;
+        bool engine;
+        std::vector<DWORD64> found;
+    };
+    Pattern codes[] = {
+        { offsets::signatures::kvConstruct, false }, { offsets::signatures::kvDestruct, false },
+        { offsets::signatures::kvFind, false }, { offsets::signatures::kvSetString, false },
+        { offsets::signatures::createEntity, false }, { offsets::signatures::queueSpawn, false },
+        { offsets::signatures::executeQueued, false }, { offsets::signatures::spawnGroup, false },
+        { offsets::signatures::removeEntity, false }, { offsets::signatures::setLocalOrigin, false },
+        { offsets::signatures::setLocalAngles, false }, { offsets::signatures::followEntity, false },
+        { offsets::signatures::setAnimation, false }, { offsets::signatures::precacheEntities, true },
+    };
+    std::string counts;
+    bool all = true;
+    for (auto& code : codes) {
+        code.found = code.engine ? ScanMemory(code.pattern, engine.base, engine_end) : ScanMemory(code.pattern, client.base, client_end);
+        counts += std::format("{} ", code.found.size());
+        all &= code.found.size() == 1;
+    }
+    if (!all) {
+        LOGF(WARNING, "Could not find the code of the Fortnite dances ({}), only the emotes of the game", counts);
+        return true;
+    }
+
+    auto at = [&](size_t k) { return codes[k].found.at(0); };
+    // The group getter must still be mov eax, [rcx + x]; ret & SetLocalAngles write m_angRotation, else they are other code
+    auto group_call = at(7) + 12;
+    auto group = group_call + 5 + process->read<int32_t>(group_call + 1);
+    bool group_ok = process->read<uint16_t>(group) == 0x818B && process->read<uint8_t>(group + 6) == 0xC3;
+    bool angles_ok = process->read<int32_t>(at(10) + 27) == offsets::econ::m_angRotation;
+    if (!group_ok || !angles_ok) {
+        LOGF(WARNING, "The code of the Fortnite dances is not what was expected ({} {}), only the emotes of the game", group_ok, angles_ok);
+        return true;
+    }
+
+    em::fnKvConstruct = at(0) - client.base;
+    em::fnKvDestruct = at(1) - client.base;
+    em::fnKvFind = at(2) - client.base;
+    em::fnKvSetString = at(3) - client.base;
+    em::fnCreateEntity = at(4) - client.base;
+    em::fnQueueSpawn = at(5) - client.base;
+    em::fnExecuteQueued = at(6) - client.base;
+    em::fnSpawnGroup = group - client.base;
+    em::dwEntitySystem = at(7) + 7 + process->read<int32_t>(at(7) + 3) - client.base;
+    em::fnRemoveEntity = at(8) - client.base;
+    em::fnSetLocalOrigin = at(9) - client.base;
+    em::fnSetLocalAngles = at(10) - client.base;
+    em::fnFollowEntity = at(11) - client.base;
+    em::fnSetAnimation = at(12) - client.base;
+    em::fnPrecacheEntities = at(13) - engine.base;
+
+    LOGF(VERBOSE, "Found the Fortnite dances: create 0x{:X}, spawn group 0x{:X}, entity system 0x{:X}, follow 0x{:X}, animation 0x{:X}, precache 0x{:X}",
+        em::fnCreateEntity, em::fnSpawnGroup, em::dwEntitySystem, em::fnFollowEntity, em::fnSetAnimation, em::fnPrecacheEntities);
+    return true;
 }
 
 bool Dumper::ResolveButtons(ProcessModule client) {
@@ -1149,6 +1314,73 @@ bool Dumper::ResolveCamera(ProcessModule client) {
     else
         LOGF(WARNING, "Could not find CalcView ({}), first person spectating uses its own smoothing", calc.size());
 
+    // The alive check of the player the game shows, optional: without it watching alive keeps our HUD & no arms
+    constexpr size_t VIEW_ALIVE_AT = 15;
+    auto view_alive = ScanMemory(offsets::signatures::viewPawnAlive, client.base, client.base + client.size);
+    if (view_alive.size() == 1 && RestorePatch(view_alive.at(0) + VIEW_ALIVE_AT, 0x85, 0x80)) {
+        offsets::camera::viewPawnAlive = view_alive.at(0) + VIEW_ALIVE_AT - client.base;
+        LOGF(VERBOSE, "Found the alive check of the player shown at 0x{:X}", offsets::camera::viewPawnAlive);
+    }
+    else
+        LOGF(WARNING, "Could not find the alive check of the player shown ({}), watching alive keeps our HUD", view_alive.size());
+
+    // The same for the player seen in first person, optional: without it watching alive shows no arms
+    constexpr size_t FIRST_PERSON_OURS_AT = 51, FIRST_PERSON_SPECTATOR_AT = 76;
+    auto first_person = ScanMemory(offsets::signatures::viewPawnFirstPerson, client.base, client.base + client.size);
+    if (first_person.size() == 1 && RestoreJump(first_person.at(0) + FIRST_PERSON_OURS_AT, 0x74)
+        && RestorePatch(first_person.at(0) + FIRST_PERSON_SPECTATOR_AT, 0x74, 0x70)) {
+        offsets::camera::viewPawnFirstPerson = first_person.at(0) - client.base;
+        LOGF(VERBOSE, "Found the player seen in first person at 0x{:X}", offsets::camera::viewPawnFirstPerson);
+    }
+    else
+        LOGF(WARNING, "Could not find the player seen in first person ({}), watching alive shows no arms", first_person.size());
+
+    // Where the input keeps its view angles right now, optional: without it watching alive turns us along with them
+    auto angles = ScanMemory(offsets::signatures::viewAnglesPtr, client.base, client.base + client.size);
+    if (angles.size() == 1) {
+        offsets::input::viewAnglesPtr = angles.at(0) - client.base;
+        LOGF(VERBOSE, "Found the view angles of the input at 0x{:X}", offsets::input::viewAnglesPtr);
+    }
+    else
+        LOGF(WARNING, "Could not find the view angles of the input ({}), only its first ones are kept while watching alive", angles.size());
+
+    // Spectator services of a player pawn, optional: alive our pawn has none, watching alive puts one of ours in
+    if (auto vtable = FindVtable(client, ".?AVCPlayer_ObserverServices@@")) {
+        offsets::camera::observerServicesVtable = vtable - client.base;
+        LOGF(VERBOSE, "Found the spectator services vtable at 0x{:X}", offsets::camera::observerServicesVtable);
+    }
+    else
+        LOGF(WARNING, "Could not find the spectator services vtable, watching alive keeps our HUD");
+
+    // The ones of a spectator of CS2 & their camera in first person, optional: without them watching alive shows no
+    // aim punch & no zoom of theirs, F no loadout
+    if (auto vtable = FindVtable(client, ".?AVCCSObserver_ObserverServices@@")) {
+        offsets::camera::spectatorServicesVtable = vtable - client.base;
+        LOGF(VERBOSE, "Found the vtable of a spectator's services at 0x{:X}", offsets::camera::spectatorServicesVtable);
+    }
+    else
+        LOGF(WARNING, "Could not find the vtable of a spectator's services, watching alive shows no aim punch");
+    auto in_eye = ScanMemory(offsets::signatures::observerInEye, client.base, client.base + client.size);
+    if (in_eye.size() == 1) {
+        offsets::camera::observerInEye = in_eye.at(0) - client.base;
+        LOGF(VERBOSE, "Found the camera in first person of a spectator at 0x{:X}", offsets::camera::observerInEye);
+    }
+    else
+        LOGF(WARNING, "Could not find the camera in first person of a spectator ({}), watching alive shows no aim punch", in_eye.size());
+
+    // Where the radar of the HUD is, optional: without it watching alive keeps the radar around us
+    constexpr size_t RADAR_JUMP_AT = 3;
+    auto radar_center = ScanMemory(offsets::signatures::radarCenter, client.base, client.base + client.size);
+    auto radar_level = ScanMemory(offsets::signatures::radarLevel, client.base, client.base + client.size);
+    if (radar_center.size() == 1 && radar_level.size() == 1 && RestoreJump(radar_center.at(0) + RADAR_JUMP_AT, 0x74)
+        && RestoreJump(radar_level.at(0) + RADAR_JUMP_AT, 0x74)) {
+        offsets::camera::radarCenter = radar_center.at(0) + RADAR_JUMP_AT - client.base;
+        offsets::camera::radarLevel = radar_level.at(0) + RADAR_JUMP_AT - client.base;
+        LOGF(VERBOSE, "Found the radar at 0x{:X} & 0x{:X}", offsets::camera::radarCenter, offsets::camera::radarLevel);
+    }
+    else
+        LOGF(WARNING, "Could not find the radar ({}, {}), watching alive keeps it around us", radar_center.size(), radar_level.size());
+
     // The spectator camera, optional: without it the camera stays the one of the game after death
     constexpr size_t OBSERVER_JUMP_AT = 26;
     auto observer = ScanMemory(offsets::signatures::observerView, client.base, client.base + client.size);
@@ -1159,12 +1391,50 @@ bool Dumper::ResolveCamera(ProcessModule client) {
         constexpr size_t OBSERVER_CALL_AT = 45;
         if (process->read<uint8_t>(observer.at(0) + OBSERVER_CALL_AT) == 0xE8)
             offsets::camera::observerViewCall = observer.at(0) + OBSERVER_CALL_AT - client.base;
+
+        // call [rax + check] at +18 asks the services first
+        constexpr size_t OBSERVER_CHECK_AT = 18;
+        if (process->read<uint16_t>(observer.at(0) + OBSERVER_CHECK_AT) == 0x90FF)
+            offsets::camera::observerViewCheck = process->read<int32_t>(observer.at(0) + OBSERVER_CHECK_AT + 2);
         LOGF(VERBOSE, "Found the spectator camera at 0x{:X}", offsets::camera::observerViewJump);
     }
     else {
         Missing("Could not find the spectator camera, free cam & spectating are only available while alive");
     }
     return true;
+}
+
+uintptr_t Dumper::FindVtable(ProcessModule module, std::string_view rtti) {
+    auto process = Engine::GetProcess();
+
+    std::vector<uint8_t> image(module.size);
+    constexpr size_t CHUNK = 1 << 20;
+    for (size_t at = 0; at < module.size; at += CHUNK)
+        process->read_raw(module.base + at, image.data() + at, std::min(CHUNK, module.size - at));
+
+    auto u32 = [&](size_t at) { return *reinterpret_cast<const uint32_t*>(&image[at]); };
+    auto u64 = [&](size_t at) { return *reinterpret_cast<const uint64_t*>(&image[at]); };
+
+    // The type descriptor ends with the name, after its vtable & a spare pointer
+    for (auto name = image.begin(); (name = std::search(name, image.end(), rtti.begin(), rtti.end())) != image.end(); ++name) {
+        size_t at = name - image.begin();
+        if (at < 0x10 || at + rtti.size() >= image.size() || image[at + rtti.size()] != 0)
+            continue;
+        auto descriptor = static_cast<uint32_t>(at - 0x10);
+
+        // Its complete object locator: signature 1, offset 0, then the descriptor & itself as image offsets
+        for (size_t locator = 0; locator + 0x18 <= image.size(); locator += 4) {
+            if (u32(locator + 0x0C) != descriptor || u32(locator) != 1 || u32(locator + 4) != 0 || u32(locator + 0x14) != locator)
+                continue;
+
+            // The vtable comes right after a pointer to it
+            uint64_t pointer = module.base + locator;
+            for (size_t entry = 0; entry + 16 <= image.size(); entry += 8)
+                if (u64(entry) == pointer)
+                    return module.base + entry + 8;
+        }
+    }
+    return 0;
 }
 
 bool Dumper::ResolveSkins(ProcessModule client) {
