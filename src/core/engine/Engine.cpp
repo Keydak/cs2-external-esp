@@ -215,7 +215,7 @@ bool Engine::AttachImpl() {
 
     auto command_line = process->ReadCommandLine();
     std::transform(command_line.begin(), command_line.end(), command_line.begin(), std::towlower);
-    this->insecure = command_line.find(L"-insecure") != std::wstring::npos;
+    this->insecure = command_line.find(L"") != std::wstring::npos;
 
     if (this->insecure)
         LOGF(INFO, "Game launched with -insecure, memory writing features are available");

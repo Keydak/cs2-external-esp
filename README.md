@@ -61,7 +61,7 @@ External ESP for Counter-Strike 2, a fork of [IMXNOOBX/cs2-external-esp](https:/
 **Keeping up with CS2 updates**
 * **Offsets from the game itself**: every field the program uses is read from the game files at startup, [cs2-dumper](https://github.com/a2x/cs2-dumper) is only a fallback.
 * **Stops instead of breaking**: when something can't be found after an update, the program puts everything back and stops. A card over the game says CS2 was updated and the program has to be too, so it is seen while playing without a look at the desktop; it stays until the menu key is pressed. A debug build also says what was not found.
-* **Update check**: tells when a newer version of this fork is out.
+* **Update check**: the loader looks for a newer version of this fork before anything touches the game. While one is out (or GitHub can't be reached) Start stays locked, so an outdated build is never used.
 
 > [!WARNING]
 > **The features under "Memory writing" are dangerous.** They write into the memory of the game (and patch some of its code), which is far easier for an anti-cheat to notice than only reading it.
@@ -73,7 +73,8 @@ External ESP for Counter-Strike 2, a fork of [IMXNOOBX/cs2-external-esp](https:/
 ## 🌳 Simple Use
 
 - **Build it yourself** by following the [developer instructions](#-developer-instructions), or download it from [**Releases**](https://github.com/Keydak/cs2-external-esp/releases) when there is one.
-- Open the game & `cs2-external-esp.exe`. Press **INSERT** or **RIGHT SHIFT** to open the menu.
+- Open `cs2-external-esp.exe` & press **Start** in its loader, before or after the game: it waits for CS2 and is used as soon as it opens. Launch CS2 with `-insecure` for the [memory writing](#-added-features) features, without it the program only reads.
+- Press **INSERT** or **RIGHT SHIFT** to open the menu. The key can be changed in the loader or in Settings.
 - **Star** the repository **if** you **like the project**! ⭐
 
 > If the app crashes on startup, you may be missing the latest [Windows Visual C++ redistributables](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170#latest-supported-redistributable-version). Install the appropriate package for your system:
@@ -101,12 +102,10 @@ git clone --recursive https://github.com/Keydak/cs2-external-esp
 
 * If you cloned the repository before submodules were added, run `git submodule update --init --recursive`
 
-2. Build the app using **Visual Studio 2022** (or later)
+2. Build the app using **Visual Studio 2026** (the project uses its v145 toolset)
 	- Build: **`x64 - Release`**
 
 3. Locate your binary file in the folder `<arch>/<configuration>`, e.g., `x64/Release`.
-
-* After a CS2 update, `update-project/check.bat` tells what changed in the game & what has to be updated.
 
 ## 🕹️ Original Project
 
